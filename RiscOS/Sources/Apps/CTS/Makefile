@@ -282,36 +282,35 @@ install_rom: ${ROM_MODULE}
 resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
-	${MKDIR} ${RESDIR}.User
 	${CP} LocalRes:ROM.!Boot	${RESAPP}.!Boot		${CPFLAGS}
 	${CP} LocalRes:ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
 	${CP} LocalRes:!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
 	${CP} LocalRes:Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} LocalRes:Res		${RESDIR}.Res		${CPFLAGS}
-	${MKDIR} ${RESAPP}.WebPages
-	${CP} LocalRes:WebPages.01-1 	${RESAPP}.WebPages.01-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-2 	${RESAPP}.WebPages.01-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-3 	${RESAPP}.WebPages.01-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.02   	${RESAPP}.WebPages.02   ${CPFLAGS}
-	${CP} LocalRes:WebPages.03   	${RESAPP}.WebPages.03   ${CPFLAGS}
-	${CP} LocalRes:WebPages.04   	${RESAPP}.WebPages.04   ${CPFLAGS}
-	${CP} LocalRes:WebPages.05   	${RESAPP}.WebPages.05   ${CPFLAGS}
-	${CP} LocalRes:WebPages.06   	${RESAPP}.WebPages.06   ${CPFLAGS}
-	${CP} LocalRes:WebPages.07   	${RESAPP}.WebPages.07   ${CPFLAGS}
-	${CP} LocalRes:WebPages.11   	${RESAPP}.WebPages.11   ${CPFLAGS}
-	${CP} LocalRes:WebPages.21   	${RESAPP}.WebPages.21   ${CPFLAGS}
-	${CP} LocalRes:WebPages.22   	${RESAPP}.WebPages.22   ${CPFLAGS}
-	${CP} LocalRes:WebPages.23   	${RESAPP}.WebPages.23   ${CPFLAGS}
-	${CP} LocalRes:WebPages.24   	${RESAPP}.WebPages.24   ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-1  	${RESAPP}.WebPages.25-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-2  	${RESAPP}.WebPages.25-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.26   	${RESAPP}.WebPages.26   ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-1 	${RESAPP}.WebPages.27-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-2 	${RESAPP}.WebPages.27-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-3 	${RESAPP}.WebPages.27-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-1 	${RESAPP}.WebPages.28-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-2 	${RESAPP}.WebPages.28-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.30   	${RESAPP}.WebPages.30   ${CPFLAGS}
+	${MKDIR} ${RESDIR}.WebPages
+	${CP} LocalRes:WebPages.01-1 	${RESDIR}.WebPages.01-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-2 	${RESDIR}.WebPages.01-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-3 	${RESDIR}.WebPages.01-3 ${CPFLAGS}
+	${CP} LocalRes:WebPages.02   	${RESDIR}.WebPages.02   ${CPFLAGS}
+	${CP} LocalRes:WebPages.03   	${RESDIR}.WebPages.03   ${CPFLAGS}
+	${CP} LocalRes:WebPages.04   	${RESDIR}.WebPages.04   ${CPFLAGS}
+	${CP} LocalRes:WebPages.05   	${RESDIR}.WebPages.05   ${CPFLAGS}
+	${CP} LocalRes:WebPages.06   	${RESDIR}.WebPages.06   ${CPFLAGS}
+	${CP} LocalRes:WebPages.07   	${RESDIR}.WebPages.07   ${CPFLAGS}
+	${CP} LocalRes:WebPages.11   	${RESDIR}.WebPages.11   ${CPFLAGS}
+	${CP} LocalRes:WebPages.21   	${RESDIR}.WebPages.21   ${CPFLAGS}
+	${CP} LocalRes:WebPages.22   	${RESDIR}.WebPages.22   ${CPFLAGS}
+	${CP} LocalRes:WebPages.23   	${RESDIR}.WebPages.23   ${CPFLAGS}
+	${CP} LocalRes:WebPages.24   	${RESDIR}.WebPages.24   ${CPFLAGS}
+	${CP} LocalRes:WebPages.25-1  	${RESDIR}.WebPages.25-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.25-2  	${RESDIR}.WebPages.25-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.26   	${RESDIR}.WebPages.26   ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-1 	${RESDIR}.WebPages.27-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-2 	${RESDIR}.WebPages.27-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-3 	${RESDIR}.WebPages.27-3 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-1 	${RESDIR}.WebPages.28-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-2 	${RESDIR}.WebPages.28-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.30   	${RESDIR}.WebPages.30   ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
