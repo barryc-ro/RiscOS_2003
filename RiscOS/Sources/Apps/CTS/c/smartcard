@@ -6,6 +6,8 @@
  */
 
 #include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
 #include "kernel.h"
 #include "swis.h"
 #include "ctstypes.h"
@@ -18,45 +20,150 @@
 #include "DebugLib/DebugLib.h"
 
 /* NOTE: The SWI interface specification for SCTrans was designed by Rich Buckley.
- * Because of this, we have no idea whether errors will be returned in the standard
- * way (V flag set) or not, or whether there is a mixture.  This source files guards
- * against all possibilities.
+ * Because of this, errors are not returned properly, but are returned in R0 with
+ * V clear!  Thus we have to check that the return value of _swix was zero (could
+ * be a system error, y'see) and if so, then we check R0.
  */
 
 static int card_handle;
 static cts_sc_slot_id slot_id;
+static int actual_card_handle;
+
 static int card_handle_valid = 0;
 
-_kernel_oserror *cts_sc_open(cts_sc_slot_id card_number)
+static struct {
+        cts_sc_sctrans_errors	code;
+        _kernel_oserror 	error_block;
+} cts_last_error;
+
+/* Pragma switches on _swix checking
+ * NOTE: only input and output registers are supported.  _BLOCK is not supported
+ * _RETURN is not supported.
+ */
+#pragma -v4
+static cts_sc_status cts_swix(int swi_num, int regs, ...)
 {
-        _kernel_oserror *e, *buckleyism;
+        _kernel_swi_regs r;
+        _kernel_oserror *e, *ose;
+        va_list ap;
+        int rn;
 
-        e = _swix(SCTransport_Open, _INR(0,1)|_OUT(0), 0, &card_handle, &buckleyism);
-        if (buckleyism != 0) e = buckleyism;
+        va_start(ap, regs);
 
-	if (e != 0) {
-	        slot_id = card_number;
-	        card_handle_valid = 1;
+        for (rn=0; rn<10; ++rn) {
+                if (regs & (_IN(rn))) {
+                        r.r[rn] = va_arg(ap, int);
+                }
+        }
+
+	ose = e = _kernel_swi(swi_num, &r, &r);
+	if (e == NULL) {
+	        /* Now the buggering about to get around Rich Buckley's shit API */
+	        e = (_kernel_oserror *) r.r[0];
+	        if (e != NULL) {
+	                cts_last_error.code = (cts_sc_sctrans_errors) e->errnum;
+	        }
+	}
+	else {
+	        cts_last_error.code = SCI_SUCCESS;
 	}
 
-        return e;
+        for (rn=0; rn<10; ++rn) {
+                if (regs & (_OUT(rn))) {
+                        *(va_arg(ap, int *)) = r.r[rn];
+                }
+        }
+
+	va_end(ap);
+
+	if (e != NULL) {
+	        (void) memcpy(&cts_last_error.error_block, e, sizeof(cts_last_error));
+	        if (ose == NULL && e->errnum == SCI_E_NODATA) {
+	                return cts_sc_status_INPROGRESS;
+	        }
+	        return cts_sc_status_FAILED;
+	}
+
+	return cts_sc_status_COMPLETE;
+}
+#pragma -v0
+
+enum {
+        cts_sc_handle_SLOT2 = -2
+};
+
+cts_sc_sctrans_errors cts_sc_get_last_error(_kernel_oserror *e)
+{
+        if (e != NULL) {
+                *e = cts_last_error.error_block;
+        }
+	return cts_last_error.code;
 }
 
-_kernel_oserror *cts_sc_close(void)
+cts_sc_status cts_sc_slot_info(cts_slot_status *status, cts_sc_type *type)
 {
-        _kernel_oserror *e, *buckleyism;
+        return cts_swix(SCTransport_SlotInfo, _IN(0)|_OUTR(1,2), slot_id, status, type);
+}
 
-	card_handle_valid = 0;
+cts_sc_status cts_sc_open(cts_sc_slot_id card_number)
+{
+        cts_sc_status status = cts_swix(SCTransport_Open, _INR(0,1), 0, &card_handle);
 
-        e = _swix(SCTransport_Close, _IN(0)|_OUT(0), card_handle, &buckleyism);
-        if (buckleyism != 0) e = buckleyism;
+	if (status == cts_sc_status_COMPLETE) {
+	        card_handle_valid = 1;
+	        slot_id = card_number;
+	        actual_card_handle = slot_id;
+	        if (slot_id == cts_sc_slot2) {
+	                actual_card_handle = cts_sc_handle_SLOT2;
+	        }
+	}
+	else {
+	        /* Daft API - even on errors the handle is allocated! */
+	        (void) _swix(SCTransport_Close, _IN(0), card_handle);
+	}
 
-        return e;
+        return status;
+}
+
+cts_sc_status cts_sc_close(void)
+{
+        if (card_handle_valid) {
+		card_handle_valid = 0;
+        	return cts_swix(SCTransport_Close, _IN(0), card_handle);
+        }
+
+        return cts_sc_status_COMPLETE;
+}
+
+cts_sc_status cts_sc_send_apdu(
+	const void *apdu,
+	size_t apdu_len)
+{
+        register const char *const apdu_header = apdu;
+        register const char *const apdu_data   = apdu_header + 4;
+
+        return cts_swix(SCTransport_IssueCommand, _INR(0,4), actual_card_handle,
+        	apdu_header, apdu_len - (apdu_data - apdu_header), apdu_data, 0);
+}
+
+cts_sc_status cts_sc_read_data(
+	void *buffer,
+	size_t buffer_length,
+	size_t *data_size,
+	char *sw1sw2_response)
+{
+        size_t temporary;
+
+        if (data_size == NULL) {
+                data_size = &temporary;
+        }
+        *data_size = buffer_length;
+
+        return cts_swix(SCTransport_ReadResponse, _INR(0,4), actual_card_handle,
+        	buffer, buffer_length, data_size, sw1sw2_response);
 }
 
 void cts_sc_atexit(void)
 {
-        if (card_handle_valid) {
-	        (void) cts_sc_close();
-        }
+        (void) cts_sc_close();
 }

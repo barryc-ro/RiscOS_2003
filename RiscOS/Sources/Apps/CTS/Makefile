@@ -53,6 +53,7 @@ OBJS =\
  o.ctsmessage\
  o.ctsbrowser\
  o.ctsui\
+ o.ctsutils\
  o.plugclient\
  o.smartcard\
  o.statetable\
@@ -63,6 +64,7 @@ DEBOBJS =\
  od.ctsmessage\
  od.ctsbrowser\
  od.ctsui\
+ od.ctsutils\
  od.plugclient\
  od.smartcard\
  od.statetable\
