@@ -7,6 +7,7 @@
 #
 
 EXP_C_H = <CExport$dir>.h
+RESDIR = <resource$dir>.Resources.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Generic options:
@@ -29,7 +30,7 @@ CPFLAGS		= ~cfr~v
 CMHGFLAGS	= -depend !Depend -p -throwback
 WFLAGS		= ~c~v
 
-DFLAGS		= "-DCONFIG_FILE=\"${CONFIG}\""
+DFLAGS		= 
 DDFLAGS		= ${DFLAGS} -fn -DDEBUGLIB
 
 DIRS		= o._dirs
@@ -52,12 +53,10 @@ DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglibzm
 MEMCHECKLIB	= MemCheck:o.MC_M
 UNIXLIB		= TCPIPLibs:o.UnixLib
 
-LIBS =\
- TCPIPLibs:o.socklib5\
- TCPIPLibs:o.inetlib\
+LIBS =
 
 LIBSD =\
- ${DEBUGLIB}\
+ ${DEBUGLIB} \
  TCPIPLibs:o.socklib5\
  TCPIPLibs:o.inetlib\
 
@@ -190,6 +189,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
+        ${CP} Resources.${USERIF}.Config ${RESDIR}.Config ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 
