@@ -124,6 +124,8 @@ int build_ram_cache(void)
     unsigned char *group_ptr;
     unsigned int group_bytes;
 
+    unsigned int test_mode;
+
 
     /* reset cache */
     if(reset_cache()<0) {
@@ -142,11 +144,12 @@ int build_ram_cache(void)
 
     /* get some new stuff out of RAM or off the smartcard */
 
-    /* find the IAP COnnection matrix */
+    /* find the IAP Connection matrix */
 
     if((matrix_ptr = find_tag_in_block(ram_eb_ptr, ram_eb_bytes, NCIIAPConnectMatrixTag, &matrix_bytes, NULL))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "build_ram_cache: no IAP Connect Matrix in enterprise block - corporate card?\n");
     } else {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: RAM connect matrix 0x%x,%d\n", matrix_ptr, matrix_bytes);
         /* we got a matrix, so search for an active IAP block, based on time-of-day rules */
 	  for(group_ptr = NULL;;) {
 	      if((group_ptr = find_tag_in_block(matrix_ptr, matrix_bytes, NCIGroupTag, &group_bytes, group_ptr))==NULL) {
@@ -154,17 +157,26 @@ int build_ram_cache(void)
 	      }
 
 	      if(test_iap_rule(group_ptr, group_bytes)) { /* see if IAP covers our time frame */
-	          DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: IAP selected by rule\n");
+	          DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: IAP selected by rule, 0x%x,%d\n", group_ptr, group_bytes);
+		  if((tptr = find_tag_in_block(group_ptr, group_bytes, NCIIAPIDTag, &tbytes, NULL))==NULL) {
+		      DBUG_PRINTF(DBUG_LVL_ERROR, "build_ram_cache: No ID tag for this IAP - skipping\n");
+		  }
+		  iap_id = read_big_word((char *)tptr);
+		  if(select_scard_iap()<0) {
+		      DBUG_PRINTF(DBUG_LVL_ERROR, "build_ram_cache: no matching IAP block on smartcard\n");
+		  } else {
+		      DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: found s/card symbiote 0x%x,%d\n", sc_iap_ptr, sc_iap_bytes);
+		  }
 	          break;
 	      } else {
-	          DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: IAP rejected by rule\n");
+	          DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: IAP invalidated by rule\n");
 	      }
 	  }
 	  matrix_ptr = group_ptr; /* matrix ptr is now valid IAP, or NULL */
 	  matrix_bytes = group_bytes;
     }
 
-
+    DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: RAM at 0x%x, %d, SCARD at 0x%x,%d\n", ram_eb_ptr, ram_eb_bytes, sc_block_ptr, sc_block_bytes);
 
     for(l=0; ((l<MAX_TAG_CACHE) && (bytes>0));l++) {
 
@@ -173,31 +185,40 @@ int build_ram_cache(void)
             break;
         }
 
-	DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: searching for \"%s\" (0x%x)\n", tag_cache.tag[l].tag, tag_cache.tag[l].nci_tag);
+	DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: searching for \"%s\" (0x%x) ", tag_cache.tag[l].tag, tag_cache.tag[l].nci_tag);
 
 	tptr = NULL;
 
 	/* first, look through IAP Matrix entries for matches */
 	if(matrix_ptr != NULL) { /* if the matrix exists... */
-	  DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: trying IAP connection matrix\n");
-	      if((tptr = find_tag_in_block(group_ptr, group_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL) {
-	          DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: tag not in this IAP entry - next...\n");
+	      if((tptr = find_tag_in_block(matrix_ptr, matrix_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL) {
 	      }
 	      else {
-	       	  DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: found tag in IAP entry\n");
+		  DBUG_PRINTF(DBUG_LVL_DIAG, "HIT (RAM-IAP)\n");
 	      }
 	} /* endif matrix */
 
 
 	if(tptr == NULL) { /* it wasn't in the matrix */
-	  DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: tag not found in IAP connection matrix\n");
           if((tptr=find_tag_in_block(ram_eb_ptr, ram_eb_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL) { /* not in RAM */
-            if((tptr=find_tag_in_block(sc_block_ptr, sc_block_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL) { /* not on SC */
-              DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: tag miss for \"%s\" <--> 0x%x\n",
-              				 tag_cache.tag[l].tag, tag_cache.tag[l].nci_tag);
-              continue;
-            } /* endif not on SC */
-          } /* endif not in RAM */
+            if(trusted_scard_data && ((tptr=find_tag_in_block(sc_iap_ptr, sc_iap_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL)) { /* not in SC IAP blok*/
+              if(trusted_scard_data && ((tptr=find_tag_in_block(sc_eb_ptr, sc_eb_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL)) { /* not on SC */
+
+                if((tptr=find_tag_in_block(nvram_ptr, nvram_bytes, tag_cache.tag[l].nci_tag, &tbytes, NULL))==NULL) { /* not in NVRAM */
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "MISS\n");
+                  continue;
+                } else {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "HIT (NVRAM)\n");
+                }
+              } else { /* endif not on SC */
+                DBUG_PRINTF(DBUG_LVL_DIAG, "HIT (SC)\n");
+              }
+            } else { /* endif not in SC IAP */
+               	DBUG_PRINTF(DBUG_LVL_DIAG, "HIT (SC-IAP)\n");
+            }
+          }else {/* endif not in RAM */
+            DBUG_PRINTF(DBUG_LVL_DIAG, "HIT (RAM)\n");
+          }
         } /* endif not in matrix */
 
         /* found it somewhere */
@@ -259,7 +280,8 @@ int build_ram_cache(void)
             	 break;
 
             case TAG_MAPPING_SOAK:
-            	 if(read_big_word((char *)tptr) & TEST_TAG_SOAK) {
+            	 test_mode = read_big_word((char *)tptr);
+            	 if(test_mode & TEST_TAG_SOAK) {
             	     if(bytes>=4) {
             	         write_little_word(ptr, 1);
             	         tag_cache.tag[l].val = ptr;
@@ -267,12 +289,14 @@ int build_ram_cache(void)
             	         ptr += tbytes;
             	         bytes -= tbytes;
             	         actual_tags++;
+            	         DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: SOAK TEST ENABLED\n");
             	     }
             	 }
             	     break;
 
             case TAG_MAPPING_PLIP:
-            	 if(read_big_word((char *)tptr) & TEST_TAG_PLIP) {
+            	 test_mode = read_big_word((char *)tptr);
+            	 if(test_mode & TEST_TAG_PLIP) {
             	     if(bytes>=4) {
             	         write_little_word(ptr, 1);
             	         tag_cache.tag[l].val = ptr;
@@ -280,6 +304,7 @@ int build_ram_cache(void)
             	         ptr += tbytes;
             	         bytes -= tbytes;
             	         actual_tags++;
+            	         DBUG_PRINTF(DBUG_LVL_DIAG, "build_ram_cache: PLIP DOWNLOAD ENABLED\n");
             	     }
             	 }
             	     break;

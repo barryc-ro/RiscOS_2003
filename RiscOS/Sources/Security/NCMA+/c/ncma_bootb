@@ -26,6 +26,7 @@ int fetch_sc_bootblock(void)
 {
     _kernel_swi_regs r;
 
+    r.r[0] = 1; /* tell bootblock that we want even insecure data */
     if(_kernel_swi(NCBootblock_Enquiry, &r, &r)!=NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "fetch_sc_bootblock: SWI failed\n");
         return(-1);
@@ -59,6 +60,14 @@ int fetch_sc_bootblock(void)
         /* success */
         DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_sc_bootblock: succeeded\n");
 
+        if(r.r[6] & 1) {
+            DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_sc_bootblock: NCBootblock doesn't trust this data\n");
+            trusted_scard_data = 0;
+        } else {
+            DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_sc_bootblock: NCBootblock trusts this data\n");
+            trusted_scard_data = 1;
+        }
+
         sc_block_ptr = (unsigned char *)r.r[0];
     	sc_block_bytes = r.r[1];
     	sc_index_ptr = (unsigned char *)r.r[2];
@@ -66,6 +75,7 @@ int fetch_sc_bootblock(void)
     	sc_alt_ptr = (unsigned char *)r.r[4];
     	sc_alt_bytes = r.r[5];
     	sc_eb_ptr = find_tag_in_block(sc_block_ptr, sc_block_bytes, NCIBeginSignatureTag, &sc_eb_bytes, NULL);
+    	sc_hash_ptr = find_tag_in_block(sc_block_ptr, sc_block_bytes, NCISignatureTag, &sc_hash_bytes, NULL);
       }
 
 
@@ -117,8 +127,14 @@ int select_scard_iap(void)
 int virgin_smartcard(void)
 {
     int i;
+    _kernel_swi_regs r;
 
-    i = *(unsigned int *)sc_index_ptr;
+    if(_kernel_swi(NCBootblock_Enquiry, &r, &r)!=NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "virgin_smartcard: Bootblock enquiry SWI failed!\n");
+        return(-1);
+    }
+
+    i = *(unsigned int *)(r.r[2]);
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard: purity rating: 0x%x\n", i);
     if((i == 0x00000000) || (i == 0xffffffff)) return(1);
@@ -249,6 +265,16 @@ int find_ram_enterprise_block(void)
 	 ram_sig_bytes = hash_bytes;
          ram_eb_ptr = sig_ptr;
          ram_eb_bytes = sig_bytes;
+
+         if(!trusted_scard_data) {
+             DBUG_PRINTF(DBUG_LVL_DIAG, "find_ram_enterprise_block: authenticating previously untrusted smartcard data\n");
+             if(ncma_auth(sc_eb_ptr, sc_eb_bytes, sc_hash_ptr, sc_hash_bytes, ram_cert_ptr, ram_cert_bytes)>0) {
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "find_ram_enterprise_block: authentication SUCCEEDED\n");
+                 trusted_scard_data = 1;
+             } else {
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "find_ram_enterprise_block: authentication FAILED\n");
+             }
+         }
          return(1);
        }
    }
@@ -282,7 +308,7 @@ int find_enterprise_id(void)
 /* determime whether the user is registered with the given ISP
    do this by checking for User mount path, until a better method comes along
 */
-int usr_isp_registered(void)
+int user_isp_registered(void)
 {
     unsigned char *ump_ptr;
     unsigned int ump_bytes;
@@ -294,8 +320,10 @@ int usr_isp_registered(void)
     }
 
     if((ump_ptr = find_tag_in_block(sc_block_ptr, sc_block_bytes, NCIBrowserModeTag, &ump_bytes, NULL))==NULL) {
-        DBUG_PRINTF(DBUG_LVL_DIAG, "user_isp_registered: no NCIUserRegisteredTag\n");
+        if((ump_ptr = find_tag_in_block(sc_eb_ptr, sc_eb_bytes, NCIBrowserModeTag, &ump_bytes, NULL))==NULL) {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "user_isp_registered: no NCIBrowserModeTag\n");
         return(-1);
+        }
     }
 
     browser_mode = read_big_short((char *)ump_ptr);

@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "kernel.h"
 #include "swis.h"
@@ -130,7 +131,7 @@ int reload_browser_files(void)
     *(int *)msg_block = 256;
     *(int *)(msg_block + 16) = 0x4af84; /* Message_NCFresco */
     *(int *)(msg_block + 20) = 0;
-    *(int *)(msg_block + 24) = 0;
+    *(int *)(msg_block + 24) = 0; /* flags - load all files */
 
     r.r[0] = 0;
     r.r[1] = (int)msg_block;
@@ -146,6 +147,7 @@ int reload_browser_files(void)
 
 int prod_browser_after_standby(void)
 {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "prod_browser_after_standby: user now %s. browser reload, toplevel UI\n", CURRENT_USER_ENV_VAL);
     write_os_var(CURRENT_USER_ENV_NAME, CURRENT_USER_ENV_VAL, strlen(CURRENT_USER_ENV_VAL));
     reload_browser_files();
     ncma_url_open(TOPLEVEL_UI_URL);
@@ -168,6 +170,7 @@ int ncma_url_user(void) /* "start 'Surfing'" URL, as NCI put it */
         return(-1);
     }
 
+
     if((buff = (char *)rmalloc(1024, "URL buffer"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "ncma_url_user: couldn't allocate memory for URL\n");
         return(-1);
@@ -175,10 +178,11 @@ int ncma_url_user(void) /* "start 'Surfing'" URL, as NCI put it */
 
     serial = (char *)r.r[4]; /* get pointer to serial string */
 
+    for(tag=serial;isalnum(*tag);tag++); *tag = 0; /* serial string comes with trailing spaces - ditch 'em */
 
     if((tag = cache_ptr("URL_INITBC", &tag_bytes))!=NULL) { /* append s/c id and m/f id */
       strncpy(buff, tag, tag_bytes);
-      strcat(buff, "?");
+      strcat(buff, strchr(buff, '?')?"&":"?");
       strcat(buff, REGISTRATION_URL_CGI1); /* smartcard serial number */
       strcat(buff, serial);
       strcat(buff, "&");
@@ -192,7 +196,7 @@ int ncma_url_user(void) /* "start 'Surfing'" URL, as NCI put it */
 
     } else if((tag = cache_ptr("URL_INITB", &tag_bytes))!=NULL) { /* append m/f id only */
       strncpy(buff, tag, tag_bytes);
-      strcat(buff, "?");
+      strcat(buff, strchr(buff, '?')?"&":"?");
       strcat(buff, REGISTRATION_URL_CGI2); /* manufacturer ID */
       render_hex_id(buff+strlen(buff));
       if(nvram_get_areacode(ac)) {
@@ -202,7 +206,7 @@ int ncma_url_user(void) /* "start 'Surfing'" URL, as NCI put it */
 
     } else if((tag = cache_ptr("URL_INITC", &tag_bytes))!=NULL) { /* append s/c id only */
       strncpy(buff, tag, tag_bytes);
-      strcat(buff, "?");
+      strcat(buff, strchr(buff, '?')?"&":"?");
       strcat(buff, REGISTRATION_URL_CGI1); /* smartcard serial number */
       strcat(buff, serial);
       if(nvram_get_areacode(ac)) {
@@ -230,34 +234,43 @@ int limit_browser_url(void)
     FILE *fp;
     unsigned char *tptr;
     unsigned int tbytes;
-    unsigned char *iptr;
+    unsigned char *iptr, *sptr, *jptr;
 
     if((fp=fopen(BROWSER_LIMIT_FILE, "w"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_DIAG, "limit_browser_url: couldn't create temp file\n");
         return(-1);
     }
 
-    if((tptr=find_tag_in_block(sc_block_ptr, sc_block_bytes, NCIURLTag, &tbytes, NULL))==NULL) {
-        DBUG_PRINTF(DBUG_LVL_DIAG, "limit_browser_url: no URL to limit browser to!\n");
-        fclose(fp);
-        return(-1);
+    if((tptr = find_any_url_tag_in_either_enterprise_block(&tbytes))==NULL) {
+          DBUG_PRINTF(DBUG_LVL_DIAG, "limit_browser_url: no URL to limit browser to!\n");
+          fclose(fp);
+          return(-1);
     }
 
-    if((iptr = (unsigned char *)strstr((char *)tptr, "//"))==NULL) {
+    if((sptr = (unsigned char *)strstr((char *)tptr, "//"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_DIAG, "limit_browser_url: didn't understand URL\n");
         fclose(fp);
         return(-1);
+    } else {
+        sptr+=2; /* skip the '//' */
     }
 
-    if((iptr = (unsigned char *)strchr((char *)iptr, '/'))==NULL) { /* only slashes are initial '//' - URL is of the form method://host.site  */
-      fwrite(tptr, sizeof(unsigned char), tbytes, fp);
+    iptr = (unsigned char *)strchr((char *)sptr, '/');
+    jptr = (unsigned char *)strchr((char *)sptr, ':');
+
+    if((jptr < iptr) || (iptr == NULL)) iptr = jptr; /* eeek, there's a port number in that URL - lose it */
+
+    if(iptr == NULL) { /* only slashes are initial '//' - URL is of the form method://host.site  */
+      fwrite(sptr, sizeof(unsigned char), strlen((char *)sptr), fp);
       fputs("\n", fp);
+      DBUG_PRINTF(DBUG_LVL_DIAG, "limit_browser_url: full URL-> %s\n", sptr);
       fclose(fp);
       return(0);
     }
 
     /* otherwise, URL is method://host.site/path/path/file[?args] - limit to method://host.site/path/path/ */
-    fwrite(tptr, sizeof(unsigned char), (int)(iptr-tptr), fp);
+    fwrite(sptr, sizeof(unsigned char), (int)(iptr-sptr), fp);
+    DBUG_PRINTF(DBUG_LVL_DIAG, "limit_browser_url: subset of URL-> %.*s\n", (int)(iptr-sptr), sptr);
     fputs("\n", fp);
     fclose(fp);
 
@@ -268,6 +281,7 @@ int limit_browser_url(void)
 /* unset the browser site-limiting flag */
 int unlimit_browser_url(void)
 {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "unlimit_browser_url: limit_browser_access = 0\n");
     limit_browser_access = 0;
     return(0);
 }
@@ -289,27 +303,37 @@ int browser_proxy(void)
           DBUG_PRINTF(DBUG_LVL_ERROR, "browser_proxy: couldn't open config file\n");
           return(-1);
       }
-
-      fprintf(fp, "file.allow: %s\n", limit_browser_access?BROWSER_LIMIT_FILE:"");
+#ifdef DEFEAT_BROWSER_LIMIT
+      DBUG_PRINTF(DBUG_LVL_DIAG, "browser_proxy: WARNING compile option defeats browser security\n");
+      fprintf(fp, "files.allow: %s\n", BROWSER_UNLIMIT_FILE);
+#else
+      fprintf(fp, "files.allow: %s\n", limit_browser_access?BROWSER_LIMIT_FILE:BROWSER_UNLIMIT_FILE);
+#endif
+      DBUG_PRINTF(DBUG_LVL_DIAG, "browser_proxy: files.allow: \"%s\"\n", limit_browser_access?BROWSER_LIMIT_FILE:BROWSER_UNLIMIT_FILE);
 
       if(http) {
           fprintf(fp, "proxy.http.enable: Yes\n");
           fprintf(fp, "proxy.http: %s\n", hptr);
+          DBUG_PRINTF(DBUG_LVL_DIAG, "browser_proxy: http proxy: \"%s\"\n", hptr);
       }
 
       if(ftp) {
           fprintf(fp, "proxy.ftp.enable: Yes\n");
           fprintf(fp, "proxy.ftp: %s\n", fptr);
+          DBUG_PRINTF(DBUG_LVL_DIAG, "browser_proxy: ftp proxy: \"%s\"\n", fptr);
       }
 
 
       fclose(fp);
 
+    /* send message to reload config files */
     memset(msg_block, 0, 256);
+
+    DBUG_PRINTF(DBUG_LVL_DIAG, "browser_proxy: sending message 0x4af84,2,\"%s\"\n", BROWSER_CONFIG_FILE);
 
     *(int *)msg_block = 256;
     *(int *)(msg_block + 16) = 0x4af84; /* Message_NCFresco */
-    *(int *)(msg_block + 20) = 2; /* load browser config */
+    *(int *)(msg_block + 20) = 3; /* load browser config */
     *(int *)(msg_block + 24) = 0;
     sprintf(msg_block+28, "%s", BROWSER_CONFIG_FILE);
 
@@ -321,9 +345,52 @@ int browser_proxy(void)
     r.r[5] = 0;
 
     if(_kernel_swi(TaskModule_SendMessage, &r, &r) != NULL) {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "browser_proxy: couldn't send message\n");
+        DBUG_PRINTF(DBUG_LVL_ERROR, "browser_proxy: couldn't send LoadConfig message\n");
         return(-1);
     }
+#ifndef DEFEAT_BROWSER_LIMIT
+    /* and send message to reload allow file */
+    memset(msg_block, 0, 256);
+
+    *(int *)msg_block = 256;
+    *(int *)(msg_block + 16) = 0x4af84; /* Message_NCFresco */
+    *(int *)(msg_block + 20) = 0; /* load user files */
+    *(int *)(msg_block + 24) = 0x41; /* flags - load allow & deny files only */
+
+    r.r[0] = 0;
+    r.r[1] = (int)msg_block;
+    r.r[2] = 0;
+    r.r[3] = 0;
+    r.r[4] = 0;
+    r.r[5] = 0;
+
+    if(_kernel_swi(TaskModule_SendMessage, &r, &r) != NULL) {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "browser_proxy: couldn't send LoadUser message\n");
+        return(-1);
+    }
+#endif
     return(0);
 
+}
+
+unsigned char *find_any_url_tag_in_either_enterprise_block(unsigned int *rbytes)
+{
+    unsigned char *tptr;
+    unsigned int tbytes;
+    static unsigned int url_tags[4]={ NCIURLTag, NCIURLCardSerialTag, NCIURLBoxSerialTag, NCIURLBoxCardSerialTag };
+    unsigned int l;
+
+    for(l=0;l<4;l++) {
+        if((tptr = find_tag_in_block(ram_eb_ptr, ram_eb_bytes, url_tags[l], &tbytes, NULL))!=NULL) {
+            *rbytes = tbytes;
+            return(tptr);
+        }
+
+        if((tptr = find_tag_in_block(sc_eb_ptr, sc_eb_bytes, url_tags[l], &tbytes, NULL))!=NULL) {
+            *rbytes = tbytes;
+            return(tptr);
+        }
+    }
+    DBUG_PRINTF(DBUG_LVL_ERROR, "f_t_i_e_e_b: failed miserably to find ANY URL tags in either enterprise block.\n");
+    return(NULL);
 }
