@@ -19,7 +19,7 @@ EXP_C_O = <Cexport$dir>.o
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -29,7 +29,6 @@ RM      = remove
 WIPE    = -wipe
 CD      = dir
 TOUCH   = create
-STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ffa ${INCLUDES} ${DFLAGS}
@@ -117,6 +116,11 @@ rom:    ${TARGET}
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
+install: ${RMTARGET}
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${RMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
@@ -129,7 +133,6 @@ clean:
         ${WIPE} aof      ${WFLAGS}
         ${RM} h.header
         ${RM} ${TARGET}
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 o.module od.module: h.header
