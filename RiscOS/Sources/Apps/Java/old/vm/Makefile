@@ -18,6 +18,7 @@ RESDIR = <resource$dir>.Resources2.$(COMPONENT)
 
 SYMFILTER = filter
 GENINDEX = genindex
+FIDDLE = fiddle
 
 #
 # Generic options:
@@ -102,6 +103,7 @@ clean:
         ${WIPE} aof ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
+        ${WIPE} fiddled ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 $(SYMBOLS): $(OBJS)
@@ -117,8 +119,9 @@ ${ROM_MODULE}: $(OBJS)
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
+	$(FIDDLE) fiddle_syms $(ABSSYM) fiddled
+        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
+		fiddled ${ROM_MODULE} -map > map.${COMPONENT}
 	truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
