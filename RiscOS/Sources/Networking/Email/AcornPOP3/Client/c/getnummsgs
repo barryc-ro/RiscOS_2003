@@ -4,7 +4,7 @@
 
 	FILE:		getnummsgs.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.08 for RISC OS
+	VERSION:	0.09 for RISC OS
 
 	OVERVIEW
 	========
@@ -21,6 +21,7 @@
 	12/03/98	0.06	RDW	Elib_priv.h taken from EmailLib now
 	18/03/98	0.07	RDW	get_number_of_messages_CBhandler unused params. tidied up
 	25/903/98	0.08	RDW	#include debuglib corrected
+	03/06/98	0.09	RDW	Re-entracy changes as per cmdresp.c 0.05
 */
 
 
@@ -70,6 +71,7 @@ extern errno;									// From Internet
 /* Constants                                                                  */
 /*                                                                            */
 /* ************************************************************************** */
+static const int SLEEP_TIME    = 1;
 static const int TIME_SLICE    = 50;						/* Time slice to use                                                   */
 static char STATCMD[] = "STAT";
 
@@ -87,6 +89,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                in_FSM;							/* Thread currently executing in FSM                   */
+  BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
   time_t              t_slice;
   _kernel_oserror    *error;
   int                 errno;
@@ -110,6 +115,9 @@ static void get_number_of_messages_FSM_STAT(getnummsgs_context *c);
 static void get_number_of_messages_FSM_STAT_RESPONSE(getnummsgs_context *c);
 extern _kernel_oserror *get_number_of_messages_FSM(getnummsgs_context *context);
 static getnummsgs_context *new_getnummsgs_context(void);
+static _kernel_oserror* get_number_of_messages_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* get_number_of_messages_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* CA_get_number_of_messages(void *data);
 
 
 /* ************************************************************************** */
@@ -154,9 +162,8 @@ extern _kernel_oserror* get_number_of_messages(int           timeout_STAT,
     context->stat_timeout = timeout_STAT;
     context->num_messages = num_messages;
     context->mailbox_size = mailbox_size;
-    
-//    error = get_number_of_messages_FSM(context);
-      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */get_number_of_messages_CBhandler, context);
+    process1.state        = PROCESSING;						/* make sure main state is IDLE so event handler doesn't do anything */
+    error = CB_get_number_of_messages(context); 
   }
   
   return error;
@@ -216,6 +223,7 @@ extern _kernel_oserror *get_number_of_messages_FSM(getnummsgs_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
+    context->exit = FALSE;
     do
     {
       switch (context->state)
@@ -245,22 +253,71 @@ extern _kernel_oserror *get_number_of_messages_FSM(getnummsgs_context *context)
         
   if (!error)
   {
-    if (context->end)
+    int state = pop_irqs_off();							/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&get_number_of_messages_CAhandler, context);	/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&get_number_of_messages_CBhandler, context);	/* Ensure any pending callback is removed     */
       process1.getnumofmessages.flags = 0;
       process1.getnumofmessages.error = context->error;
       process1.getnumofmessages.errno = context->errno;
       notify_client(&(process1.getnumofmessages));
-      
-      free(context);
+      free(context);      							/* destroy the context                        */
       context = 0;
     }
-    else if (!context->exit)
-      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */get_number_of_messages_CBhandler, context);
-    else
-      context->exit = FALSE;
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
+    {
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_get_number_of_messages(context);				/* set a callafter to re-enter the FSM later  */
+    }
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_get_number_of_messages(context);				/* set a callback to re-enter the FSM         */
+    }
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
   
+  return error;
+}
+
+
+static _kernel_oserror* CA_get_number_of_messages(void *data)
+{
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &get_number_of_messages_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
+}
+
+
+extern _kernel_oserror* CB_get_number_of_messages(void *data)
+{
+  _kernel_oserror *error = 0;
+  int              state;
+  getnummsgs_context *context = (getnummsgs_context*)data;
+  
+  if (context)
+  {
+    state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&get_number_of_messages_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
   return error;
 }
 
@@ -280,10 +337,34 @@ extern _kernel_oserror *get_number_of_messages_FSM(getnummsgs_context *context)
 /* ************************************************************************** */
 extern _kernel_oserror *get_number_of_messages_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  getnummsgs_context *context = (getnummsgs_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
   UNUSED(r);
   UNUSED(pw);
+  
+  if (context)
+  {
+    state = pop_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    pop_restore_irqs(state);
+    error = get_number_of_messages_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
+}
 
-  return get_number_of_messages_FSM(data);
+  
+static _kernel_oserror* get_number_of_messages_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
+{
+  UNUSED(r);
+  UNUSED(pw);
+  
+  return CB_get_number_of_messages(data);
 }
 
 

@@ -88,17 +88,17 @@ CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
 ASMFLAGS=       
 
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
-                errortable.o get.o send.o cmdresp.o callbacks.o getnummsgs.o \
+                errortable.o get.o send.o cmdresp.o getnummsgs.o \
                 getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o \
 		${LIBS}
 		
 OBJSCP=		cp.swihndlers cp.handlers cp.logon cp.logout cp.pop_utils cp.module o.header \
-                cp.errortable cp.get cp.send cp.cmdresp cp.callbacks cp.getnummsgs \
+                cp.errortable cp.get cp.send cp.cmdresp cp.getnummsgs \
                 cp.getlistmsg cp.getmsgfile cp.deletemsg cp.getuniquei cp.getlistuid \
 		${LIBS}
 
 OBJSCI=		o.swihndlers o.handlers o.logon o.logout o.pop_utils o.module o.header \
-                o.errortable o.get o.send o.cmdresp o.callbacks o.getnummsgs \
+                o.errortable o.get o.send o.cmdresp o.getnummsgs \
                 o.getlistmsg o.getmsgfile o.deletemsg o.getuniquei o.getlistuid \
                 o.instlib \
 		${LIBS}

@@ -4,7 +4,7 @@
 
 	FILE:		getlistuid.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.07 for RISC OS
+	VERSION:	0.08 for RISC OS
 
 	OVERVIEW
 	========
@@ -25,6 +25,7 @@
 	18/03/98	0.06	RDW	Tidy up get_list_of_uids_CBhandler() unused
 					parameters
 	25/03/98	0.07	RDW	#include debuglib corrected
+	03/06/98	0.08	RDW	Re-entracy changes as per cmdresp.c 0.05
 */
 
 
@@ -58,6 +59,7 @@
 #include "get.h"
 #include "cmdresp.h"
 #include "errortable.h"
+#include "pop_utils.h"
 
 
 /* ************************************************************************** */
@@ -74,6 +76,7 @@ extern errno;									// From Internet
 /* Constants                                                                  */
 /*                                                                            */
 /* ************************************************************************** */
+static const int SLEEP_TIME    = 1;
 static const int TIME_SLICE    = 50;						/* Time slice to use                                                   */
 static char UIDLCMD[] = "UIDL";
 
@@ -95,6 +98,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                in_FSM;							/* Thread currently executing in FSM                   */
+  BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
   time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror    *error;							/* OS error                                            */
   int                 errno;							/* Internet errno copy                                 */
@@ -123,6 +129,9 @@ static void get_list_of_uids_FSM_STORE_LINE(getlistofuids_context *c);
 static void get_list_of_uids_FSM_COMPLETED(getlistofuids_context *c);
 static void get_list_of_uids_FSM_ERROR(getlistofuids_context *c);
 extern _kernel_oserror *get_list_of_uids_FSM(getlistofuids_context *context);
+static _kernel_oserror* get_list_of_uids_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* get_list_of_uids_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* CA_get_list_of_uids(void *data);
 
 
 /* ************************************************************************** */
@@ -169,11 +178,8 @@ extern _kernel_oserror* get_list_of_uids(void         *data,
     context->num_entries  = num_entries;
     context->list_timeout = timeout_UIDL;
     context->sock         = process1.socknum;
-//    error = get_list_of_uids_FSM(context);					/* enter the GetNumOfMessages FSM                                */
-    error = set_callback(//CB_CALLER_FSM,
-                         //EVENT_NONE,
-                         get_list_of_uids_CBhandler,
-                         context);						/* set a callback to re-enter the FSM later   */
+    process1.state        = PROCESSING;						/* make sure main state is IDLE so event handler doesn't do anything */
+    error = CB_get_list_of_uids(context);					/* set a callback to re-enter the FSM later   */
   }
   
   return error;
@@ -233,6 +239,7 @@ extern _kernel_oserror *get_list_of_uids_FSM(getlistofuids_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
+    context->exit = FALSE;
     do										/* FSM do-while loop                    */
     {
       if (context->error)
@@ -274,25 +281,72 @@ extern _kernel_oserror *get_list_of_uids_FSM(getlistofuids_context *context)
   
   if (!error)
   {
-    if (context->end)								/* if end of the FSM                          */
+    int state = pop_irqs_off();						/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
-      free(context);								/* destroy the context                        */
-//      process1.pollword = &(process1.getlistofuids);				/* tell caller that data is ready for reading */
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&get_list_of_uids_CAhandler, context);		/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&get_list_of_uids_CBhandler, context);		/* Ensure any pending callback is removed     */
       notify_client(&(process1.getlistofuids));
+      free(context);      							/* destroy the context                        */
+      context = 0;
     }
-    else if (!context->exit)							/* else, if not told to exit FSM, then        */
-      error = set_callback(//CB_CALLER_FSM,
-                           //EVENT_NONE,
-                           get_list_of_uids_CBhandler,
-                           context);						/* set a callback to re-enter the FSM later   */
-    else									/* else we were told to exit the FSM as it    */
-      context->exit = FALSE;							/* will be called back by anothe event        */
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
+    {
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_get_list_of_uids(context);					/* set a callafter to re-enter the FSM later  */
+    }
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_get_list_of_uids(context);					/* set a callback to re-enter the FSM         */
+    }
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
   
   return error;
 }
 
 
+extern _kernel_oserror* CA_get_list_of_uids(void *data)
+{
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &get_list_of_uids_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
+}
+
+
+extern _kernel_oserror* CB_get_list_of_uids(void *data)
+{
+  _kernel_oserror *error = 0;
+  int              state;
+  getlistofuids_context *context = (getlistofuids_context*)data;
+  
+  if (context)
+  {
+    state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&get_list_of_uids_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
+  return error;
+}
+
+  
 /* ************************************************************************** */
 /*
    FUNCTION:       
@@ -308,10 +362,34 @@ extern _kernel_oserror *get_list_of_uids_FSM(getlistofuids_context *context)
 /* ************************************************************************** */
 extern _kernel_oserror *get_list_of_uids_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  getlistofuids_context *context = (getlistofuids_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
   UNUSED(r);
   UNUSED(pw);
   
-  return get_list_of_uids_FSM(data);
+  if (context)
+  {
+    state = pop_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    pop_restore_irqs(state);
+    error = get_list_of_uids_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
+}
+
+  
+static _kernel_oserror* get_list_of_uids_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
+{
+  UNUSED(r);
+  UNUSED(pw);
+  
+  return CB_get_list_of_uids(data);
 }
 
 

@@ -4,7 +4,7 @@
 
 	FILE:		cmdresp.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.04 for RISC OS
+	VERSION:	0.05 for RISC OS
 
 	OVERVIEW
 	========
@@ -18,6 +18,30 @@
 					command_response_CBhandler() unused
 					params. tidied up
 	25/03/98	0.04	RDW	#include debuglib.h corrected
+	03/06/98	0.05	RDW	in_FSM, pending_CB and need_CB added to
+					context.  command_response() now sets
+					process1.state to PROCESSING to ensure
+					event handler doesn't do anything.
+					CB_comamnd_response now checks there is
+					not already a pending call back set.  It
+					also checks to see if there is an active
+					thread in the FSM.  If yes, it sets a
+					flag for that thread to be responsible
+					for setting the callback, otherwise it
+					sets it and sets the pending flag.
+					command_response_CAhandler now just
+					calls CB_command_response.
+					command_response_CBhandler now sets
+					in_FSM and unsets pending_CB before
+					calling the FSM.
+					command_response_FSM on exit now either:
+					FSM end case: resets process1.state and
+					  destroys the context
+					t_slice expiry: sets a callafter (though
+					  callback used for performance just now.
+					  Once I pass timeslices between FSMs, I'll
+					  change this)
+					need_CB set: sets a callback
 */
 
 
@@ -51,6 +75,7 @@
 #include "send.h"
 #include "get.h"
 #include "cmdresp.h"
+#include "pop_utils.h"
 
 
 /* ************************************************************************** */
@@ -69,6 +94,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                      in_FSM;						/* Thread currently executing in FSM                   */
+  BOOL                      pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                      need_CB;						/* There needs to be a CallBack set to re-enter the FSM*/
   time_t                    t_slice;						/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror          *error;						/* our error pointer                                   */
   BOOL                      end;						/* end of command response FSM?                        */
@@ -112,6 +140,7 @@ static command_response_context* new_command_response_context(void);
 static _kernel_oserror* command_response_FSM(command_response_context *context);
 static _kernel_oserror* command_response_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror* command_response_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* CA_command_response(void *data);
 
 
 /* ************************************************************************** */
@@ -185,6 +214,7 @@ extern _kernel_oserror *command_response(int               s,
       context->internet_err = internet_err;
       context->data         = data;
       context->error2       = error2;
+      process1.state        = PROCESSING;					/* make sure main state is IDLE so event handler doesn't do anything */
       error = CB_command_response(context);					/* set a callback to re-enter the FSM later   */
     }
     else
@@ -243,114 +273,154 @@ extern _kernel_oserror *command_response_FSM(command_response_context *context)
   if (context == 0)								/* make sure we've been given a context                          */
     error = ERROR(INTERNALERR);
 
-  context->t_slice = clock() + TIME_SLICE;
-  do										/* FSM do-while loop                                             */
+  if (!error)
   {
-    if (context->error)
-      context->state = ERROR;
-    switch (context->state)
+    context->t_slice = clock() + TIME_SLICE;
+    context->exit = FALSE;
+    do										/* FSM do-while loop                                             */
     {
-      case INIT:
+      if (context->error)
+        context->state = ERROR;
+      switch (context->state)
       {
-        dprintf(("", "command_and_response: INIT\n"));
-        if (context->send_data == 0)						/* if no data to send, then switch to GET_RESPONSE state         */
-          context->state = GET_RESPONSE;
-        else if (context->send_data[0] == 0)
-          context->state = GET_RESPONSE;
-        else									/* else, switch to SEND_LINE state                               */
-          context->state = SEND_LINE;
-        break;
-      }
-      case SEND_LINE:
-      {
-        dprintf(("", "command_and_response: SEND_LINE\n"));
-        context->error = send_line_to_server(context->s,
-                                             context->send_length,
-                                             context->timeout,
-                                             context->internet_err,
-                                             &(context->error),
-                                             (function)&command_response_FSM,
-                                             context,
-                                             context->send_data);		/* send the data to the server                                   */
-        if (context->error)
-          context->state = ERROR;
-        else									/* else, if no error then exit FSM as we will be reentered by    */
-        {									/* send_line_to_server calling us back and switch state to       */
-          context->exit = TRUE;							/* GET_RESPONSE                                                  */
-          context->state = GET_RESPONSE;
+        case INIT:
+        {
+          dprintf(("", "command_and_response: INIT\n"));
+          if (context->send_data == 0)						/* if no data to send, then switch to GET_RESPONSE state         */
+            context->state = GET_RESPONSE;
+          else if (context->send_data[0] == 0)
+            context->state = GET_RESPONSE;
+          else									/* else, switch to SEND_LINE state                               */
+            context->state = SEND_LINE;
+          break;
         }
-        break;
-      }
-      case GET_RESPONSE:
-      {
-        dprintf(("", "command_and_response: GET_RESPONSE\n"));
-        context->error = get_line_from_server(context->s,
-                                              context->response,
-                                              context->timeout,
-                                              context->internet_err,
-                                              &(context->error),
-                                              (function)&command_response_FSM,
-                                              context);				/* get the response from the server                              */
-        if (context->error)
-          context->state = ERROR;
-        else									/* else, if no error then exit FSM as we will be reentered by    */
-        {									/* get_line_from_server calling us back and switch state to      */
-          context->exit = TRUE;							/* COMPLETED                                                     */
-          context->state = COMPLETED;
+        case SEND_LINE:
+        {
+          dprintf(("", "command_and_response: SEND_LINE\n"));
+          context->error = send_line_to_server(context->s,
+                                               context->send_length,
+                                               context->timeout,
+                                               context->internet_err,
+                                               &(context->error),
+                                               (function)&command_response_FSM,
+                                               context,
+                                               context->send_data);		/* send the data to the server                                   */
+          if (context->error)
+            context->state = ERROR;
+          else									/* else, if no error then exit FSM as we will be reentered by    */
+          {									/* send_line_to_server calling us back and switch state to       */
+            context->exit = TRUE;							/* GET_RESPONSE                                                  */
+            context->state = GET_RESPONSE;
+          }
+          break;
         }
-        break;
-      }
-      case COMPLETED:
-      {
-        dprintf(("", "command_and_response: COMPLETED\n"));
-        context->func(context->data);						/* callback caller with the context they gave us                 */
-        context->end = TRUE;							/* set end of FSM                                                */
-        break;
-      }
-      case ERROR:
-      {
-        dprintf(("", "command_and_response: ERROR\n"));
-        *(context->error2) = context->error;					/* set caller's error to point at the error that occured here    */
-        context->func(context->data);						/* callback caller with the context they gave us                 */
-        context->end = TRUE;							/* set end of FSM                                                */
-        break;
-      }
-      default:
-      {
-        dprintf(("", "command_and_response: INTERNAL ERROR\n"));
-        error = ERROR(INTERNALERR);
-        break;
-      }
-    } /* endswitch */
-  } while ((!expired(context->t_slice)) && (!context->end) && (!context->exit));
+        case GET_RESPONSE:
+        {
+          dprintf(("", "command_and_response: GET_RESPONSE\n"));
+          context->error = get_line_from_server(context->s,
+                                                context->response,
+                                                context->timeout,
+                                                context->internet_err,
+                                                &(context->error),
+                                                (function)&command_response_FSM,
+                                                context);				/* get the response from the server                              */
+          if (context->error)
+            context->state = ERROR;
+          else									/* else, if no error then exit FSM as we will be reentered by    */
+          {									/* get_line_from_server calling us back and switch state to      */
+            context->exit = TRUE;							/* COMPLETED                                                     */
+            context->state = COMPLETED;
+          }
+          break;
+        }
+        case COMPLETED:
+        {
+          dprintf(("", "command_and_response: COMPLETED\n"));
+          context->func(context->data);						/* callback caller with the context they gave us                 */
+          context->end = TRUE;							/* set end of FSM                                                */
+          break;
+        }
+        case ERROR:
+        {
+          dprintf(("", "command_and_response: ERROR\n"));
+          *(context->error2) = context->error;					/* set caller's error to point at the error that occured here    */
+          context->func(context->data);						/* callback caller with the context they gave us                 */
+          context->end = TRUE;							/* set end of FSM                                                */
+          break;
+        }
+        default:
+        {
+          dprintf(("", "command_and_response: INTERNAL ERROR\n"));
+          error = ERROR(INTERNALERR);
+          break;
+        }
+      } /* endswitch */
+    } while ((!expired(context->t_slice)) && (!context->end) && (!context->exit));
+  }
 
   if (!error)
   {
-    if (context->end)								/* if end of the FSM                          */
-      destroy_command_response_context(&context);				/* destroy the context                        */
-    else if (!context->exit)							/* else, if not told to exit FSM, then        */
+    int state = pop_irqs_off();							/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
-      error = CB_command_response(context);					/* set a callback to re-enter the FSM later   */
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&command_response_CAhandler, context);		/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&command_response_CBhandler, context);		/* Ensure any pending callback is removed     */
+      destroy_command_response_context(&context);				/* destroy the context                        */
     }
-    else									/* else we were told to exit the FSM as it    */
-      context->exit = FALSE;							/* will be called back by anothe event        */
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
+    {
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_command_response(context);					/* set a callafter to re-enter the FSM later  */
+    }
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_command_response(context);					/* set a callback to re-enter the FSM         */
+    }
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
 
   return error;
 }
 
 
-
-
 extern _kernel_oserror* CA_command_response(void *data)
 {
-  return callx_add_callafter(SLEEP_TIME, &command_response_CAhandler, data);
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &command_response_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
 }
 
 
 extern _kernel_oserror* CB_command_response(void *data)
 {
-  return callx_add_callback(&command_response_CBhandler, data);
+  _kernel_oserror *error = 0;
+  int              state;
+  command_response_context *context = (command_response_context*)data;
+  
+  if (context)
+  {
+    state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&command_response_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
   
@@ -360,7 +430,7 @@ static _kernel_oserror* command_response_CAhandler(_kernel_swi_regs *r, void *pw
   UNUSED(r);
   UNUSED(pw);
   
-  return callx_add_callback(&command_response_CBhandler, data);
+  return CB_command_response(data);
 }
 
 
@@ -379,10 +449,25 @@ static _kernel_oserror* command_response_CAhandler(_kernel_swi_regs *r, void *pw
 /* ************************************************************************** */
 static _kernel_oserror *command_response_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  command_response_context *context = (command_response_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
   UNUSED(r);
   UNUSED(pw);
   
-  return command_response_FSM(data);
+  if (context)
+  {
+    state = pop_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    pop_restore_irqs(state);
+    error = command_response_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 

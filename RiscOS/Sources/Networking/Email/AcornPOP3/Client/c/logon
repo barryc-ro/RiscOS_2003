@@ -4,7 +4,7 @@
 
 	FILE:		logon.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.16 for RISC OS
+	VERSION:	0.17 for RISC OS
 
 	OVERVIEW
 	========
@@ -46,6 +46,12 @@
 					tidied up
 	25/03/98	0.16	RDW	#include debuglib corrected
 					#ifdef MEMCHECK changed to MemCheck_MEMCHECK
+	28/05/98	0.17	RDW	moved switch to process1.state CONNECTING to
+					exit from CONNECT state where it should be!
+					And ensure on end of FSM CallAfter/Backs
+					are removed and process1.state = PROCESSING
+					Fixed MemCheck faulting on read in GET_HOST_NB
+					Re-entracy changes as per cmdresp.c 0.05
 */
 
 
@@ -134,6 +140,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                in_FSM;							/* Thread currently executing in FSM                   */
+  BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
   time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror    *error;							/* OS error                                            */
   int                 errno;							/* Internet errno copy                                 */
@@ -182,6 +191,7 @@ static void logon_FSM_ERROR(logon_context *c);
 extern _kernel_oserror *logon_FSM(logon_context *context);
 static _kernel_oserror *logon_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* CA_logon(void *data);
 
 
 /* ************************************************************************** */
@@ -244,7 +254,7 @@ extern _kernel_oserror* logon_USER_PASS(char  username[],
       if (context->username)	free(context->username);
       if (context->password)	free(context->password);
       if (context->hostname)	free(context->hostname);
-      error = ERROR(MALLOCFAILED);					/* return error                                                  */
+      error = ERROR(MALLOCFAILED);						/* return error                                                  */
     }
     else									/* else, mallocs succeeded, so copy parameters                   */
     {
@@ -256,9 +266,7 @@ extern _kernel_oserror* logon_USER_PASS(char  username[],
       context->user_timeout = timeout_USER;
       context->pass_timeout = timeout_PASS;
       process1.logon_context = context;
-      process1.state = CONNECTING;
-//      error = logon_FSM(context);						/* enter the logon FSM                                           */
-//      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */logon_CBhandler, context);/* set a callback to re-enter the FSM later   */
+      process1.state        = PROCESSING;					/* make sure main state is IDLE so event handler doesn't do anything */
       error = CB_logon(context);
     }
   }
@@ -353,6 +361,7 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
+    context->exit = FALSE;
     do										/* FSM do-while loop                    */
     {
       if (context->error)
@@ -410,17 +419,28 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
   
   if (!error)
   {
-    if (context->end)								/* if end of the FSM                          */
+    int state = pop_irqs_off();							/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
-      destroy_logon_context(&context);						/* destroy the context                        */
-//      process1.pollword = &(process1.logon);					/* tell caller that data is ready for reading */
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&logon_CAhandler, context);			/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&logon_CBhandler, context);				/* Ensure any pending callback is removed     */
       notify_client(&(process1.logon));
+      destroy_logon_context(&context);						/* destroy the context                        */
     }
-    else if (!context->exit)							/* else, if not told to exit FSM, then        */
-      error = CA_logon(context);
-//      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */logon_CBhandler, context);/* set a callback to re-enter the FSM later   */
-    else									/* else we were told to exit the FSM as it    */
-      context->exit = FALSE;							/* will be called back by anothe event        */
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
+    {
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_logon(context);						/* set a callafter to re-enter the FSM later  */
+    }
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_logon(context);						/* set a callback to re-enter the FSM         */
+    }
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
   
   return error;
@@ -440,15 +460,40 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
    VARIABLES:      
  */
 /* ************************************************************************** */
-extern _kernel_oserror* CA_logon(void *data)
+static _kernel_oserror* CA_logon(void *data)
 {
-  return callx_add_callafter(SLEEP_TIME, &logon_CAhandler, data);
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &logon_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
 }
 
 
 extern _kernel_oserror* CB_logon(void *data)
 {
-  return callx_add_callback(&logon_CBhandler, data);
+  _kernel_oserror *error = 0;
+  int              state;
+  logon_context *context = (logon_context*)data;
+  
+  if (context)
+  {
+    state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&logon_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
   
@@ -458,16 +503,31 @@ static _kernel_oserror* logon_CAhandler(_kernel_swi_regs *r, void *pw, void *dat
   UNUSED(r);
   UNUSED(pw);
   
-  return callx_add_callback(&logon_CBhandler, data);
+  return CB_logon(data);
 }
 
 
 static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  logon_context *context = (logon_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
   UNUSED(r);
   UNUSED(pw);
   
-  return logon_FSM(data);
+  if (context)
+  {
+    state = pop_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    pop_restore_irqs(state);
+    error = logon_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 
@@ -564,6 +624,7 @@ static void logon_FSM_GET_HOST_NB(logon_context *c)
       /* success */
       c->pop_server = (struct hostent*)c->r.r[1];
       #ifdef MemCheck_MEMCHECK
+        MemCheck_RegisterMiscBlock(c->pop_server->h_length, sizeof(c->pop_server->h_length));
         MemCheck_RegisterMiscBlock(c->pop_server->h_addr, c->pop_server->h_length);
       #endif
       memcpy((char*)&(c->pop_server_addr.sin_addr),
@@ -572,9 +633,13 @@ static void logon_FSM_GET_HOST_NB(logon_context *c)
       c->pop_server_addr.sin_family = AF_INET;
       c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT               */
       #ifdef MemCheck_MEMCHECK  
-        MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
+        MemCheck_UnRegisterMiscBlock((void*)c->pop_server->h_length);
+        MemCheck_UnRegisterMiscBlock((void*)c->pop_server->h_addr);
       #endif
     }
+    #ifdef MemCheck_MEMCHECK  
+      MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
+    #endif
   }
 }
 
@@ -694,6 +759,7 @@ static void logon_FSM_CONNECT(logon_context *c)
     else if (errno != EISCONN)							/* else if error is NOT ALREADY CONNECTED then                            */
     {
       c->state = CONNECT;							/* stay in this state                                                     */
+      process1.state = CONNECTING;
       c->exit = TRUE;
     }
     else									/* else, we are connected so switch to GREETING state                     */

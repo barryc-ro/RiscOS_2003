@@ -4,7 +4,7 @@
 
 	FILE:		getmsgfile.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.15 for RISC OS
+	VERSION:	0.16 for RISC OS
 
 	OVERVIEW
 	========
@@ -40,6 +40,7 @@
 					across re-entracy into the FSM caused
 					by waiting for async. operations to
 					call the FSM back.
+	03/06/98	0.16	RDW	Re-entracy changes as per cmdresp.c 0.05
 */
 
 
@@ -76,6 +77,7 @@
 #include "cmdresp.h"
 #include "pop_utils.h"
 #include "errortable.h"
+#include "pop_utils.h"
 
 
 /* ************************************************************************** */
@@ -115,6 +117,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                in_FSM;							/* Thread currently executing in FSM                   */
+  BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
   time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror    *error;							/* OS error                                            */
   int                 errno;							/* Internet errno copy                                 */
@@ -158,6 +163,7 @@ static void get_message_to_file_FSM_ERROR(getmsgfile_context *c);
 											   are really needed or not...*/
 static _kernel_oserror* get_message_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror *get_message_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror* CA_get_message_to_file(void *data);
 
 
 /* ************************************************************************** */
@@ -234,6 +240,7 @@ extern _kernel_oserror* get_message_to_file(BOOL          del,
       context->retr_timeout = timeout;
       context->sock         = process1.socknum;
       context->t_slice      = 0;						/* NEW */
+      process1.state        = PROCESSING;					/* make sure main state is IDLE so event handler doesn't do anything */
       error = CB_get_message_to_file(context);
     }
   }
@@ -296,7 +303,7 @@ static _kernel_oserror *get_message_to_file_FSM(getmsgfile_context *context)
   {
 /*    context->t_slice = clock() + TIME_SLICE;
     do*/										/* FSM do-while loop                    */
-    
+    context->exit = FALSE;
     if (context->t_slice == 0)
       context->t_slice = clock() + TIME_SLICE;
     while ((!expired(context->t_slice)) && (!context->end) && (!context->exit))
@@ -348,31 +355,35 @@ static _kernel_oserror *get_message_to_file_FSM(getmsgfile_context *context)
   
   if (!error)
   {
-    if (context->end)								/* if end of the FSM                          */
+    int state = pop_irqs_off();							/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&get_message_CAhandler, context);			/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&get_message_CBhandler, context);			/* Ensure any pending callback is removed     */
       if (context->TOP)
-      {
-//        process1.pollword = &(process1.getxlinesofmessage);			/* tell caller that data is ready for reading */
         notify_client(&(process1.getxlinesofmessage));
-      }
       else
-      {
-//        process1.pollword = &(process1.getmessage);
         notify_client(&(process1.getmessage));
-      }
       if ((context->file) && (context->filename))
         free(context->filename);
-      free(context);								/* destroy the context                        */
+      free(context);      							/* destroy the context                        */
+      context = 0;
     }
-    else if (!context->exit)							/* else, if not told to exit FSM, then        */
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
     {
       context->t_slice = 0;							/* NEW */
-      callx_remove_callafter(&get_message_CAhandler, context);
-      callx_remove_callback(&get_message_CBhandler, context);
-      error = CA_get_message_to_file(context);					/* set a callback to re-enter the FSM later   */
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_get_message_to_file(context);					/* set a callafter to re-enter the FSM later  */
     }
-    else									/* else we were told to exit the FSM as it    */
-      context->exit = FALSE;							/* will be called back by anothe event        */
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_get_message_to_file(context);					/* set a callback to re-enter the FSM         */
+    }
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
   
   return error;
@@ -381,23 +392,47 @@ static _kernel_oserror *get_message_to_file_FSM(getmsgfile_context *context)
 
 extern _kernel_oserror* CA_get_message_to_file(void *data)
 {
-  return callx_add_callafter(SLEEP_TIME, &get_message_CAhandler, data);
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &get_message_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
 }
 
 
 extern _kernel_oserror* CB_get_message_to_file(void *data)
 {
-  return callx_add_callback(&get_message_CBhandler, data);
+  _kernel_oserror *error = 0;
+  int              state;
+  getmsgfile_context *context = (getmsgfile_context*)data;
+  
+  if (context)
+  {
+    state = pop_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&get_message_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    pop_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
   
 static _kernel_oserror* get_message_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
-  dprintf(("", "ENTERED: get_line_CAhandler\n"));
   UNUSED(r);
   UNUSED(pw);
   
-  return callx_add_callback(&get_message_CBhandler, data);
+  return CB_get_message_to_file(data);
 }
 
 
@@ -416,10 +451,25 @@ static _kernel_oserror* get_message_CAhandler(_kernel_swi_regs *r, void *pw, voi
 /* ************************************************************************** */
 static _kernel_oserror *get_message_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  getmsgfile_context *context = (getmsgfile_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
   UNUSED(r);
   UNUSED(pw);
   
-  return get_message_to_file_FSM(data);
+  if (context)
+  {
+    state = pop_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    pop_restore_irqs(state);
+    error = get_message_to_file_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 
