@@ -13,7 +13,7 @@
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 flush		SETD	false	;debug for file flushing
-close		SETD	false	;sets the close debug flag, somehow not visable from version
+close		SETD	true	;sets the close debug flag, somehow not visable from version
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -64,11 +64,20 @@ timeout
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-; sleep until pollword non-zero
+; sleep receiving until pollword non-zero or error
 ;
+sleep_on_tx     Entry   "r0-r2"
+                ADR     r1, checkfileTX_sleep
+                B       %f5
 
-sleep
-                Entry   "r0-r2"
+sleep_on_rx     ALTENTRY
+                ADR     r1, checkfileRX_sleep
+5
+                Push    "r1"                        ; save r1 for later
+
+                MOV     r0, #9
+                MOV     r2, fr
+                SWI     XOS_CallEvery
 
                 LDR     r0, [fr, #file_Timeout]
                 TEQ     r0, #0
@@ -77,32 +86,78 @@ sleep
                 ADR     r1, timeout
                 MOV     r2, fr
                 SWI     XOS_CallAfter
-
-                ADD     r1, fr, #file_PollWord
-                MOV     r0, #UpCall_Sleep
-                Debug   fs, "Pollword", r1
-                SWI     XOS_UpCall
-
-                LDR     r0, [fr, #file_PollWord]
-                TEQ     r0, #ff_TimedOut
-                BEQ     %f90
-
-                ADR     r0, timeout
-                MOV     r1, fr
-                SWI     XOS_RemoveTickerEvent
-                EXIT
 10
                 ADD     r1, fr, #file_PollWord
                 MOV     r0, #UpCall_Sleep
                 Debug   fs, "Pollword", r1
                 SWI     XOS_UpCall
-                CLRV
 
-                EXIT
-90
+
+                ADR     r0, timeout
+                MOV     r1, fr
+                SWI     XOS_RemoveTickerEvent
+
+                Pull    "r0"                                    ; restore old r1 into r0
+                SWI     XOS_RemoveTickerEvent
+
+                PHPSEI  r1                                      ; disable interrupts so that there is no IRQ hole
+                LDR     r0, [fr, #file_PollWord]
+                Debug   fs, "Pollword contents now: ", r0
+                TEQ     r0, #0
+                TEQNE   r0, #ff_WakeUp
+                MOVEQ   r0, #ff_Sleeping                        ; we must mark as sleeping as soon as possible,
+                STREQ   r0, [fr, #file_PollWord]                ; so that we get woken up correctly
+                PLP     r1
+                EXIT    EQ
+
                 PullEnv
+                TST     r0, #ff_TimedOut
+                BEQ     %f20
                 ADR     r0, ErrorBlock_DeviceFS_Timeout         ; so set r0 -> error block
                 DoError                                         ; translate error and return V set
+20
+                TST     r0, #ff_Error
+                MOVEQ   pc, lr
+
+                ADD     r0, fr, #file_Error
+ [ debug
+                ADD     r0, r0, #4
+		DebugS	fs, "waking up with error: ", r0
+                SUB     r0, r0, #4
+ ]
+                SETV
+                MOV     pc, lr
+
+
+checkfileTX_sleep Entry "fr"
+                MOV     fr, r12
+                BL      checkfileTXOK
+                EXIT    VC
+                B       %f10
+
+checkfileRX_sleep ALTENTRY
+                MOV     fr, r12
+                BL      checkfileRXOK
+                EXIT    VC
+10
+                Push    "r0-r3"
+                ADD     r2, fr, #file_Error
+                MOV     r1, #252
+20
+                LDR     r3, [r0, r1]
+                STR     r3, [r2, r1]
+                SUBS    r1, r1, #4
+                BGE     %b20
+
+                LDR     r2, [fr, #file_PollWord]
+                ORR     r2, r2, #ff_Error
+                STR     r2, [fr, #file_PollWord]
+
+                Pull    "r0-r3"
+
+                CLRV
+                EXIT
+
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -566,7 +621,7 @@ make_buffer     ROUT
                 ANDS    r1, r1, #ff_FileForTX                   ; if an output device (r1<>0)
                 ADRNE   r1, wakeup                              ; then use real wake up code else use none
  ]
-                ADR     r2, detach                              ; try to close stream if someone tries to detach
+                ADRL    r2, detach                              ; try to close stream if someone tries to detach
                 MOV     r3, fr
                 MOV     r4, wp                                  ; workspace + private word
 
@@ -619,7 +674,7 @@ wakeup_rx	Entry	"r0-r9"				; Stack everything, in case CallAVector corrupts it
 
                 SavePSR r2
                 ORR     r0, r2, #SVC_mode
-                RestPSR r0,,c                           ; set SVC mode
+                RestPSR r0,,cf                          ; set SVC mode
                 NOP
 
 		Push	"r2,lr"				; Preserve r2 and lr across CallAVector
@@ -638,6 +693,7 @@ wakeup_rx	Entry	"r0-r9"				; Stack everything, in case CallAVector corrupts it
                 TEQ     r0, #ff_DontSleep
                 MOVNE   r0, #ff_WakeUp
                 STRNE   r0, [r8, #file_PollWord]
+                Debug   fs, "Waking up pollword"
  ]
 		EXIT
  ]
@@ -793,9 +849,9 @@ fs_get          Entry   "r0-r2, fr,pr"
 
                 ASSERT  (BufferReason_RemoveByte <> -1)
                 CMP     r0, #-1                                 ; if we're not buffered, r0 = -1 here.
-                MOVNE   r1, #ff_Sleeping                        ; reset pollword if we're buffered, if not then
-                STRNE   r1, [fr, #file_PollWord]                ; we can't set a pollword to wake us up
-                BL      sleep
+                MOVEQ   r1, #ff_WakeUp                        ; reset pollword if we're buffered, if not then
+                STREQ   r1, [fr, #file_PollWord]                ; we can't set a pollword to wake us up
+                BL      sleep_on_rx
                 BVS     %FT30
 
                 B       %BT00                                   ; loop again to make sure actually received data
@@ -840,7 +896,7 @@ fs_get          Entry   "r0-r2, fr,pr"
 ;  fr
 ; Out
 ; V and r0=error possible
-checkfileRXOK   Entry   "r0-r2"
+checkfileRXOK   Entry "r0-r2"
                 MOV     r0, #DeviceCall_MonitorRX
                 B       %FT10
 
@@ -931,7 +987,7 @@ fs_put		Entry	"r0-r2, fr, r9"
                 TEQ     r1, #ff_DontSleep
                 BEQ     %00                                     ; we don't want to sleep
 
-                BL      sleep
+                BL      sleep_on_tx
                 BVS     %FT99
 
                 B       %00                                     ; loop again
@@ -970,10 +1026,10 @@ fs_put		Entry	"r0-r2, fr, r9"
                 TEQ     r1, #ff_DontSleep
                 BEQ     %10                                     ; we don't want to sleep
 
-                MOV     r1, #ff_Sleeping                        ; reset pollword
-                STR     r1, [fr, #file_PollWord]
+;                MOV     r1, #ff_Sleeping                        ; reset pollword
+;                STR     r1, [fr, #file_PollWord]
 
-                BL      sleep
+                BL      sleep_on_tx
                 BVS     %FT99
 
 		B	%10					; keep looping
@@ -1318,10 +1374,10 @@ args_flush      Entry   "r1-r3,fr"
                 LDR     r1, [fr, #file_BufferHandle]
                 CMP     r1, #-1                                 ; is the device buffered?
 
-                MOVNE   r1, #ff_Sleeping                        ; reset pollword if we're buffered, if not then
-                STRNE   r1, [fr, #file_PollWord]                ; we can't set a pollword to wake us up
+                MOVEQ   r1, #ff_WakeUp                          ; reset pollword if we're buffered, if not then
+                STREQ   r1, [fr, #file_PollWord]                ; we can't set a pollword to wake us up
 
-                BL      sleep
+                BL      sleep_on_tx
 
                 MOV     r1, fr
  ]
@@ -1364,6 +1420,9 @@ fs_close        Entry   "r0, dr, pr"
 removefileblock Entry   "r0-r5, dr, pr"                         ; attempt to zap record at 'FR'
 
                 Debug   close,"removing file block"
+                LDR     r5, [fr, #file_Flags]                   ; get global flags word
+                Debug   close,"file flags ", r5
+                Debug   close,"file record is", fr
 
  [ TWSleep
                 MOV     r0, #UpCall_SleepNoMore
@@ -1434,6 +1493,7 @@ removefileblock Entry   "r0-r5, dr, pr"                         ; attempt to zap
                 STR     r0, [fr, #file_SpecialField]            ; mark as now released incase called again
 30
                 LDR     r5, [fr, #file_Flags]                   ; get global flags word
+                Debug   close,"file flags ", r5
                 TST     r5, #ff_FileForTX                       ; is it for RX or TX?
                 MOVEQ   r2, #0
                 MOVNE   r2, #-1
@@ -1456,6 +1516,12 @@ removefileblock Entry   "r0-r5, dr, pr"                         ; attempt to zap
                 LDRNE   r1, [r0]
                 SUBNE   r1, r1, #1
                 STRNE   r1, [r0]                                ; update the used inputs/outputs counters
+
+                [ debug
+                BEQ     %f40
+                Debug   close,"number of used streams now ",r1
+40
+                ]
 
                 LDR     fr, =&DEADDEAD                          ; invalidate the file record pointer
 
@@ -1638,8 +1704,8 @@ file_enumdir    Entry   "r0-r2, r5-r7, dr, pr"
 05
                 LDRB    r6, [r0], #1
                 LDRB    r7, [r1], #1                            ; get two characters?
-                UpperCase r6, lr
-                UpperCase r7, lr                                ; ensure they are the same case
+                ASCII_UpperCase r6, lr
+                ASCII_UpperCase r7, lr                                ; ensure they are the same case
 
                 TEQ     r6, r7                                  ; are they the same character?
                 BNE     %FT10                                   ; no, so skip
@@ -1885,10 +1951,10 @@ gbpb_get        Entry   "r0-r3, fr, r9, pr"
                 TEQ     r1, #ff_DontSleep
                 BEQ     %BT10
 
-                MOV     r1, #ff_Sleeping                        ; reset pollword
-                STR     r1, [fr, #file_PollWord]
+;                MOV     r1, #ff_Sleeping                        ; reset pollword
+;                STR     r1, [fr, #file_PollWord]
 
-                BL      sleep
+                BL      sleep_on_rx
 
                 B       %BT10
  |
@@ -2004,10 +2070,10 @@ gbpb_put        Entry   "r0-r3, fr, r9"
                 TEQ     r1, #ff_DontSleep
                 BEQ     %00
 
-                MOV     r1, #ff_Sleeping                        ; reset pollword
-                STR     r1, [fr, #file_PollWord]
+;                MOV     r1, #ff_Sleeping                        ; reset pollword
+;                STR     r1, [fr, #file_PollWord]
 
-                BL      sleep
+                BL      sleep_on_tx
 
  [ FastBufferMan
                 LDR     r1, [fr, #file_BufferPrivId]            ; get buffer managers private buffer id
@@ -2137,8 +2203,8 @@ findobject      Entry   "r1,r6,r7"
 10
                 LDRB    r3, [r0, r2]
                 LDRB    r4, [r1, r2]                            ; get two characters
-                UpperCase r3, lr
-                UpperCase r4, lr
+                ASCII_UpperCase r3, lr
+                ASCII_UpperCase r4, lr
 
                 TEQ     r3, r4                                  ; are they the same?
                 BEQ     %15                                     ; yes.
