@@ -26,15 +26,16 @@
 #include "Global.h"
 #include "Utils.h"
 
+#include "Choices.h"
 #include "Encoding.h"
 
 /* Statics */
 
 static ObjectId menu_id = NULL_ObjectId;
-
-static int      ticked_encoding;
-static int      delete_handler_registered;
+static int      ticked_encoding = 0xffffffff;
 static int      entries_faded;
+
+int encoding_get_encoding_item_r(ObjectId o, int encoding, ObjectId *encobjid, ComponentId *enccompid);
 
 /*************************************************/
 /* encoding_fade_unusable_entries()              */
@@ -117,12 +118,14 @@ static int encoding_tick_entry(ObjectId o, int enc, int state)
 /* encoding_prepare_menu()                       */
 /*                                               */
 /* Ensure that the state of the Encoding menu    */
-/* is correct for a given browser.               */
+/* is correct for a supplied encoding_priority   */
+/* and encoding type.                            */
 /*                                               */
 /* Parameters: Object ID of the Encoding menu;   */
 /*                                               */
-/*             Pointer to a browser_data struct  */
-/*             owning the menu.                  */
+/*             The encoding priority             */
+/*                                               */
+/*             The encoding number               */
 /*                                               */
 /* Assumes:    The "From document" item is       */
 /*             component 0x11FFF in the top-     */
@@ -132,18 +135,17 @@ static int encoding_tick_entry(ObjectId o, int enc, int state)
 /*             object.                           */
 /*************************************************/
 
-static void encoding_prepare_menu(ObjectId o, browser_data * b)
+void encoding_prepare_menu(ObjectId o, encoding_priority encoding_priority, int encoding)
 {
-  menu_set_tick(0, o, 0x11FFF, b->encoding_priority != priority_user);
+  menu_set_tick(0, o, 0x11FFF, encoding_priority != priority_user);
 
-  if (ticked_encoding != b->encoding)
+  if (ticked_encoding != encoding)
   {
     if (ticked_encoding) encoding_tick_entry(o, ticked_encoding, 0);
 
-    encoding_tick_entry(o, b->encoding, 1);
-    ticked_encoding = b->encoding;
+    encoding_tick_entry(o, encoding, 1);
+    ticked_encoding = encoding;
   }
-
 }
 
 /*************************************************/
@@ -165,15 +167,35 @@ static void encoding_prepare_menu(ObjectId o, browser_data * b)
 int encoding_select(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
   browser_data * b;
+  _kernel_oserror *e;
 
   ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &b));
 
-  if (!is_known_browser(b)) return 0;
-
-  b->encoding          = idb->self_component;
-  b->encoding_priority = priority_user;
-
-  encoding_prepare_menu(idb->ancestor_id, b);
+  if (!is_known_browser(b)) 
+  {
+    ObjectId ancestor;
+    
+    e = toolbox_get_ancestor(0, idb->ancestor_id, &ancestor, NULL);
+    
+    if (!e && ancestor == choices_windowid && new_choices)
+    {
+      new_choices->encoding = idb->self_component;
+      choices_set_encoding_field();
+      encoding_prepare_menu(idb->ancestor_id, priority_default, new_choices->encoding);
+      return 1;
+    }
+    else
+    {
+      return 0;
+    }
+  }
+  else
+  {
+    b->encoding          = idb->self_component;
+    b->encoding_priority = priority_user;
+    
+    encoding_prepare_menu(idb->ancestor_id, b->encoding_priority, b->encoding);
+  }
 
   return 1;
 }
@@ -204,32 +226,7 @@ int encoding_from_document_select(int eventcode, ToolboxEvent * event, IdBlock *
     b->encoding_priority = priority_user;
   }
 
-  encoding_prepare_menu(idb->self_id, b);
-
-  return 1;
-}
-
-/*************************************************/
-/* encoding_menu_deleted()                       */
-/*                                               */
-/* Note the deletion of the Encoding menu        */
-/* (ticked entry no longer ticked, etc.)         */
-/*                                               */
-/* Parameters are as for a standard Toolbox      */
-/* event handler.                                */
-/*************************************************/
-
-static int encoding_menu_deleted(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  menu_id                   = NULL_ObjectId;
-  ticked_encoding           = 0;
-  delete_handler_registered = 0;
-  entries_faded             = 0;
-
-  ChkError(event_deregister_toolbox_handler(idb->self_id,
-                                            Toolbox_ObjectDeleted,
-                                            encoding_menu_deleted,
-                                            NULL));
+  encoding_prepare_menu(idb->self_id, b->encoding_priority, b->encoding);
 
   return 1;
 }
@@ -241,6 +238,10 @@ static int encoding_menu_deleted(int eventcode, ToolboxEvent * event, IdBlock * 
 /*                                               */
 /* Parameters are as for a standard Toolbox      */
 /* event handler.                                */
+/*                                               */
+/* Assumes:    The "From document" item is       */
+/*             component 0x11FFF in the top-     */
+/*             level menu;                       */
 /*************************************************/
 
 int encoding_show_menu(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
@@ -249,29 +250,36 @@ int encoding_show_menu(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
 
   ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &b));
 
-  if (!is_known_browser(b)) return 0;
-
-  if (!delete_handler_registered)
+  if (!is_known_browser(b))
   {
-    delete_handler_registered = 1;
-
-    ChkError(event_register_toolbox_handler(idb->self_id,
-                                            Toolbox_ObjectDeleted,
-                                            encoding_menu_deleted,
-                                            NULL));
+    if (idb->ancestor_id == choices_windowid && new_choices)
+    {
+      /* Fade "From document" item as it is not relevant to choices */
+      encoding_prepare_menu(idb->self_id, priority_default, new_choices->encoding);
+      menu_set_fade(0, idb->self_id, 0x11FFF, 1);
+      return 1;
+    }
+    else
+    {
+      return 0;
+    }
   }
-
-  if (!entries_faded)
+  else
   {
-    encoding_fade_unusable_entries(idb->self_id);
-    entries_faded = 1;
+    /* Unfade "From document" item as it is relevant to browser windows */
+    
+    menu_set_fade(0, idb->self_id, 0x11FFF, 0);
+    
+    if (!entries_faded)
+    {
+      encoding_fade_unusable_entries(idb->self_id);
+      entries_faded = 1;
+    }
+
+    toolbox_set_client_handle(0, idb->self_id, b);
+
+    encoding_prepare_menu(idb->self_id, b->encoding_priority, b->encoding);
   }
-
-  menu_id = idb->self_id;
-
-  toolbox_set_client_handle(0, idb->self_id, b);
-
-  encoding_prepare_menu(idb->self_id, b);
 
   return 1;
 }
@@ -320,6 +328,100 @@ void encoding_update_menus(browser_data * b)
 
     if (toolbox_get_client_handle(0, menu_id, (void *) &b2)) return;
 
-    if (b2 == b) encoding_prepare_menu(menu_id, b);
+    if (b2 == b) encoding_prepare_menu(menu_id, b->encoding_priority, b->encoding);
   }
+}
+
+/*************************************************/
+/* encoding_get_encoding_item()                  */
+/*                                               */
+/* Finds the menu item containing the name       */
+/* of the specified encoding.                    */
+/*                                               */
+/* Parameters: the required encoding             */
+/*                                               */
+/*             Pointer to the objectid to return */
+/*             information in                    */
+/*                                               */
+/*             Pointer to the componentid to     */
+/*             return the information in.        */
+/*                                               */
+/* Returns:    1 if the encoding was found       */
+/*             0 if it was not                   */
+/*                                               */
+/* Assumes:    Parent menu items have            */
+/*             consecutive component IDs         */
+/*             starting at 0x11000 in each menu; */
+/*                                               */
+/*             The component ID of an encoding   */
+/*             item is the number of the         */
+/*             encoding it represents;           */
+/*************************************************/
+
+int encoding_get_encoding_item(int encoding, ObjectId *encobjid, ComponentId *enccompid)
+{
+  return encoding_get_encoding_item_r(menu_id, encoding, encobjid, enccompid);
+}
+
+/*************************************************/
+/* encoding_get_encoding_item_r()                */
+/*                                               */
+/* Recursive backend to                          */
+/* encoding_get_encoding_item                    */
+/*************************************************/
+
+int encoding_get_encoding_item_r(ObjectId o, int encoding, ObjectId *encobjid, ComponentId *enccompid)
+{
+  _kernel_oserror *e;
+  ComponentId c;
+  int state;
+  
+  /* We don't really want to know if this item is ticked, we just want to see if the item exists */
+  
+  e = menu_get_tick(0, o, encoding, &state);
+
+  if (!e)
+  {
+    *encobjid  = o;
+    *enccompid = encoding;
+    return 1;
+  }
+  
+  for (c = 0x11000; ; c++)
+  {
+    ObjectId sub;
+
+    e = menu_get_sub_menu_show(0, o, c, &sub);
+
+    /* If an error - component not found - end of submenus */
+
+    if (e) return 0;
+
+    if (sub == NULL_ObjectId) continue;
+
+    if (encoding_get_encoding_item_r(sub, encoding, encobjid, enccompid)) return 1;
+  }
+}
+
+/*************************************************/
+/* encoding_init()                               */
+/*                                               */
+/* Creates the encoding menu.                    */
+/*************************************************/
+
+_kernel_oserror *encoding_init(void)
+{
+  return toolbox_create_object(0, "Encoding", &menu_id);
+}
+
+/*************************************************/
+/* encoding_get_menuid(void)                     */
+/*                                               */
+/* Returns the ObjectId of the main encoding     */
+/* menu.                                         */
+/*************************************************/
+
+ObjectId encoding_get_menuid(void)
+{
+  return menu_id;
 }

@@ -1,0 +1,1197 @@
+/***************************************************/
+/* File   : Choices.c                              */
+/*                                                 */
+/* Purpose: Functions relating to the choices      */
+/*          dialogue box and associated sub        */
+/*          windows                                */
+/*                                                 */
+/* Author : D.T.A.Brown                            */
+/*                                                 */
+/* History: 23-Sep-97: Created.                    */
+/***************************************************/
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "swis.h"
+
+#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+
+#include "toolbox.h"
+#include "window.h"
+#include "menu.h"
+#include "ColourDbox.h"
+
+#include "svcprint.h"
+#include "Global.h"
+#include "FromROSLib.h"
+#include "Utils.h"
+
+#include "Encoding.h"
+#include "FetchPage.h"
+#include "History.h"
+#include "Menus.h"
+#include "NestWimp.h"
+#include "Save.h"
+#include "URLutils.h"
+#include "Windows.h"
+
+#include "Choices.h"
+
+static int            * subwindows        = NULL;
+static ObjectId         current_subwindow = CDSubNone;
+static ObjectId         colourdbox_id     = 0;
+
+static int              save_ticked = -1;
+static int              disp_ticked = -1;
+
+global_choices        * new_choices       = NULL;
+ObjectId                choices_windowid  = 0;
+
+static _kernel_oserror * choices_show_subwindow          (ObjectId choices_window, int subwindow);
+static _kernel_oserror * choices_set_contents            (void);
+static _kernel_oserror * choices_get_contents            (void);
+
+static int               choices_radio_click_handler     (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_set_button_handler      (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_cancel_button_handler   (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_save_button_handler     (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_encoding_button_handler (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_colour_button_handler   (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_colour_closed_handler   (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_colour_selected_handler (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_display_m_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_save_m_button_handler   (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_display_m_click_handler (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_save_m_click_handler    (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+
+static _kernel_oserror * choices_colour_set_component    (ObjectId window, ComponentId component, int colour);
+static _kernel_oserror * choices_set_save_field          (ObjectId obj, ComponentId comp, int state);
+static _kernel_oserror * choices_set_display_field       (ObjectId obj, ComponentId comp, int state);
+
+/*************************************************/
+/* choices_show_subwindow()                      */
+/*                                               */
+/* Shows a choice subwindow in the main choices  */
+/* window.                                       */
+/*                                               */
+/* Parameters: the ObjectId of the main choices  */
+/*             window                            */
+/*                                               */
+/*             the number of the subwindow to    */
+/*             show.  Defined in choices.h       */
+/*             Use CDSubNone to remove           */
+/*             the current subwindow.            */
+/*                                               */
+/* Returns:    pointer to _kernel_oserror        */
+/*************************************************/
+
+static _kernel_oserror *choices_show_subwindow(ObjectId choices_window, int subwindow)
+{
+  _kernel_oserror         *e;
+  int                     window_handle;
+  WindowShowObjectBlock   show_block;
+  WimpGetWindowStateBlock state;
+  WimpGetWindowOutlineBlock outline;
+  int                     vwidth, hheight;
+  
+  if (current_subwindow != CDSubNone)
+  {
+    /* remove the current subwindow */
+    toolbox_hide_object(0, *(subwindows + current_subwindow));
+  }
+  
+  if (subwindow == CDSubNone || !(*(subwindows + subwindow)) || subwindow == current_subwindow)
+  {
+    /* Have not been asked to open a new subwindow */
+    
+    current_subwindow = CDSubNone;
+    return NULL;
+  }
+  
+  RetError(window_get_wimp_handle(0, choices_window, &window_handle));
+  state.window_handle = window_handle;
+  RetError(wimp_get_window_state(&state));
+  RetError(gadget_get_bbox(0, choices_window, CDPlaceHolder, &show_block.visible_area));
+  windows_return_tool_sizes(NULL, &hheight, &vwidth);
+  
+  show_block.visible_area.xmin = coords_x_toscreen(show_block.visible_area.xmin, (WimpRedrawWindowBlock*)&state);
+  show_block.visible_area.xmax = coords_x_toscreen(show_block.visible_area.xmax, (WimpRedrawWindowBlock*)&state);
+  show_block.visible_area.ymin = coords_y_toscreen(show_block.visible_area.ymin, (WimpRedrawWindowBlock*)&state);
+  show_block.visible_area.ymax = coords_y_toscreen(show_block.visible_area.ymax, (WimpRedrawWindowBlock*)&state);
+  
+  /* Adjustments for different types of window */
+  
+  #ifdef TRACE
+    Printf("wimp flags : %x\n", state.flags);
+  #endif
+  
+  RetError(window_get_wimp_handle(0, *(subwindows + subwindow), &state.window_handle));
+  RetError(wimp_get_window_state(&state));
+  
+  if (state.flags & WimpWindow_VScroll) show_block.visible_area.xmax -= vwidth;
+  else vwidth  = 0;
+  
+  if (state.flags & WimpWindow_HScroll) show_block.visible_area.ymin += hheight;
+  else hheight = 0;
+  
+  show_block.xscroll = 0;
+  show_block.yscroll = 0;
+  show_block.behind  = -1;
+  
+  show_block.window_flags    = 0;
+  show_block.alignment_flags = 0;
+  
+  /* Requires wimp handle just to be awkward */
+  show_block.parent_window_handle = window_handle;
+  
+  RetError(toolbox_show_object(Toolbox_ShowObject_AsSubWindow,
+                               *(subwindows + subwindow),
+                               Toolbox_ShowObject_FullSpec,
+                               &show_block,
+                               choices_window,
+                               -1));
+  
+
+  outline.window_handle = state.window_handle;
+  wimp_get_window_outline(&outline);
+  
+  if (outline.outline.xmin < show_block.visible_area.xmin) 
+    show_block.visible_area.xmin += (show_block.visible_area.xmin - outline.outline.xmin);
+  if (outline.outline.ymin < (show_block.visible_area.ymin - hheight)) 
+    show_block.visible_area.ymin += (show_block.visible_area.ymin - outline.outline.ymin);
+  if (outline.outline.xmax > (show_block.visible_area.xmax + vwidth)) 
+    show_block.visible_area.xmax -= (outline.outline.xmax - show_block.visible_area.xmax);
+  if (outline.outline.ymax > show_block.visible_area.ymax) 
+    show_block.visible_area.ymax -= (outline.outline.ymax - show_block.visible_area.ymax);
+
+  e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow,
+                          *(subwindows + subwindow),
+                          Toolbox_ShowObject_FullSpec,
+                          &show_block,
+                          choices_window,
+                          -1);
+
+  if (!e) current_subwindow = subwindow;
+
+  return e;
+}
+
+/*************************************************/
+/* choices_to_be_shown()                         */
+/*                                               */
+/* Called when the ECDToBeShown event is         */
+/* generated.                                    */
+/* Creates all the subwindow dialogues and fills */
+/* them in with appropriate values.              */
+/* Registers all additional event handlers used  */
+/* while the choices dialogue is visible.        */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+int choices_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror       *e;
+  
+  #ifdef TRACE
+    Printf("called: choices_to_be_shown\n");
+  #endif
+  
+  choices_windowid = idb->self_id;
+  
+  /* Allocate block for holding subwindows ObjectIds */
+  if (!subwindows)
+  {
+    subwindows = malloc(sizeof(ObjectId)*CDNoSubwindows);
+    if (!subwindows)
+    {
+      /* If hide object doesn't work, things are really screwed */
+      
+      e = toolbox_hide_object(0, idb->self_id);
+      show_error_ret(e);
+      
+      e = make_no_memory_error(100); //
+      show_error_ret(e);
+      return 1;
+    }
+  }
+  
+  if (!new_choices)
+  {
+    new_choices = malloc(sizeof(global_choices));
+    if (!new_choices)
+    {
+      /* If hide object doesn't work, things are really screwed */
+      
+      e = toolbox_hide_object(0, idb->self_id);
+      show_error_ret(e);
+      
+      e = make_no_memory_error(100); //
+      show_error_ret(e);
+      return 1;
+    }
+    else
+    {
+      memcpy(new_choices, &choices, sizeof(global_choices));
+    }
+  }
+
+  /* Create all choices subwindows.  Set their ObjectIds to NULL if they cannot be created */
+  
+  e = toolbox_create_object(0, "ChSub0", subwindows + CDSubBrowseDefaults);
+  if (e) *(subwindows + CDSubBrowseDefaults) = NULL;
+  e = toolbox_create_object(0, "ChSub1", subwindows + CDSubWindows);
+  if (e) *(subwindows + CDSubWindows) = NULL;
+  e = toolbox_create_object(0, "ChSub2", subwindows + CDSubColours);
+  if (e) *(subwindows + CDSubColours) = NULL;
+  e = toolbox_create_object(0, "ChSub3", subwindows + CDSubFonts);
+  if (e) *(subwindows + CDSubFonts) = NULL;
+  e = toolbox_create_object(0, "ChSub4", subwindows + CDSubHotlist);
+  if (e) *(subwindows + CDSubHotlist) = NULL;
+  e = toolbox_create_object(0, "ChSub5", subwindows + CDSubHistory);
+  if (e) *(subwindows + CDSubHistory) = NULL;
+  e = toolbox_create_object(0, "ChSub6", subwindows + CDSubSub6);
+  if (e) *(subwindows + CDSubSub6) = NULL;
+  e = toolbox_create_object(0, "ChSub7", subwindows + CDSubSub7);
+  if (e) *(subwindows + CDSubSub7) = NULL;
+  e = toolbox_create_object(0, "ChSub8", subwindows + CDSubSub8);
+  if (e) *(subwindows + CDSubSub8) = NULL;
+  
+  e = choices_show_subwindow(idb->self_id, CDSubBrowseDefaults);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = radiobutton_set_state(0, idb->self_id, CDBrowseDefaults, 1);
+  
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = choices_set_contents();
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  /* Register choices event handlers */
+  
+  e = event_register_toolbox_handler(-1, ECDRG2, choices_radio_click_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, CDSet, choices_set_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, CDCancel, choices_cancel_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, CDSaveButton, choices_save_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECD_EncodingMenuBt, choices_encoding_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECD_ColourButton, choices_colour_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECD_HlDispBt, choices_display_m_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECD_HiDispBt, choices_display_m_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECD_HlSaveBt, choices_save_m_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECD_HiSaveBt, choices_save_m_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECDSaveMenuClick, choices_save_m_click_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_register_toolbox_handler(-1, ECDDispMenuClick, choices_display_m_click_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_delete_subwindows()                   */
+/*                                               */
+/* Deletes all subwindows, reports any and all   */
+/* errors occuring while deleting them.          */
+/* Frees the structure holding the subwindows.   */
+/*************************************************/
+static void choices_delete_subwindows(void)
+{
+  _kernel_oserror *e;
+  int count;
+  
+  for(count = 0; count < CDNoSubwindows; count++)
+  {
+    if (*(subwindows + count))
+    {
+      e = toolbox_delete_object(0, *(subwindows + count));
+      if (e) show_error_ret(e);
+      *(subwindows + count) = 0;
+    }
+  }
+  free(subwindows);
+  subwindows = NULL;
+}
+
+/*************************************************/
+/* choices_hidden()                              */
+/*                                               */
+/* Called when the ECDHidden event is generated. */
+/* Deletes all the subwindow dialogues.          */
+/* Deregisters all additional event handlers     */
+/* used while the choices dialogue is visible.   */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+int choices_hidden(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e;
+  
+  /* Close subwindow */
+  
+  e = choices_show_subwindow(idb->self_id, CDSubNone);
+  if (e) show_error_ret(e);
+  
+  /* Delete all subwindow objects */
+  
+  choices_delete_subwindows();
+  
+  /* Deregister choices event handlers */
+  
+  e = event_deregister_toolbox_handler(-1, ECDRG2, choices_radio_click_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_deregister_toolbox_handler(-1, CDSet, choices_set_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_deregister_toolbox_handler(-1, CDCancel, choices_cancel_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_deregister_toolbox_handler(-1, CDSaveButton, choices_save_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_deregister_toolbox_handler(-1, ECD_EncodingMenuBt, choices_encoding_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  e = event_deregister_toolbox_handler(-1, ECD_ColourButton, choices_colour_button_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_radio_click_handler()                 */
+/*                                               */
+/* Shows the appropriate subwindow when a radio  */
+/* button in the choices dialogue is clicked on  */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int choices_radio_click_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  ObjectId window;
+  
+  switch(idb->self_component)
+  {
+    case CDBrowseDefaults : window = CDSubBrowseDefaults; break;
+    case CDWindows        : window = CDSubWindows;        break;
+    case CDColours        : window = CDSubColours;        break;
+    case CDFonts          : window = CDSubFonts;          break;
+    case CDHotlist        : window = CDSubHotlist;        break;
+    case CDHistory        : window = CDSubHistory;        break;
+    case CDSub6           : window = CDSubSub6;           break;
+    case CDSub7           : window = CDSubSub7;           break;
+    case CDSub8           : window = CDSubSub8;           break;
+    
+    default               : window = CDNoSubwindows;      break;
+  }
+  
+  choices_show_subwindow(idb->self_id, window);
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_set_contents()                        */
+/*                                               */
+/* Sets the contents of all choices subwindows   */
+/* to reflect the current state of the global    */
+/* choices.                                      */
+/*                                               */
+/* Returns:    pointer to _kernel_oserror.       */
+/*************************************************/
+
+static _kernel_oserror *choices_set_contents(void)
+{
+  _kernel_oserror *e;
+  
+  /* Check that the BrowseDefaults subwindow exists */
+  
+  if (*(subwindows + CDSubBrowseDefaults))
+  {
+    RetError(writablefield_set_value(0, *(subwindows + CDSubBrowseDefaults), CD_Homepage, new_choices->home_page));
+    
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubBrowseDefaults), CD_UnderlineLinks, new_choices->underline_links));
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubBrowseDefaults), CD_UseDocColours,  new_choices->use_source_cols));
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubBrowseDefaults), CD_ShowForeground, new_choices->show_foreground));
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubBrowseDefaults), CD_ShowBackground, new_choices->show_background));
+    
+    /* Get encoding name */
+    
+    RetError(choices_set_encoding_field());
+  }
+  
+  /* Check that the Windows subwindow exists */
+  
+  if (*(subwindows + CDSubWindows))
+  {
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubWindows), CD_URLBar,     new_choices->url_bar));
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubWindows), CD_StatusBar,  new_choices->status_bar));
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubWindows), CD_ButtonBar,  new_choices->button_bar));
+    RetError(optionbutton_set_state(0, *(subwindows + CDSubWindows), CD_FullScreen, new_choices->full_screen));
+  }
+  
+  if (*(subwindows + CDSubColours))
+  {
+    RetError(choices_colour_set_component(*(subwindows + CDSubColours), CD_BackColour, new_choices->background_colour));
+    RetError(choices_colour_set_component(*(subwindows + CDSubColours), CD_TextColour, new_choices->text_colour));
+    RetError(choices_colour_set_component(*(subwindows + CDSubColours), CD_LinkColour, new_choices->link_colour));
+    RetError(choices_colour_set_component(*(subwindows + CDSubColours), CD_UsedColour, new_choices->used_colour));
+    RetError(choices_colour_set_component(*(subwindows + CDSubColours), CD_FolwColour, new_choices->followed_colour));
+    RetError(choices_colour_set_component(*(subwindows + CDSubColours), CD_SlctColour, new_choices->selected_colour));
+  }
+  
+  if (*(subwindows + CDSubHotlist))
+  {
+    RetError(numberrange_set_value(0, *(subwindows + CDSubHotlist), CD_HlAutoOpen,   new_choices->auto_open_delay));
+    RetError(numberrange_set_value(0, *(subwindows + CDSubHotlist), CD_HlAutoScroll, new_choices->auto_scroll_delay));
+    RetError(choices_set_display_field(*(subwindows + CDSubHotlist), CD_HlDispDisp, new_choices->hotlist_show));
+    RetError(choices_set_save_field(*(subwindows + CDSubHotlist), CD_HlSaveDisp, new_choices->save_hotlist));
+  }
+  
+  if (*(subwindows + CDSubHistory))
+  {
+    RetError(numberrange_set_value(0, *(subwindows + CDSubHistory), CD_HiLines,   new_choices->v_hist_size));
+    RetError(numberrange_set_value(0, *(subwindows + CDSubHistory), CD_HiMaxSize, new_choices->g_hist_size));
+    RetError(choices_set_display_field(*(subwindows + CDSubHistory), CD_HiDispDisp, new_choices->show_urls));
+    RetError(choices_set_save_field(*(subwindows + CDSubHistory), CD_HiSaveDisp, new_choices->save_history));
+  }
+  
+  return NULL;
+}
+
+/*************************************************/
+/* choices_get_contents()                        */
+/*                                               */
+/* Sets the state of the global choices to       */
+/* reflect the contents of all the choices       */
+/* subwindows.                                   */
+/*                                               */
+/* Returns:    pointer to _kernel_oserror        */
+/*************************************************/
+
+static _kernel_oserror *choices_get_contents(void)
+{
+  _kernel_oserror *e;
+  int state;
+  char *tempstring;
+  int reqsize;
+
+  /* Check that the BrowseDefaults subwindow exists */
+
+  if (*(subwindows + CDSubBrowseDefaults))
+  {
+    RetError(writablefield_get_value(0, *(subwindows + CDSubBrowseDefaults), CD_Homepage, NULL, 0, &reqsize));
+    tempstring = malloc(reqsize+1);
+    if (tempstring)
+    {
+      RetError(writablefield_get_value(0, *(subwindows + CDSubBrowseDefaults), CD_Homepage, tempstring, reqsize, NULL));
+      if (!strcmp(tempstring, new_choices->home_page))
+      {
+        free(tempstring);
+      }
+      else
+      {
+        free(new_choices->home_page);
+        new_choices->home_page = tempstring;
+      }
+    }
+    else
+    {
+      show_error_ret(make_no_memory_error(100)); //
+    }
+    
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubBrowseDefaults), CD_UnderlineLinks, &state));
+    new_choices->underline_links = !!state;
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubBrowseDefaults), CD_UseDocColours,  &state));
+    new_choices->use_source_cols = !!state;
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubBrowseDefaults), CD_ShowForeground, &state));
+    new_choices->show_foreground = !!state;
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubBrowseDefaults), CD_ShowBackground, &state));
+    new_choices->show_background = !!state;
+  }
+
+  /* Check that the Windows subwindow exists */
+
+  if (*(subwindows + CDSubWindows))
+  {
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubWindows), CD_URLBar,     &state));
+    new_choices->url_bar     = !!state;
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubWindows), CD_StatusBar,  &state));
+    new_choices->status_bar  = !!state;
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubWindows), CD_ButtonBar,  &state));
+    new_choices->button_bar  = !!state;
+    RetError(optionbutton_get_state(0, *(subwindows + CDSubWindows), CD_FullScreen, &state));
+    new_choices->full_screen = !!state;
+  }
+  
+  if (*(subwindows + CDSubHotlist))
+  {
+    RetError(numberrange_get_value(0, *(subwindows + CDSubHotlist), CD_HlAutoOpen,   &new_choices->auto_open_delay));
+    RetError(numberrange_get_value(0, *(subwindows + CDSubHotlist), CD_HlAutoScroll, &new_choices->auto_scroll_delay));
+  }
+  
+  if (*(subwindows + CDSubHistory))
+  {
+    RetError(numberrange_get_value(0, *(subwindows + CDSubHistory), CD_HiLines,   &new_choices->v_hist_size));
+    RetError(numberrange_get_value(0, *(subwindows + CDSubHistory), CD_HiMaxSize, &new_choices->g_hist_size));
+  }
+  
+  memcpy(&choices, new_choices, sizeof(global_choices));
+  
+  return NULL;
+}
+
+/*************************************************/
+/* choices_set_button_handler()                  */
+/*                                               */
+/* Called when the set button in the main        */
+/* choices dialogue is clicked.                  */
+/* Uses choices_get_contents to set the global   */
+/* choices to reflect the choices set in the     */
+/* choices subwindows                            */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int choices_set_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e = NULL;
+  e = choices_get_contents();
+  if (e) show_error_ret(e);
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_cancel_button_handler()               */
+/*                                               */
+/* Called when the cancel button in the main     */
+/* choices dialogue is clicked.                  */
+/* Uses choices_set_contents to restore the      */
+/* subwindows to their previous state.           */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int choices_cancel_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e = NULL;
+  
+  memcpy(new_choices, &choices, sizeof(global_choices));
+  
+  choices_set_contents();
+  if (e) show_error_ret(e);
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_save_button_handler()                 */
+/*                                               */
+/* Called when the set button in the main        */
+/* choices dialogue is clicked.                  */
+/* Uses choices_get_contents to set the global   */
+/* choices to reflect the choices set in the     */
+/* choices subwindows and then saves the choices */
+/* file.                                         */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int choices_save_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e = NULL;
+  e = choices_get_contents();
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = save_save_choices(NULL);
+  if (e) show_error_ret(e);
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_set_encoding_field()                  */
+/*                                               */
+/* Sets the encoding display field appropriately */
+/* to reflect the current state of               */
+/* new_choices->encoding                         */
+/*************************************************/
+
+_kernel_oserror * choices_set_encoding_field(void)
+{
+  _kernel_oserror *e;
+  ObjectId    objid;
+  ComponentId compid;  
+  char *textptr;
+  int sizereqd;
+  
+  /* Find menu item which contains encoding name */
+  
+  if (encoding_get_encoding_item(new_choices->encoding, &objid, &compid))
+  {
+    RetError(menu_get_entry_text(0, objid, compid, NULL, 0, &sizereqd));
+    
+    /* Add 1 to the buffer size just incase the sizereqd field is returned as string */
+    /* length rather than the buffer size required.  Typical paranoid precautions    */
+    /* when using the toolbox.                                                       */
+    
+    textptr = malloc(sizereqd+1);
+
+    if (textptr)
+    {
+      e = menu_get_entry_text(0, objid, compid, textptr, sizereqd+1, NULL);
+      if (e)
+      {
+        free(textptr);
+        return e;
+      }
+      e = displayfield_set_value(0, *(subwindows + CDSubBrowseDefaults), CD_EncodingDisply, textptr);
+      
+      free(textptr);
+      if (e)
+      {
+        return e;
+      }
+    }
+    else
+    {
+      RetError(make_no_memory_error(101)); //
+    }
+  }
+  else
+  {
+    /* The encoding name could not be found in the menu structure */
+    
+    RetError(displayfield_set_value(0, *(subwindows + CDSubBrowseDefaults), CD_EncodingDisply, "Unknown encoding")); //
+  }
+  
+  return NULL;
+}
+
+/*************************************************/
+/* choices_encoding_button_handler()             */
+/*                                               */
+/* Opens the encoding window with appropriate    */
+/* values for the choices dialogue.              */
+/*************************************************/
+
+static int choices_encoding_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e;
+  int  position[2];
+  BBox box;
+  WimpGetWindowStateBlock state;
+  
+  e = gadget_get_bbox(0, idb->self_id, idb->self_component, &box);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = window_get_wimp_handle(0, idb->self_id, &state.window_handle);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = wimp_get_window_state(&state);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  /* Set open coordinates of encoding menu to top left of encoding button */
+  
+  position[0] = coords_x_toscreen(box.xmax, (WimpRedrawWindowBlock*)&state);
+  position[1] = coords_y_toscreen(box.ymax, (WimpRedrawWindowBlock*)&state);
+  
+  show_error_ret(toolbox_show_object(Toolbox_ShowObject_AsMenu,
+                                     encoding_get_menuid(),
+                                     Toolbox_ShowObject_TopLeft,
+                                     position,
+                                     choices_windowid,
+                                     NULL));
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_colour_button_handler()               */
+/*                                               */
+/* Opens a colour dialogue box with appropriate  */
+/* settings for the current colour.              */
+/*************************************************/
+
+static int choices_colour_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e;
+  int  position[2];
+  BBox box;
+  WimpGetWindowStateBlock state;
+  int colour[2];
+  
+  switch(idb->self_component)
+  {
+    case CD_BackColourBt: colour[0] = new_choices->background_colour; break;
+    case CD_TextColourBt: colour[0] = new_choices->text_colour;       break;
+    case CD_LinkColourBt: colour[0] = new_choices->link_colour;       break;
+    case CD_UsedColourBt: colour[0] = new_choices->used_colour;       break;
+    case CD_FolwColourBt: colour[0] = new_choices->followed_colour;   break;
+    case CD_SlctColourBt: colour[0] = new_choices->selected_colour;   break;
+    default:
+    return 1;
+    break;
+  }
+  
+  colour[1] = 0;
+  
+  e = gadget_get_bbox(0, idb->self_id, idb->self_component, &box);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = window_get_wimp_handle(0, idb->self_id, &state.window_handle);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = wimp_get_window_state(&state);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  /* Set open coordinates of encoding menu to top left of encoding button */
+  
+  position[0] = coords_x_toscreen(box.xmax, (WimpRedrawWindowBlock*)&state);
+  position[1] = coords_y_toscreen(box.ymax, (WimpRedrawWindowBlock*)&state);
+  
+  e = toolbox_create_object(0, "ColourDbox", &colourdbox_id);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = colourdbox_set_colour(0, colourdbox_id, colour);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  show_error_ret(toolbox_show_object(Toolbox_ShowObject_AsMenu,
+                                     colourdbox_id,
+                                     Toolbox_ShowObject_TopLeft,
+                                     position,
+                                     idb->self_id,
+                                     idb->self_component));
+
+  e = event_register_toolbox_handler(colourdbox_id, ColourDbox_DialogueCompleted, choices_colour_closed_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+  
+  e = event_register_toolbox_handler(colourdbox_id, ColourDbox_ColourSelected, choices_colour_selected_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_colour_closed_handler()               */
+/*                                               */
+/* Called when the colour dialogue box is closed */
+/* deregisters all events attached to it and     */
+/* deletes the dbox object.                      */
+/*************************************************/
+
+static int choices_colour_closed_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e;
+  
+  e = event_deregister_toolbox_handler(idb->self_id, ColourDbox_DialogueCompleted, choices_colour_closed_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+
+  e = event_deregister_toolbox_handler(colourdbox_id, ColourDbox_ColourSelected, choices_colour_selected_handler, NULL);
+  if (e) {show_error_ret(e); return 1;}
+
+  e = toolbox_delete_object(0, idb->self_id);
+  if (e) {show_error_ret(e); return 1;}
+  
+  #ifdef TRACE
+  Printf("Colour dbox deleted\n");
+  #endif
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_colour_closed_handler()               */
+/*                                               */
+/* Called when the a colour is selected in the   */
+/* colour dialogue box.                          */
+/* Sets appropriate fields in the new_choices    */
+/* structure and updates the window to reflect   */
+/* the new colour chosen.                        */
+/*************************************************/
+
+static int choices_colour_selected_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  ColourDboxColourSelectedEvent *cevent = (ColourDboxColourSelectedEvent*)event;
+  
+  switch(idb->parent_component)
+  {
+    case CD_BackColourBt: new_choices->background_colour = cevent->colour_block[0]; break;
+    case CD_TextColourBt: new_choices->text_colour       = cevent->colour_block[0]; break;
+    case CD_LinkColourBt: new_choices->link_colour       = cevent->colour_block[0]; break;
+    case CD_UsedColourBt: new_choices->used_colour       = cevent->colour_block[0]; break;
+    case CD_FolwColourBt: new_choices->followed_colour   = cevent->colour_block[0]; break;
+    case CD_SlctColourBt: new_choices->selected_colour   = cevent->colour_block[0]; break;
+    default:
+    return 1;
+    break;
+  }
+  
+  show_error_ret(choices_colour_set_component(idb->parent_id, idb->parent_component-1, cevent->colour_block[0]));
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_colour_closed_handler()               */
+/*                                               */
+/* Sets the validation string of a button to be  */
+/* slabbed in and have the background colour     */
+/* specified.                                    */
+/*                                               */
+/* Parameters: window ObjectId                   */
+/*                                               */
+/*             button ComponentId                */
+/*                                               */
+/*             colour                            */
+/*************************************************/
+
+static _kernel_oserror *choices_colour_set_component(ObjectId window, ComponentId component, int colour)
+{
+  char newvalidation[32];
+  unsigned char *newcol;
+  newcol = (unsigned char*)&colour;
+  
+  sprintf(newvalidation, "R2;C/%02.2x%02.2x%02.2x", *(newcol+3), *(newcol+2), *(newcol+1));
+
+  return button_set_validation(0, window, component, newvalidation);
+}
+
+/*************************************************/
+/* choices_display_button_handler()              */
+/*                                               */
+/* Opens the display menu with a value           */
+/* appropriate to either the hotlist or history. */
+/*************************************************/
+
+static int choices_display_m_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e;
+  int  position[2];
+  BBox box;
+  WimpGetWindowStateBlock state;
+  ObjectId display;
+  int new_tick;
+  
+  e = gadget_get_bbox(0, idb->self_id, idb->self_component, &box);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = window_get_wimp_handle(0, idb->self_id, &state.window_handle);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = wimp_get_window_state(&state);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  /* Set open coordinates of display menu to top left of display button */
+  
+  position[0] = coords_x_toscreen(box.xmax, (WimpRedrawWindowBlock*)&state);
+  position[1] = coords_y_toscreen(box.ymax, (WimpRedrawWindowBlock*)&state);
+  
+  e = toolbox_create_object(0, "ChDisplay", &display);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  switch(idb->self_component)
+  {
+    case CD_HlDispBt: new_tick = new_choices->hotlist_show; break;
+    case CD_HiDispBt: new_tick = new_choices->show_urls;    break;
+    default: new_tick = 0; break;
+  }
+  
+  if (disp_ticked != new_tick)
+  {
+    if (disp_ticked != -1) menu_set_tick(0, display, disp_ticked, 0);
+    menu_set_tick(0, display, new_tick, 1);
+    disp_ticked = new_tick;
+  }
+  
+  show_error_ret(toolbox_show_object(Toolbox_ShowObject_AsMenu,
+                                     display,
+                                     Toolbox_ShowObject_TopLeft,
+                                     position,
+                                     idb->self_id,
+                                     idb->self_component));
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_save_button_handler()                 */
+/*                                               */
+/* Opens the save menu with a value appropriate  */
+/* to either the hotlist or history.             */
+/*************************************************/
+
+static int choices_save_m_button_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror *e;
+  int  position[2];
+  BBox box;
+  WimpGetWindowStateBlock state;
+  ObjectId display;
+  int new_tick;
+  
+  e = gadget_get_bbox(0, idb->self_id, idb->self_component, &box);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = window_get_wimp_handle(0, idb->self_id, &state.window_handle);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  e = wimp_get_window_state(&state);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  /* Set open coordinates of display menu to top left of display button */
+  
+  position[0] = coords_x_toscreen(box.xmax, (WimpRedrawWindowBlock*)&state);
+  position[1] = coords_y_toscreen(box.ymax, (WimpRedrawWindowBlock*)&state);
+  
+  e = toolbox_create_object(0, "ChSave", &display);
+  if (e)
+  {
+    show_error_ret(e);
+    return 1;
+  }
+  
+  switch(idb->self_component)
+  {
+    case CD_HlSaveBt: new_tick = new_choices->save_hotlist; break;
+    case CD_HiSaveBt: new_tick = new_choices->save_history; break;
+    default: new_tick = 0; break;
+  }
+  
+  if (save_ticked != new_tick)
+  {
+    if (save_ticked != -1) menu_set_tick(0, display, save_ticked, 0);
+    menu_set_tick(0, display, new_tick, 1);
+    save_ticked = new_tick;
+  }
+  
+  show_error_ret(toolbox_show_object(Toolbox_ShowObject_AsMenu,
+                                     display,
+                                     Toolbox_ShowObject_TopLeft,
+                                     position,
+                                     idb->self_id,
+                                     idb->self_component));
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_set_save_field()                      */
+/*                                               */
+/* Sets the passed save display field            */
+/* appropriately to reflect the passed state.    */
+/*************************************************/
+
+static _kernel_oserror * choices_set_save_field(ObjectId obj, ComponentId comp, int state)
+{
+  _kernel_oserror *e;
+  ObjectId menu_id;
+  int reqdsize;
+  char *tempstring;
+  
+  #ifdef TRACE
+    Printf("called: choices_set_display_field\n");
+  #endif
+  
+  RetError(toolbox_create_object(0, "ChSave", &menu_id));
+
+  RetError(menu_get_entry_text(0, menu_id, state, NULL, 0, &reqdsize));
+  
+  tempstring = malloc(reqdsize+1);
+  if (!tempstring) return make_no_memory_error(100); //
+  
+  RetError(menu_get_entry_text(0, menu_id, state, tempstring, reqdsize+1, NULL));
+  
+  e = displayfield_set_value(0, obj, comp, tempstring);
+  
+  free(tempstring);
+
+  return e;
+}
+
+/*************************************************/
+/* choices_set_display_field()                   */
+/*                                               */
+/* Sets the passed display display field         */
+/* appropriately to reflect the passed state.    */
+/*************************************************/
+
+static _kernel_oserror * choices_set_display_field(ObjectId obj, ComponentId comp, int state)
+{
+  _kernel_oserror *e;
+  ObjectId menu_id;
+  int reqdsize;
+  char *tempstring;
+  
+  #ifdef TRACE
+    Printf("called: choices_set_display_field\n");
+  #endif
+  
+  RetError(toolbox_create_object(0, "ChDisplay", &menu_id));
+
+  RetError(menu_get_entry_text(0, menu_id, state, NULL, 0, &reqdsize));
+  
+  tempstring = malloc(reqdsize+1);
+  if (!tempstring) return make_no_memory_error(100); //
+  
+  RetError(menu_get_entry_text(0, menu_id, state, tempstring, reqdsize+1, NULL));
+  
+  e = displayfield_set_value(0, obj, comp, tempstring);
+  
+  free(tempstring);
+
+  return e;
+}
+
+/*************************************************/
+/* choices_display_m_click_handler()             */
+/*                                               */
+/*************************************************/
+
+static int choices_display_m_click_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  if (disp_ticked != idb->self_component)
+  {
+    if (disp_ticked != -1) menu_set_tick(0, idb->self_id, disp_ticked, 0);
+    menu_set_tick(0, idb->self_id, idb->self_component, 1);
+    disp_ticked = idb->self_component;
+  }
+  
+  switch(idb->parent_component)
+  {
+    case CD_HlDispBt:
+    new_choices->hotlist_show = idb->self_component;
+    break;
+    case CD_HiDispBt:
+    new_choices->show_urls    = idb->self_component;
+    break;
+  }
+  
+  choices_set_display_field(idb->parent_id, idb->parent_component - 1, idb->self_component);
+  
+  return 1;
+}
+
+/*************************************************/
+/* choices_save_m_click_handler()                */
+/*                                               */
+/*************************************************/
+
+static int choices_save_m_click_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  if (save_ticked != idb->self_component)
+  {
+    if (save_ticked != -1) menu_set_tick(0, idb->self_id, save_ticked, 0);
+    menu_set_tick(0, idb->self_id, idb->self_component, 1);
+    save_ticked = idb->self_component;
+  }
+  
+  switch(idb->parent_component)
+  {
+    case CD_HlSaveBt:
+    new_choices->save_hotlist = idb->self_component;
+    break;
+    case CD_HiSaveBt:
+    new_choices->save_history = idb->self_component;
+    break;
+  }
+  
+  choices_set_save_field(idb->parent_id, idb->parent_component - 1, idb->self_component);
+  
+  return 1;
+}
