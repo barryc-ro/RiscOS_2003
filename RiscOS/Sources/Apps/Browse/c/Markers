@@ -1,0 +1,526 @@
+/***************************************************/
+/* File   : Markers.c                              */
+/*                                                 */
+/* Purpose: Remember what's at the top of the      */
+/*          visible area in a browser window and   */
+/*          possibly jump back there later on.     */
+/*                                                 */
+/* Author : A.D.Hodgkinson                         */
+/*                                                 */
+/* History: 24-Mar-98: Created.                    */
+/***************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "swis.h"
+
+#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+#include "gadgets.h"
+
+#include "ToolAction.h" /* NOT the proper Toolbox header, as this needed OSLib... */
+
+#include "svcprint.h"
+#include "Global.h"
+#include "Utils.h"
+
+#include "Browser.h"
+#include "MiscEvents.h"
+#include "Toolbars.h"
+#include "Windows.h"
+
+#include "Markers.h"
+
+/* Local statics */
+
+static browser_data * mark_b [Limits_Markers];
+static HStream      * mark_t [Limits_Markers];
+static int            mark_o [Limits_Markers];
+static int            mark_y [Limits_Markers];
+
+/* Static function prototypes */
+
+static _kernel_oserror * markers_change_to_set  (ObjectId t, int marker);
+static _kernel_oserror * markers_change_to_jump (ObjectId t, int marker);
+
+/*************************************************/
+/* markers_init()                                */
+/*                                               */
+/* Initialise the markers system. Should be      */
+/* called before all other markers functions.    */
+/*************************************************/
+
+void markers_init(void)
+{
+  int i;
+
+  for (i = 0; i < Limits_Markers; i++)
+  {
+    mark_b[i] = NULL;
+    mark_t[i] = NULL;
+    mark_o[i] = 0;
+    mark_y[i] = 0;
+  }
+
+  return;
+}
+
+/*************************************************/
+/* markers_change_to_set()                       */
+/*                                               */
+/* Change the appropriate gadget in the given    */
+/* toolbar to indicate the gadget will set a     */
+/* marker rather than jump to it.                */
+/*                                               */
+/* Parameters: Object ID the gadget lies in;     */
+/*                                               */
+/*             Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*************************************************/
+
+static _kernel_oserror * markers_change_to_set(ObjectId t, int marker)
+{
+  /* Set the state to 'off' */
+
+  _swix(Toolbox_ObjectMiscOp,
+        _INR(0,4),
+
+        0,
+        t,
+        ToolAction_SetState,
+        ButtonBarMarkerBase + marker,
+        0);
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_change_to_jump()                      */
+/*                                               */
+/* Change the appropriate gadget in the given    */
+/* toolbar to indicate the gadget will jump to   */
+/* a marker rather than setting it.              */
+/*                                               */
+/* Parameters: Object ID the gadget lies in;     */
+/*                                               */
+/*             Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*************************************************/
+
+static _kernel_oserror * markers_change_to_jump(ObjectId t, int marker)
+{
+  /* Set the state to 'on' */
+
+  _swix(Toolbox_ObjectMiscOp,
+        _INR(0,4),
+
+        0,
+        t,
+        ToolAction_SetState,
+        ButtonBarMarkerBase + marker,
+        1);
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_set_marker()                          */
+/*                                               */
+/* Set a given marker for a given browser. If    */
+/* the same marker is set twice it is cleared    */
+/* instead.                                      */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             for which the marker is to be     */
+/*             set;                              */
+/*                                               */
+/*             Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*                                               */
+/* Assumes:    The browser_data pointer and      */
+/*             marker number are valid.          */
+/*************************************************/
+
+_kernel_oserror * markers_set_marker(browser_data * b, int marker)
+{
+  int       set   = 1;
+
+  HStream * top_t = NULL;
+  int       top_o = 0;
+  int       top_y = 0;
+
+  /* Find what is at the top of the window */
+
+  {
+    WimpGetWindowStateBlock   state;
+    reformat_cell           * cell;
+    int                       line;
+
+    state.window_handle = b->window_handle;
+    ChkError(wimp_get_window_state(&state));
+
+    /* Note in the call that the last parameter specifies the line must be wholly */
+    /* visible - Don't want to get, say, bits of tall images next to a paragraph  */
+    /* of text in a table.                                                        */
+
+    line = browser_top_line_offset(b,
+                                   &cell,
+                                   &top_y,
+                                   &state);
+
+    if (!cell || line < 0) top_t = NULL;
+    else
+    {
+      int chunk;
+
+      if (line > cell->nlines) top_t = NULL;
+      else
+      {
+        chunk = cell->ldata[line].chunks;
+
+        if (chunk < 0) top_t = NULL;
+        else
+        {
+          top_t = cell->cdata[chunk].t;
+          top_o = cell->cdata[chunk].o;
+        }
+      }
+    }
+  }
+
+  /* If we couldn't find anything, exit */
+
+  if (!top_t)
+  {
+    Beep; /* See Utils.h */
+
+    return NULL;
+  }
+
+  /* Is this marker already set? */
+
+  if (mark_b[marker])
+  {
+    /* Yes. If the marker isn't for the same browser, */
+    /* we must clear it before resetting it.          */
+
+    if (mark_b[marker] != b)
+    {
+      RetError(markers_clear_marker(marker));
+    }
+
+    /* Otherwise, if the token and offset are the same   */
+    /* now as the set details, clear the marker instead. */
+
+    else
+    {
+      if (
+           mark_t[marker] == top_t &&
+           mark_o[marker] == top_o &&
+           mark_y[marker] == top_y
+         )
+      {
+        RetError(markers_clear_marker(marker));
+
+        set = 0; /* Don't set the same details again! */
+      }
+    }
+  }
+
+  /* Set the marker, if flagged to do so */
+
+  if (set)
+  {
+    ObjectId t;
+
+    mark_b[marker] = b;
+    mark_t[marker] = top_t;
+    mark_o[marker] = top_o;
+    mark_y[marker] = top_y;
+
+    t = toolbars_get_upper(b);
+    if (t) RetError(markers_change_to_jump(t, marker));
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_set()                                 */
+/*                                               */
+/* Find out whether a not a marker is set.       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             for which the marker should be    */
+/*             set, or NULL if you're not        */
+/*             interested in this;               */
+/*                                               */
+/*             Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*                                               */
+/* Returns:    1 if the marker is set for the    */
+/*             given browser (or, if NULL is     */
+/*             passed in the first parameter, 1  */
+/*             if the marker is set at all). If  */
+/*             a browser is given and the marker */
+/*             is set but not for that browser,  */
+/*             0 is returned. If the marker is   */
+/*             not set at all, 0 is always       */
+/*             returned.                         */
+/*                                               */
+/* Assumes:    The marker number is valid.       */
+/*************************************************/
+
+int markers_set(browser_data * b, int marker)
+{
+  /* First case - NULL passed; any browser will do */
+
+  if (!b && mark_b[marker]) return 1;
+
+  /* Second case - non-NULL passed; browser must match */
+
+  if (mark_b[marker] && mark_b[marker] == b) return 1;
+
+  /* No match, return zero */
+
+  return 0;
+}
+
+/*************************************************/
+/* markers_jump_to_marker()                      */
+/*                                               */
+/* If the given marker is set, the browser       */
+/* window it relates to is brought to the front, */
+/* given the input focus if it doesn't have it   */
+/* already, and scrolled to the relevant         */
+/* position.                                     */
+/*                                               */
+/* Parameters: Pointer to a browser_data * b     */
+/*             which is used as a hint only as   */
+/*             to the window in which the        */
+/*             activated marker gadget, menu     */
+/*             item or keyboard shortcut lies;   */
+/*                                               */
+/*             Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*                                               */
+/* Assumes:    The marker number is valid.       */
+/*************************************************/
+
+_kernel_oserror * markers_jump_to_marker(browser_data * b, int marker)
+{
+  /* Is marker unset or invalid? If so, beep and exit */
+
+  if (!mark_b[marker])
+  {
+    Beep;
+
+    return NULL;
+  }
+
+  if (!is_known_browser(mark_b[marker]))
+  {
+    mark_b[marker] = NULL;
+    mark_t[marker] = NULL;
+    mark_o[marker] = 0;
+    mark_y[marker] = 0;
+
+    Beep;
+
+    return NULL;
+  }
+
+  /* If not in the same window, bring it to the front */
+
+  if (mark_b[marker] != b)
+  {
+    WimpGetWindowStateBlock     state;
+    WimpGetCaretPositionBlock   caret;
+    browser_data              * ancestor = utils_ancestor(mark_b[marker]);
+    ObjectId                    po;
+    ComponentId                 pc;
+
+    if (!ancestor) ancestor = mark_b[marker];
+
+    /* Get information on the window */
+
+    state.window_handle = ancestor->window_handle;
+
+    RetError(wimp_get_window_state(&state));
+    RetError(toolbox_get_parent(0,
+                                ancestor->self_id,
+                                &po,
+                                &pc));
+
+    /* Bring to the front */
+
+    state.behind = -1;
+
+    RetError(toolbox_show_object(0,
+                                 ancestor->self_id,
+                                 Toolbox_ShowObject_FullSpec,
+                                 &state.visible_area,
+                                 po,
+                                 pc));
+
+    /* Has this browser got the input focus? */
+
+    RetError(wimp_get_caret_position(&caret));
+
+    if (caret.window_handle != ancestor->window_handle)
+    {
+      /* No, so give it the focus now */
+
+      browser_give_general_focus(ancestor);
+    }
+  }
+
+  /* Is there a problem showing the marker? If so, beep. */
+
+  if (
+       !browser_show_token(mark_b[marker],
+                           mark_t[marker],
+                           mark_o[marker],
+                           mark_y[marker])
+     )
+     Beep;
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_clear_marker_if_owned()               */
+/*                                               */
+/* Clear a given marker if owned by the given    */
+/* browser.                                      */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the marker;           */
+/*                                               */
+/*             Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*                                               */
+/* Assumes:    The marker number is valid.       */
+/*************************************************/
+
+_kernel_oserror * markers_clear_marker_if_owned(browser_data * b, int marker)
+{
+  if (b && mark_b[marker] == b)
+  {
+    if (is_known_browser(b))
+    {
+      ObjectId t;
+
+      t = toolbars_get_upper(b);
+      if (t) RetError(markers_change_to_set(t, marker));
+    }
+
+    mark_b[marker] = NULL;
+    mark_t[marker] = NULL;
+    mark_o[marker] = 0;
+    mark_y[marker] = 0;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_clear_marker()                        */
+/*                                               */
+/* Clear a given marker.                         */
+/*                                               */
+/* Parameters: Marker number, from 0 to          */
+/*             Limits_Markers - 1.               */
+/*                                               */
+/* Assumes:    The marker number is valid.       */
+/*************************************************/
+
+_kernel_oserror * markers_clear_marker(int marker)
+{
+  if (mark_b[marker])
+  {
+    if (is_known_browser(mark_b[marker]))
+    {
+      ObjectId t;
+
+      t = toolbars_get_upper(mark_b[marker]);
+      if (t) RetError(markers_change_to_set(t, marker));
+    }
+
+    mark_b[marker] = NULL;
+    mark_t[marker] = NULL;
+    mark_o[marker] = 0;
+    mark_y[marker] = 0;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_clear_markers()                       */
+/*                                               */
+/* Clear all markers set for a given browser.    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             for which the markers are to be   */
+/*             cleared.                          */
+/*                                               */
+/* Assumes:    The browser_data pointer is       */
+/*             valid.                            */
+/*************************************************/
+
+_kernel_oserror * markers_clear_markers(browser_data * b)
+{
+  int i;
+
+  for (i = 0; i < Limits_Markers; i++)
+  {
+    if (mark_b[i] && mark_b[i] == b)
+    {
+      ObjectId t;
+
+      t = toolbars_get_upper(b);
+      if (t) RetError(markers_change_to_set(t, i));
+
+      mark_b[i] = NULL;
+      mark_t[i] = NULL;
+      mark_o[i] = 0;
+      mark_y[i] = 0;
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* markers_clear_all()                           */
+/*                                               */
+/* Clear all markers.                            */
+/*************************************************/
+
+_kernel_oserror * markers_clear_all(void)
+{
+  int i;
+
+  for (i = 0; i < Limits_Markers; i++)
+  {
+    if (is_known_browser(mark_b[i]))
+    {
+      ObjectId t;
+
+      t = toolbars_get_upper(mark_b[i]);
+      if (t) RetError(markers_change_to_set(t, i));
+    }
+
+    mark_b[i] = NULL;
+    mark_t[i] = NULL;
+    mark_o[i] = 0;
+    mark_y[i] = 0;
+  }
+
+  return NULL;
+}
