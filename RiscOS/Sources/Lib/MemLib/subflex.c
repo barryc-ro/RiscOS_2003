@@ -23,12 +23,6 @@
 #define er(__x) { os_error *__e = __x; if (__e) return __e; }
 #endif
 
-#if 0
-#define fdebugf fprintf
-#else
-#define fdebugf 1?0:fprintf
-#endif
-
 static os_error *SubFlex__Insert( char *at, int by, int *relocatesize,
                                   flex_ptr master );
 
@@ -58,14 +52,12 @@ os_error *SubFlex_Alloc( subflex_ptr anchor, int size, flex_ptr master )
     int *relocatesize;
     subflex_header *pHeader = (subflex_header*)pArea;
 
-    fdebugf( stderr, "subflex: alloc(%d)\n", size );
-
     if ( size == 0 )
-        return SubFlex_Free(anchor,master);
+        return MemFlex_Free(anchor);
 
     size = ( size + 3 ) & ~3;
 
-    if ( *anchor )
+    if ( block )
     {
         block--;
         offset = block->size + sizeof(subflex__str);
@@ -153,7 +145,7 @@ os_error *SubFlex_Free( subflex_ptr anchor, flex_ptr master )
     int by;
 
     block = (subflex__str*)(pArea + *(int*)anchor);
-    if ( *anchor )
+    if ( block )
     {
         at = (char *)block + block[-1].size;
         by = sizeof(subflex__str) + block[-1].size;
@@ -189,7 +181,7 @@ os_error *SubFlex_Shrink( flex_ptr master )
     subflex_header *pHeader = *(subflex_header**)master;
     int slot = (pHeader->free + 255) & ~255;
 
-    if ( slot <= (MemFlex_Size( master ) - 512) )
+    if ( slot <= MemFlex_Size( master ) - 512 )
         return MemFlex_Alloc( master, slot );
 
     return NULL;
@@ -210,27 +202,14 @@ static os_error *SubFlex__Insert( char *at, int by, int *relocatesize,
     subflex_header *pHeader = (subflex_header*)pArea;
     int newsize;
 
-    fdebugf( stderr, "subflex: insert %d at %p\n", by, at );
-
     if ( by > 0 )
     {
         newsize = pHeader->free + by;
         if ( newsize > MemFlex_Size( master ) )
         {
             int newarena = (newsize+511) & ~255;
-
-            fdebugf( stderr, "subflex%p: new arena, size %d\n",
-                     *(void**)master, newarena );
-
             er( MemFlex_Alloc( master, newarena ) );
-
-            fdebugf( stderr, "subflex%p: done new arena\n",
-                     *(void**)master );
-
         }
-
-        pArea = *(char**)master;
-        pHeader = (subflex_header*)pArea;
     }
 
     memmove( at+by, at, (pArea+pHeader->free) - at );
@@ -240,8 +219,6 @@ static os_error *SubFlex__Insert( char *at, int by, int *relocatesize,
 
     if ( relocatesize )
     {
-        fdebugf( stderr, "subflex: relocating\n" );
-
         *relocatesize += by;
         for ( ptr = pArea+sizeof(subflex_header);
               ptr < end;
@@ -257,23 +234,3 @@ static os_error *SubFlex__Insert( char *at, int by, int *relocatesize,
 
     return SubFlex_Shrink( master );
 }
-
-/*
- * Reanchor a subflex block. This allows the anchor point to be moved in memory
- */
-
-int SubFlex_Reanchor( subflex_ptr anchor, flex_ptr master )
-{
-    char *pArea = *(char**)master;
-    int offset = *(int*)anchor;
-    subflex__str *block;
-
-    if ( !offset )
-        return 0;
-
-    block = (subflex__str*)(pArea + offset);
-    block[-1].anchor = anchor;
-
-    return 1;
-}
-

@@ -604,17 +604,23 @@ int render_caret_colour(be_doc doc, int back, int cursor)
     int h = 0;
     if (cursor != -1 || back != -1)
     {
-	wimp_paletteword fg_rgb, bg_rgb;
-	int fg, bg;
+	if (bbc_modevar(-1, bbc_Log2BPP) > 3)
+	{
+/*  	    h = (1<<26) | (1<<27) | (0xFF << 16); */
+	}
+	else
+	{
+	    wimp_paletteword fg_rgb, bg_rgb;
+	    int fg, bg;
 
-	bg_rgb.word = back == -1 ? render_get_colour(render_colour_WRITE, doc).word : back;
-	colourtran_returnGCOL(bg_rgb, &bg);
+	    bg_rgb.word = back == -1 ? render_get_colour(render_colour_WRITE, doc).word : back;
+	    colourtran_returnGCOL(bg_rgb, &bg);
 
-	fg_rgb.word = cursor == -1 ? 0x0000FF00 : cursor;
-	colourtran_returnGCOL(fg_rgb, &fg);
+	    fg_rgb.word = cursor == -1 ? 0x0000FF00 : cursor;
+	    colourtran_returnGCOL(fg_rgb, &fg);
 
-	h = (1<<26) | (1<<27) | ((fg ^ bg) << 16);
-
+	    h = (1<<26) | (1<<27) | ((fg ^ bg) << 16);
+	}
 #if 0
 	fprintf(stderr, "bg rgb %08x col %d\nfg rgb %08x col %d\nheight %x\n", bg_rgb.word, bg, fg_rgb.word, fg, h);
 #endif

@@ -25,10 +25,8 @@ typedef void *flex_ptr;
  *---------------------------------------------------------------------------*/
 #ifdef MEM_DEBUG
 void MemFlex__Check( flex_ptr anchor );
-void MemFlex_Dump(void *f);
 #else
 #define MemFlex__Check(__x)
-#define MemFlex_Dump(__x)
 #endif
 
 /*---------------------------------------------------------------------------*
@@ -38,7 +36,7 @@ void MemFlex_Dump(void *f);
  * a Risc PC -- MemFlex falls back automatically to using application space  *
  * on older machines.                                                        *
  *---------------------------------------------------------------------------*/
-os_error *MemFlex_Initialise2( const char *pDynamicAreaName );
+os_error *MemFlex_Initialise2( char *pDynamicAreaName );
 
 /*---------------------------------------------------------------------------*
  * Non-dynamic-area version of Initialise                                    *

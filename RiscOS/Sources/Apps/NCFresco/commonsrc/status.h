@@ -50,7 +50,8 @@ typedef enum {
     status_FAIL_LOCAL,                  /* H   Local failure (eg no disc space) */
     status_COMPLETED_PART,		/* H   Done one part of a server push */
     status_COMPLETED_GENERIC_COMMAND,   /*   F Generic command completed */
-    status_FAIL_FOUND                   /* H   File requested wasn't found - error page returned instead */
+    status_FAIL_FOUND,                  /* H   File requested wasn't found - error page returned instead */
+    status_FAIL_REDIAL			/* HGF Failed to redial */
     } transfer_status;
 
 

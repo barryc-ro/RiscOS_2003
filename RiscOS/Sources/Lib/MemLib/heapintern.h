@@ -301,7 +301,7 @@ void* memcpy(void*, const void*, size_t);
 */
 
 #ifndef HAVE_MMAP
-#define HAVE_MMAP 0
+#define HAVE_MMAP 1
 #endif
 
 #if HAVE_MMAP
@@ -1203,6 +1203,5 @@ extern unsigned long max_mmapped_mem;
   (last_remainder->fd = last_remainder->bk = last_remainder)
 
 
-#ifdef __acorn
 #pragma no_check_stack
-#endif
+

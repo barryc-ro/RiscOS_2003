@@ -14,6 +14,7 @@
 #include "msgs.h"
 #include "os.h"
 #include "swis.h"
+#include "visdelay.h"
 
 #include "config.h"
 #include "makeerror.h"
@@ -50,6 +51,11 @@ static hotlist_item *hotlist_list = NULL, *hotlist_last = NULL;
 static BOOL hotlist_changed = FALSE;
 static int hotlist_count = 0;
 
+#define NVRAM_FAVORITES		"BrowserFavorites"
+
+#define NVRAM_Read	0x4EE00
+#define NVRAM_Write	0x4EE01
+
 /* ---------------------------------------------------------------------- */
 
 static char *title_or_url(const hotlist_item *item)
@@ -59,11 +65,18 @@ static char *title_or_url(const hotlist_item *item)
 
 /* ---------------------------------------------------------------------- */
 
-static int hotlist__compare(const void *o1, const void *o2)
+static int hotlist__compare_alpha(const void *o1, const void *o2)
 {
     const hotlist_item **item1 = (const hotlist_item **)o1;
     const hotlist_item **item2 = (const hotlist_item **)o2;
     return strcasecomp(title_or_url(*item1), title_or_url(*item2));
+}
+
+static int hotlist__compare_used(const void *o1, const void *o2)
+{
+    const hotlist_item **item1 = (const hotlist_item **)o1;
+    const hotlist_item **item2 = (const hotlist_item **)o2;
+    return (*item2)->last_used - (*item1)->last_used;
 }
 
 static hotlist_item *hotlist__find(const char *url, const char *title)
@@ -214,7 +227,7 @@ static void hotlist__trim_length(void)
 
 /* ---------------------------------------------------------------------- */
 
-static void hotlist__sort(void)
+static void hotlist__sort(int (*compar)(const void *, const void *))
 {
     hotlist_item *item;
     int i, count;
@@ -238,7 +251,7 @@ static void hotlist__sort(void)
 	*item_copy++ = item;
 
     /* sort the list */
-    qsort(item_list, count, sizeof(*item_list), hotlist__compare);
+    qsort(item_list, count, sizeof(*item_list), compar);
 
     /* rewrite the links according to the sort order */
     hotlist_last = hotlist_list = *item_list;
@@ -379,7 +392,6 @@ static void hotlist__read(FILE *in)
 	for (i = 4; i < info.record_size; i++)
 	    fskipline(in);
     }
-    hotlist__sort();
 }
 
 static void hotlist__write_header(FILE *in)
@@ -423,6 +435,155 @@ static void hotlist__write(FILE *out)
 
 /* ---------------------------------------------------------------------- */
 
+static BOOL hotlist__write_nvram(void)
+{
+    int size, used, rc;
+    char *data;
+    hotlist_item *item;
+
+    STBDBG(("hotlist__write_nvram: enter\n"));
+    
+    /* first read the space available, if error returned then NVRAM module not available */
+    if (_swix(NVRAM_Read, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, 0, 0, &size))
+	return FALSE;
+
+    STBDBG(("hotlist__write_nvram: returned size %d\n", size));
+
+    /* does NVRAM have our tag? */
+    if (size < 0)
+	return FALSE;
+
+    STBDBG(("hotlist__write_nvram: has tag\n"));
+
+    /* sort into used order */
+    hotlist__sort(hotlist__compare_used);
+
+    data = mm_calloc(size, 1);
+
+    /* write header */
+    data[0] = 1;		/* format */
+    data[1] = 4;		/* record size */
+    used = 2;
+    
+    /* add items into buffer if room */
+    for (item = hotlist_list; item; item = item->next)
+    {
+	int need = strlen(item->url) + 1 +
+	    (item->title ? strlen(item->title) : 0) + 1 +
+	    1 +
+	    8 + 1;
+
+	STBDBG(("hotlist__write_nvram: need %d used %d\n", need, used));
+
+	if (used + need <= size)
+	{
+	    used += sprintf(data + used, "%s\n%s\n\n%08x\n",
+		    item->url, strsafe(item->title), item->last_used);
+
+	    STBDBG(("hotlist__write_nvram: wrote '%s'\n", data+used-need));
+	}
+    }
+
+    /* terminate block if not filled space */
+    if (used < size)
+	data[used++] = 0;
+    
+    /* write to NVRAM */
+    _swix(NVRAM_Write, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, data, used, &rc);
+    
+    STBDBG(("hotlist__write_nvram: used %d rc=%d\n", used, rc));
+
+    /* resort and free buffer */
+    mm_free(data);
+
+    hotlist__sort(hotlist__compare_alpha);
+
+    return rc == 0;
+}
+
+static BOOL hotlist__read_nvram(void)
+{
+    hotlist_info info;
+    int size, rc;
+    char *data, *s;
+    
+    STBDBG(("hotlist__read_nvram: enter\n"));
+
+    /* first read the space available, if error returned then NVRAM module not available */
+    if (_swix(NVRAM_Read, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, 0, 0, &size))
+	return FALSE;
+
+    STBDBG(("hotlist__read_nvram: returned size %d\n", size));
+
+    /* does NVRAM have our tag? */
+    if (size < 0)
+	return FALSE;
+
+    STBDBG(("hotlist__read_nvram: has tag\n"));
+
+    /* allocate an extra byte so we can guarantee that the data is null-termminated */
+    data = mm_calloc(size + 1, 1);
+
+    /* read NVRAM */
+    if (_swix(NVRAM_Read, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, data, size, &size) == NULL &&
+	size > 0)
+    {
+	info.format = data[0];
+	info.record_size = data[1];
+
+	STBDBG(("hotlist__read_nvram: format %d record size %d\n", data[0], data[1]));
+
+	/* carry on reading until reached end of buffer or a null byte is found */
+	s = &data[2];
+	while (s && *s)
+	{
+	    int i;
+	    char *url = NULL, *title = NULL;
+	    int last_used = 0;
+
+	    for (i = 0; i < info.record_size; i++)
+	    {
+		char *nl = strchr(s, '\n');
+
+		if (nl)
+		    *nl = 0;
+	    
+		STBDBG(("hotlist__read_nvram: read line (%d) s %p nl %p '%s'\n", i, s, nl, s));
+
+		switch (i)
+		{
+		case 0:
+		    url = s;
+		    break;
+		case 1:
+		    title = s;
+		    break;
+		case 2:
+		    break;
+		case 3:
+		    last_used = (time_t)strtoul(s, NULL, 16);
+		    break;
+		}
+
+		s = nl ? nl + 1 : NULL;
+	    }
+
+	    STBDBG(("hotlist__read_nvram: '%s' '%s' 0x%08x\n", url, title, last_used));
+
+	    if (url)
+		hotlist__add(strdup(url), strdup(title), last_used, FALSE);
+	}
+    }
+
+    STBDBG(("hotlist__read_nvram: size read %d\n", size));
+
+    mm_free(data);
+
+    return TRUE;
+}
+
+/* ---------------------------------------------------------------------- */
+
 static os_error *hotlist__changed_message(void)
 {
     wimp_msgstr msg;
@@ -436,44 +597,77 @@ static os_error *hotlist__changed_message(void)
 
 BOOL hotlist_read(const char *file)
 {
-    FILE *f;
+    int rc;
+    
+    STBDBG(("hotlist_read: %s (%d)\n", file, gstrans_not_null(file)));
 
-    STBDBG(("hotlist_read: %s\n", file));
+    visdelay_begin();
 
-    f = mmfopen(file, "r");
-    if (f)
+    if (gstrans_not_null(file))
     {
-	hotlist__read(f);
-	mmfclose(f);
+	FILE *f;
 
+	f = mmfopen(file, "r");
+	if (f)
+	{
+	    hotlist__read(f);
+	    mmfclose(f);
+	}
+
+	rc = f != NULL;
+    }
+    else
+    {
+	rc = hotlist__read_nvram();
+    }
+    
+    if (rc)
+    {
 	hotlist__trim_length();
-	hotlist__sort();
+	hotlist__sort(hotlist__compare_alpha);
     }
 
+    visdelay_end();
+    
     hotlist_changed = FALSE;
 
-    return f != NULL;
+    return rc;
 }
 
 BOOL hotlist_write(const char *file)
 {
-    FILE *f;
+    int rc;
 
-    STBDBG(("hotlist_write: %s\n", file));
+    STBDBG(("hotlist_write: %s (%d)\n", file, gstrans_not_null(file)));
 
-    f = mmfopen(file, "w");
-    if (f)
-    {
-	hotlist__write(f);
-	mmfclose(f);
-    }
-
-    hotlist_changed = FALSE;
-
-    /* send wimp message to inform others */
-    hotlist__changed_message();
+    visdelay_begin();
     
-    return f != NULL;
+    if (gstrans_not_null(file))
+    {
+	FILE *f;
+    
+	f = mmfopen(file, "w");
+	if (f)
+	{
+	    hotlist__write(f);
+	    mmfclose(f);
+	}
+
+	/* send wimp message to inform others */
+	hotlist__changed_message();
+
+	rc = f != NULL;
+    }
+    else
+    {
+	rc = hotlist__write_nvram();
+    }
+    
+    visdelay_end();
+
+    hotlist_changed = !rc;
+
+    return rc;
 }
 
 os_error *hotlist_add(const char *url, const char *title)
@@ -487,7 +681,7 @@ os_error *hotlist_add(const char *url, const char *title)
 
     hotlist__add(strdup(url), strdup(title), time(NULL), TRUE);
     hotlist__trim_length();
-    hotlist__sort();
+    hotlist__sort(hotlist__compare_alpha);
 
 /*     if ((ep = ensure_modem_line()) != NULL) */
 /* 	return ep; */

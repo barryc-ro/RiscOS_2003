@@ -25,23 +25,13 @@
 #define er(__x) { os_error *__e = __x; if (__e) return __e; }
 #endif
 
-#ifdef DEBUG
-extern char *caller(int);
-#endif
-
-#ifdef __acorn
 #pragma no_check_stack
-#endif
 
 static os_error *MemFlex__Insert( char *at, int by, int *relocatesize );
 
 #define xos_swi(__x,__r) os_swix ( XOS_Bit | (__x), __r )
 
-#ifdef MEM_DEBUG
-typedef struct { char ** anchor; int size; char *caller1; char *caller2; } flex__str;
-#else
 typedef struct { char ** anchor; int size; } flex__str;
-#endif
 
 #define ApplicationBase ((char *)0x8000)
 
@@ -71,7 +61,7 @@ void MemFlex__atexit( void )
     }
 }
 
-os_error *MemFlex_Initialise2( const char *areaname )
+os_error *MemFlex_Initialise2( char *areaname )
 {
     int currentslot = -1;
     int nextslot = -1;
@@ -194,36 +184,6 @@ void MemFlex_CheckNoAnchors( char *start, int size )
     }
 }
 
-void MemFlex_Dump(void *f)
-{
-    char *ptr;
-
-    if (!f)
-	f = stderr;
-    
-    if ( flexptr__base == NULL )
-    {
-        fprintf(f, "Flex not initialised\n" );
-	return;
-    }
-
-    fprintf(f, "Flex: base %p\n", flexptr__base);
-    fprintf(f, "Flex: free %p\n", flexptr__free);
-    fprintf(f, "Flex: slot %p\n", flexptr__slot);
-    
-    for ( ptr = flexptr__base;
-          ptr < flexptr__free;
-            ptr += sizeof(flex__str) + ((flex__str *)ptr)->size )
-    {
-	flex__str *fptr = (flex__str *)ptr;
-
-	fprintf(f, "block %p anchor %p size %6dK callers '%s' '%s'\n", fptr, fptr->anchor, fptr->size/1024, fptr->caller1, fptr->caller2);
-
-	if (*(fptr->anchor) != (char *)(fptr + 1))
-	    fprintf(f, "     %p ERROR\n", *(fptr->anchor));
-    }
-}
-
 #endif
 
 
@@ -268,14 +228,6 @@ os_error *MemFlex_Alloc( flex_ptr anchor, int size )
 
     block->size = size;
     block->anchor = anchor;
-#ifdef MEM_DEBUG
-    if (offset == 0)
-    {
-    	block->caller1 = caller(1);
-	block->caller2 = caller(2);
-    }
-#endif
-
     *(flex__str **)anchor = block+1;
 
     return NULL;
@@ -501,21 +453,23 @@ static os_error *MemFlex__Insert( char *at, int by, int *relocatesize )
     return MemFlex_Shrinkable( FlexShrinkable );
 }
 
-#ifdef __acorn
-#pragma no_check_stack
+#ifdef DEBUG
+extern char *caller(int);
+#else
+#define caller(a) ""
 #endif
+
+#pragma no_check_stack
 
 int MemFlex_budge( int n, void **a )
 {
     if ( MemFlex_Dynamic() )
     {
-#ifdef MEM_DEBUG
         char *c1 = caller(1),
              *c2 = c1 ? caller(2) : 0,
              *c3 = c2 ? caller(3) : 0;
         werr( 0, "Error: MemFlex_budge called (for %d) in DA case."
                  "Callers %s,%s,%s", n, c1, c2, c3 );
-#endif
         return 0;
     }
 

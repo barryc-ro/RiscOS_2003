@@ -223,7 +223,7 @@ static be_item highlight_last_link = NULL;
 static int fast_poll = 0;
 
 #if USE_DIALLER_STATUS
-static int connection_up = 1;
+static int connection_up = fe_interface_UP;
 static int connection_count = 0;
 #endif
 
@@ -2218,12 +2218,19 @@ int frontend_memory_panic(void)
 
 
 #if USE_DIALLER_STATUS
-int frontend_is_interface_up(void)
+
+int frontend_interface_state(void)
 {
+    int state = connection_up;
     STBDBG(("is_interface_up: var=%d\n", connection_up));
-    return connection_up;
+
+    if (connection_up == fe_interface_ERROR)
+	connection_up = fe_interface_DOWN;
+
+    return state;
 }
 
+#if 0
 int frontend_is_interface_down(void)
 {
 #if CHECK_IF_WITH_REGISTRY
@@ -2243,6 +2250,7 @@ int frontend_is_interface_down(void)
     return !connection_up;
 #endif
 }
+#endif
 #endif
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4389,7 +4397,7 @@ static void fe_keyboard__open(void)
     if (getenv("Alias$NCKeyBoard"))
     {
 	fe_view v;
-	BOOL url_open = FALSE;
+ 	BOOL toolbar_popup_open = FALSE;
 
 	if (keyboard_state == fe_keyboard_ONLINE && !tb_is_status_showing())
 	{
@@ -4400,25 +4408,58 @@ static void fe_keyboard__open(void)
 	n = sprintf(buffer, "NCKeyboard %s",
 		    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
 
-	memset(&box, 0, sizeof(box));
+	box.y0 = text_safe_box.y1;
+	box.y1 = text_safe_box.y0;
 	if (tb_is_status_showing())
 	    tb_status_box(&box);
 
+#if 1
+	v = fe_find_top_popup(main_view);
+	if (v->open_transient &&
+	    (v->transient_position == fe_position_TOOLBAR_WITH_COORDS || v->transient_position == fe_position_TOOLBAR)
+	    )
+	{
+	    coords_union(&v->box, &box, &box);
+	    toolbar_popup_open = TRUE;
+	}
+#else
 	/* add in open url box if present */
 	if ((v = fe_locate_view("__url")) != NULL)
 	{
 	    coords_union(&v->box, &box, &box);
 	    url_open = TRUE;
 	}
-
+#endif
+	
 	if (config_display_control_top)
 	{
 	    sprintf(buffer + n, " -scrolldown %d", box.y0/2);
 	}
 	else
 	{
+	    BOOL from_top = FALSE;
 	    v = fe_selected_view();
-	    if (v && v != main_view && (v->box.y1 < box.y1 + 400 + 100) && !url_open)
+
+	    if (v && !v->open_transient)
+	    {
+		if (v->parent)
+		{
+		    from_top = v->box.y1 < box.y1 + 400 + 100;
+		}
+		else if (v->scrolling == fe_scrolling_NO)
+		{
+		    BOOL has_caret;
+		    be_item ti = backend_read_highlight(v->displaying, &has_caret);
+		    if (ti && has_caret)
+		    {
+			wimp_box box;
+			backend_doc_item_bbox(v->displaying, ti, &box);
+			from_top = box.y0 < (screen_box.y1 + screen_box.y0)/2;
+		    }
+		}
+	    }
+
+	    if (from_top)
 		sprintf(buffer + n, " -scrolldown %d", text_safe_box.y1/2);
 	    else
 		sprintf(buffer + n, " -scrollup %d", box.y1/2);
@@ -5096,9 +5137,10 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 
 	    STBDBG(("DiallerStatus: state=%d, count=%d\n", new_state, connection_count));
 
+	    /* IP is up */
 	    if (new_state == dialler_CONNECTED_OUTGOING)
             {
-		connection_up = 1;
+		connection_up = fe_interface_UP;
 
                 /* only reload stuff on first connection */
                 if (connection_count++ == 0)
@@ -5106,9 +5148,19 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 		    re_read_config(0);
                 }
             }
+	    /* IP is down */
 	    else if (new_state == dialler_DISCONNECTED)
 	    {
-		connection_up = 0;
+		/* only reset if we were up, otherwise it will wipe
+                   out the error condition before we have a chance to
+                   look at it. */
+		if (connection_up == fe_interface_UP)
+		    connection_up = fe_interface_DOWN;
+	    }
+	    /* error has occurred */
+	    else if ((new_state & 0xf0) == 0x80)
+	    {
+		connection_up = fe_interface_ERROR;
 	    }
             break;
         }

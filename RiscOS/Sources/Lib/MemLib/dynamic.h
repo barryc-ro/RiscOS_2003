@@ -26,7 +26,7 @@ typedef struct DynamicArea *DynamicArea;    /* abstract type */
  * new area.                                                                 *
  * Safe to call on earlier OS versions, but will return an error.            *
  *---------------------------------------------------------------------------*/
-os_error *DynamicArea_Alloc( int nSize, const char *pAreaName,
+os_error *DynamicArea_Alloc( int nSize, char *pAreaName,
                              DynamicArea *pArea, void **ppStart );
 
 /*---------------------------------------------------------------------------*

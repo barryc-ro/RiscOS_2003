@@ -3906,14 +3906,16 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 
 #ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
+			    status == status_FAIL_REDIAL ?
+				NULL :								/* don't want to display the error in this case */
 			    status == status_BAD_FILE_TYPE ?
-			    (char *)makeerrorf(ERR_BAD_FILE_TYPE,
+				(char *)makeerrorf(ERR_BAD_FILE_TYPE,
 					       get_file_type_name(access_get_ftype(doc->ah))) : /* unsupported file type */
 			    status == status_FAIL_LOCAL ?
-			    (char *)makeerror(ERR_NO_DISC_SPACE) :			/* local error (probably out of disc space) */
+				(char *)makeerror(ERR_NO_DISC_SPACE) :				/* local error (probably out of disc space) */
 			    status == status_FAIL_DNS ?
-			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile) :	/* cannot find the web page */
-			    (char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
+				(char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile) :	/* cannot find the web page */
+				(char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
 #endif
 
 	doc->ah = NULL;

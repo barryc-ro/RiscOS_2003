@@ -1,6 +1,6 @@
 # Makefile for Hourglass
 #
-
+# 03 Sep 1997 RWB Change to be switched on UserIF rather than System
 #
 # Paths
 #
@@ -46,7 +46,7 @@ DFLAGS   =
 # Program specific options:
 #
 COMPONENT = Hourglass
-TARGET    = rm.${SYSTEM}.${COMPONENT}
+TARGET    = rm.${UserIF}.${COMPONENT}
 EXPORTS   = 
 
 #

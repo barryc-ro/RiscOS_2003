@@ -12,8 +12,6 @@
          Check before installing!
 */
 
-#include <stdlib.h>
-
 #include "os.h"
 #include "werr.h"
 
@@ -116,9 +114,9 @@ static void do_check_chunk(p) mchunkptr p;
 
 
 #if __STD_C
-void do_check_free_chunk(mchunkptr p)
+static void do_check_free_chunk(mchunkptr p)
 #else
-void do_check_free_chunk(p) mchunkptr p;
+static void do_check_free_chunk(p) mchunkptr p;
 #endif
 {
   size_t sz = p->size & ~PREV_INUSE;
@@ -149,9 +147,9 @@ void do_check_free_chunk(p) mchunkptr p;
 }
 
 #if __STD_C
-void do_check_inuse_chunk(mchunkptr p)
+static void do_check_inuse_chunk(mchunkptr p)
 #else
-void do_check_inuse_chunk(p) mchunkptr p;
+static void do_check_inuse_chunk(p) mchunkptr p;
 #endif
 {
   mchunkptr next = next_chunk(p);
@@ -315,12 +313,10 @@ os_error *MemHeap_Initialise( char *pDynamicAreaName )
 #if ROM
 	int i;
 	/* do the nasty fixup for ROM builds */
-	av_[0] = 0;
-	for (i = 0; i < NAV; i++)
+	for (i = 0; i < sizeof(av_)/sizeof(av_[0]) - 2; i++)
 	{
-	    av_[i*2 + 2] = av_[i*2 + 1] = (mbinptr)(av_ + 2 * i);
+	    av_[i+1] = IAV(i);
 	}
-	av_[NAV*2 + 1] = 0;
 #endif
 	atexit( MemHeap__atexit );
         return NULL;
