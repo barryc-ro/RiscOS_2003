@@ -1,0 +1,283 @@
+; File:    Driver.s
+; Purpose: Netfax Daytona keyboard driver
+; Author:  Ben Laughton
+; History: 1997-05-14: BAL: Created
+;          1997-07-10: BAL: Modified key table to reflect revised key mappings
+;          1997-10-28: BAL: Home and Back keys transposed
+
+	AREA	|DaytonaKbd$$Code|, CODE, READONLY
+
+; -----------------------------------------------------------------------------
+; KeyTable
+;
+; Lookup table of RISC OS low-level internal key numbers
+
+KeyTable
+	DCB	&FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF, &4C, &01
+	DCB	&03, &04, &11, &10, &27, &26, &3C, &5D, &4E, &FF, &FF
+	DCB	&20, &02, &13, &12, &29, &28, &3E, &3D, &50, &4F, &FF
+	DCB	&FF, &FF, &15, &14, &2B, &2A, &40, &3F, &52, &51, &5F
+	DCB	&59, &63, &17, &16, &2D, &2C, &42, &41, &54, &53, &FF
+	DCB	&64, &62, &19, &18, &2F, &2E, &44, &43, &56, &55, &FF
+	DCB	&07, &08, &1B, &1A, &31, &30, &FF, &45, &33, &57, &21
+	DCB	&05, &06, &34, &1C, &35, &32, &47, &46, &FF, &58, &36
+
+
+; -----------------------------------------------------------------------------
+; ClaimVectors
+;
+; Hook onto vectors
+;
+; On exit
+; Corrupts r0
+
+ClaimVectors
+	Entry	"r1-r2"
+	Debug	keyv, "claiming KeyV"
+	MOV	r0, #KeyV
+	ADRL	r1, KeyVHandler
+	MOV	r2, wp
+	SWI	XOS_Claim
+	EXIT
+
+; -----------------------------------------------------------------------------
+; ReleaseVectors
+;
+; Unhook from vectors
+;
+; On exit
+; Corrupts r0
+
+ReleaseVectors
+	Entry	"r1-r2"
+	Debug	keyv, "releasing KeyV"
+	MOV	r0, #KeyV
+	ADRL	r1, KeyVHandler
+	MOV	r2, wp
+	SWI	XOS_Release
+	Debug	keyv, "released keyv"
+	EXIT
+
+; -----------------------------------------------------------------------------
+; KeyboardInit
+;
+; Initialise the keyboard device driver
+
+KeyboardInit
+	Entry
+	BL	clear_keyboard
+	BL	keyv_present
+	EXIT
+
+; -----------------------------------------------------------------------------
+; KeyboardDie
+;
+; Shutdown the keyboard device driver
+
+KeyboardDie
+	Entry
+	BL	stop_timer
+	EXIT
+
+; -----------------------------------------------------------------------------
+; KeyVHandler
+;
+; Keyboard Vector handler
+;
+; On entry
+; R0 = reason code
+; R1 varies according to reason code
+;
+; On exit
+
+KeyVHandler
+	TEQ	r0, #KeyV_EnableDrivers
+	BEQ	keyv_enable
+	MOVS	pc, lr			; pass on vector call
+
+; -----------------------------------------------------------------------------
+; clear_keyboard
+;
+; Clear the key up/down flags table
+
+clear_keyboard
+	Entry	"r0"
+	LDR	r0, =&7ff
+	ADR	lr, KeyFlags
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	EXIT
+
+; -----------------------------------------------------------------------------
+; start_timer
+;
+; Start the timer to call the keyboard scan code every 1/20th second
+;
+; On exit
+; Corrupts R0 and V flag
+
+start_timer
+	Entry	"r1, r2"
+	Debug	timer, "starting timer"
+	MOV	r0, #4
+	ADRL	r1, scan_keyboard
+	MOV	r2, wp
+	SWI	XOS_CallEvery
+	Debug	timer, "started timer"
+	EXIT
+
+; -----------------------------------------------------------------------------
+; stop_timer
+;
+; Stop the timer to call the keyboard scan code every 1/20th second
+;
+; On exit
+; Corrupts R0 and V flag
+
+stop_timer
+	Entry	"r1"
+	Debug	timer, "stopping timer"
+	LDR	r0, Flags
+	TST	r0, #f_Enabled
+	DebugIf	EQ, timer, "timer not enabled"
+	EXIT	EQ
+	ADRL	r0, scan_keyboard
+	MOV	r1, wp
+	SWI	XOS_RemoveTickerEvent
+	Debug	timer, "stopped timer"
+	EXIT
+
+; -----------------------------------------------------------------------------
+; keyv_enable
+;
+; Deal with 'enable keyboard device drivers' call
+; The kernel has flushed its table of keys held down so we must do the same
+
+keyv_enable
+	Entry	"r0"
+	Debug	keyv, "driver enabled"
+	BL	clear_keyboard
+	LDR	r0, Flags
+	TST	r0, #f_Enabled
+	BLEQ	start_timer
+	EXITS	VS
+	ORR	r0, r0, #f_Enabled
+	STR	r0, Flags
+	EXITS				; pass on vector call
+
+; -----------------------------------------------------------------------------
+; keyv_present
+;
+; Call KeyV to notify kernel that keyboard is present
+;
+; On exit
+; Corrupts R0 and V flag
+
+keyv_present
+	Entry	"r1, r9"
+	MOV	r0, #KeyV_Present
+	MOV	r1, #KeyV_TypePCAT
+	MOV	r9, #KeyV
+	SWI	XOS_CallAVector
+	EXIT
+
+; -----------------------------------------------------------------------------
+; key_changed
+;
+; Called when a key has changed state.  Decide whether its just been pressed or
+; released and inform the kernel using the appropriate KeyV call.
+;
+; On entry
+; R2 = row data
+; R4 = bit (ie. key in row) being checked
+; R5 = address of start of row in low-level key code table
+; R11 = 1
+;
+; On exit
+; Corrupts r1
+
+key_changed
+	Entry   "r0"
+	LDRB	r1, [r5, r4]
+	TST	r2, r11, LSL r4		; test if key pressed or released
+	MOVEQ	r0, #KeyV_TransitionDown
+	MOVNE	r0, #KeyV_TransitionUp
+	DebugIf	EQ, scan, "key down"
+	DebugIf	NE, scan, "key up"
+	Debug	scan, "calling KeyV, low-level key is", r1
+	SWI	XOS_CallAVector		; can't deal with an error
+	EXITS
+
+; -----------------------------------------------------------------------------
+; scan_keyboard
+;
+; Scan the keyboard and notify the kernel of any keys pressed / released
+;
+; Preserves all registers
+
+scan_keyboard
+	Entry	"r0-r11"
+
+	; reentrancy semaphore
+	LDR	r8, Flags
+	TST	r8, #f_Scanning
+	DebugIf	NE, scan, "scan_keyboard reentered"
+	EXIT	NE
+	ORR	r8, r8, #f_Scanning	; set semaphore
+	STR	r8, Flags
+
+	MOV	r7, #0
+	ADRL	r3, KeyFlags
+	ADRL	r5, KeyTable
+	MOV	r9, #KeyV
+ [ Test
+	ADRL	r10, TestRow
+ |
+	LDR	r10, =row_register
+ ]
+	MOV	r11, #1
+01
+	LDR	r2, [r10]		; scan next row of keyboard
+;	Debug	scan, "row is", r2
+	LDR	r6, [r3, r7, LSL #2]	; extract key flags for row
+;	Debug	scan, "row was", r6
+
+	; Find out which keys in this row have changed
+	MOV	r2, r2, LSL #32-11	; ensure all but lower 11 bits clear
+	MOV	r2, r2, LSR #32-11
+	EORS	r6, r2, r6
+	DebugIf	NE, scan, "keys change mask", r6
+	MOV	r4, #0			; bit number (key) being checked
+
+02
+	; Loop through the key change pattern shifting the LSB into the C
+	; flag each time.  If the C flag is set then that key has changed.
+	BEQ	%FT03
+	MOVS	r6, r6, LSR #1
+	DebugIf	CS, scan, "bit changed:", r4
+	BLCS	key_changed
+	ADD	r4, r4, #1
+	B	%BT02
+
+03
+	STR	r2, [r3, r7, LSL #2]	; save row state
+	CMP	r7, #7			; all rows scanned?
+	ADDNE	r5, r5, #11		; move onto next row in KeyTable
+	ADDNE	r7, r7, #1
+ [ Test
+	ADDNE	r10, r10, #4
+ ]
+	BNE	%BT01
+
+	BIC	r8, r8, #f_Scanning	; clear semaphore
+	STR	r8, Flags
+
+	EXIT
+
+	END
