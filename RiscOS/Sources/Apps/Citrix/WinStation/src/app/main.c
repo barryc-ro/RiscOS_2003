@@ -177,7 +177,6 @@ static int scrap_ref = -1;
 
 static int task_handle = 0;
 static BOOL running = TRUE;
-static BOOL run_as_home_url = FALSE;		// this is set from the cli options stuff
 
 #define quitting_NO		0
 #define quitting_SELF		1
@@ -1549,8 +1548,6 @@ static void process_args(int argc, char *argv[])
 
 		    if (i+1 < argc && argv[i+1][0] != '-')
 			cli_postfile = strdup(argv[++i]);
-
-		    run_as_home_url = compare_with_browser_home(cli_filename);
 		}
 		break;
 	    } /* switch */
@@ -1737,9 +1734,7 @@ int main(int argc, char *argv[])
     }
 
     /* check and see if we were the startup application */
-    run_as_home_url = compare_with_browser_home(cli_filename);
-
-    if (run_as_home_url && !cli_suspendable)
+    if (!cli_suspendable && browser_home_is_ica())
     {
 	char *s = getenv( HANGUP_VAR );
 

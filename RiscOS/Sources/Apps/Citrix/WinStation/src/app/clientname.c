@@ -103,66 +103,108 @@ void clientname(char *output, int output_len)
  * ie on an NC, whether we were launched from the smartcard.
  */
 
-int compare_with_browser_home(const char *url)
+static BOOL get_browser_home(char **home_out, BOOL *is_url_out)
 {
-    char *home = strdup(getenv(BROWSER_HOME_URL));
-    char *home_url = NULL;
-    BOOL matches;
+    char *home_base, *home;
+    char *hurl;
+    BOOL is_url;
+
+    home = home_base = strdup(getenv(BROWSER_HOME_URL));
 
     if (home == NULL)
 	return FALSE;
 
+    /* if we have a url prefix then strip it and set the URL flag*/
+    is_url = FALSE;
     if (strnicmp(home, "-url ", 5) == 0)
-	home += 5;
-
-    /* get the real URL that is being used */
-    if (strnicmp(home, "ica:", 4) == 0)
-	home_url = strdup(home);
-    else 
     {
-	char *hurl = NULL;
-	
-	/* if it is 'ncma:userhome' then pull off the real URL from the smartcard */
-	if (strnicmp(home, NCMA_CMD_HOME, sizeof(NCMA_TAG_HOME)-1) == 0)
+	home += 5;
+	is_url = TRUE;
+    }
+
+    /* if it is 'ncma:userhome' then pull off the real URL from the smartcard */
+    if (strnicmp(home, NCMA_CMD_HOME, sizeof(NCMA_TAG_HOME)-1) == 0)
+    {
+	char buf[256];
+	int out;
+	if (_swix(NCAccessManager_Enquiry, _INR(0,2) | _OUT(0), NCMA_TAG_HOME, buf, sizeof(buf), &out) == NULL && out > 0)
 	{
-	    char buf[256];
-	    int out;
-	    if (_swix(NCAccessManager_Enquiry, _INR(0,2) | _OUT(0), NCMA_TAG_HOME, buf, sizeof(buf), &out) == NULL && out > 0)
-		home = strdup(buf);
-	}
-
-	/* this lot picks out ncint:loadurl? and ncfrescointernal:loadurl? and then parses the args for the URL */
-	if (strnicmp(home, BROWSER_INTERNAL_PREFIX_1, sizeof(BROWSER_INTERNAL_PREFIX_1)-1) == 0)
-	    hurl = home + sizeof(BROWSER_INTERNAL_PREFIX_1)-1;
-	else if (strnicmp(home, BROWSER_INTERNAL_PREFIX_2, sizeof(BROWSER_INTERNAL_PREFIX_2)-1) == 0)
-	    hurl = home + sizeof(BROWSER_INTERNAL_PREFIX_2)-1;
-	
-	if (hurl && strnicmp(hurl, BROWSER_INTERNAL_LOADURL, sizeof(BROWSER_INTERNAL_LOADURL)-1) == 0)
-	{
-	    arg_element *list = NULL, *a;
-
-	    hurl += sizeof(BROWSER_INTERNAL_LOADURL)-1;
-
-	    parse_args(&list, hurl);
-
-	    for (a = list; a; a = a->next)
-		if (stricmp(a->name, "url") == 0)
-		{
-		    home_url = a->value;
-		    a->value = NULL;
-		}
-
-	    free_elements(&list);
+	    free(home_base);
+	    home = home_base = strdup(buf);
 	}
     }
 
-    TRACE((TC_UI, TT_API1, "compare_with_browser_home: url '%s' home '%s' (%s)", url, home, strsafe(home_url)));
+    /* this lot picks out ncint:loadurl? and ncfrescointernal:loadurl? and then parses the args for the URL */
+    hurl = NULL;
+    if (strnicmp(home, BROWSER_INTERNAL_PREFIX_1, sizeof(BROWSER_INTERNAL_PREFIX_1)-1) == 0)
+	hurl = home + sizeof(BROWSER_INTERNAL_PREFIX_1)-1;
+    else if (strnicmp(home, BROWSER_INTERNAL_PREFIX_2, sizeof(BROWSER_INTERNAL_PREFIX_2)-1) == 0)
+	hurl = home + sizeof(BROWSER_INTERNAL_PREFIX_2)-1;
     
-    /* return TRUE if we are using an ica: transport - ignore the reset of the URL for now */
-    matches = home_url && strnicmp(home_url, "ica:", 4) == 0;
+    if (hurl && strnicmp(hurl, BROWSER_INTERNAL_LOADURL, sizeof(BROWSER_INTERNAL_LOADURL)-1) == 0)
+    {
+	arg_element *list = NULL, *a;
+	
+	hurl += sizeof(BROWSER_INTERNAL_LOADURL)-1;
+	
+	parse_args(&list, hurl);
+	
+	for (a = list; a; a = a->next)
+	{
+	    TRACE((TC_UI, TT_API4, "get_browser_home: arg name '%s' value '%s'", a->name, a->value));
 
-    free(home_url);
-    free(home);
+	    if (stricmp(a->name, "url") == 0)
+	    {
+		/* swap home for the new home value */
+		free(home_base);
+		home = home_base = a->value;
+		a->value = NULL;
+		break;
+	    }
+	}
+	
+	free_elements(&list);
+    }
+
+    if (home_out)
+	*home_out = strdup(home);
+
+    free(home_base);
+
+    if (is_url_out)
+	*is_url_out = is_url;
+
+    TRACE((TC_UI, TT_API4, "get_browser_home: home '%s' is_url %d", *home_out, *is_url_out));
+
+    return TRUE;
+}
+
+int browser_home_is_ica(void)
+{
+    char *home;
+    BOOL matches = FALSE, home_is_url;
+
+    if (get_browser_home(&home, &home_is_url))
+    {
+	/* if it is a URL */
+	if (home_is_url)
+	{
+	    if (strnicmp(home, "ica:", 4) == 0)
+	    {
+		matches = TRUE;
+	    }
+	    else
+	    {
+		int len = strlen(home);
+		if (len > 4 && stricmp(home + len-4, ".ica") == 0)
+		    matches = TRUE;
+	    }
+	}
+
+	TRACE((TC_UI, TT_API1, "browser_home_is_ica: home '%s' isurl %d matches %d", home, home_is_url, matches));
+
+	free(home);
+    }
 
     return matches;
 }

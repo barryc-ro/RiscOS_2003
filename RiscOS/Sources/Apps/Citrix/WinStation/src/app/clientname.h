@@ -6,6 +6,6 @@
 
 
 extern void clientname(char *buf, int buflen);
-extern int compare_with_browser_home(const char *url);
+extern int browser_home_is_ica(void);
 
 /* eof clientname.h */
