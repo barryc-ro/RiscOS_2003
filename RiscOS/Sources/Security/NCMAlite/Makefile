@@ -36,7 +36,7 @@ ASFLAGS = -depend !Depend -Stamp -quit -module
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CMHGFLAGS = -p -depend !Depend -throwback ${NCTARGETARCH} ${OPTS}
+CMHGFLAGS = -p -depend !Depend -throwback
 INCLUDES= -IC:,TCPIPLibs: 
 
 #
