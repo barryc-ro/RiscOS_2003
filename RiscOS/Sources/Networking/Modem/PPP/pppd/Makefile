@@ -20,6 +20,7 @@ LD =		link
 RM =		remove
 MODSQZ =	modsqz
 WIPE =		-wipe
+STRIPDEPEND =	stripdepnd
 
 ASMFLAGS =	-depend !Depend ${THROWBACK}
 CFLAGS =	-depend !Depend ${THROWBACK} ${INCLUDES} ${CBLOCKDRIVERS} -strict -Wp -ffah ${CCEXTRA} 
@@ -118,6 +119,7 @@ debug: ${DEBUGTARGET}
 analyse: ${OBJSCP}
 
 clean:
+	${STRIPDEPEND}
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} od.* ${WFLAGS}
 	${WIPE} cp.* ${WFLAGS}

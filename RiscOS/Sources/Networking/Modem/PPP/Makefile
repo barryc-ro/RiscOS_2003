@@ -26,6 +26,7 @@ LD =		${MEMCHECKLD} link
 RM =		remove
 MODSQZ =	modsqz
 WIPE =		-wipe
+STRIPDEPEND =	stripdepnd
 
 ASMFLAGS =	-depend !Depend ${THROWBACK} -predefine "BlockDrivers SETL ${ASMBLOCKDRIVERS}"
 CFLAGS =	-depend !Depend ${THROWBACK} ${INCLUDES} ${CBLOCKDRIVERS} -strict -wP -ffah ${CCEXTRA}
@@ -159,6 +160,7 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 clean:	pppd
+	${STRIPDEPEND}
 	${RM} ${HDRS}
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} od.* ${WFLAGS}
