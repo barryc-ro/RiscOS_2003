@@ -26,6 +26,8 @@
 ;                       when the lid is closed.
 ; 08-Feb-93             BCockburn; changed GETs to use Hdr: rather than &.Hdr.
 ; 19-Jul-93     2.16    ECN: Internationalised
+; 17-May-95     2.18    WT: Added support for LCD power control on screen blank/unblank.
+; 11-Jul-95     2.19    RCM: Added ScreenDim code for portables.
 ;
 
         GET     Hdr:ListOpts
@@ -41,6 +43,8 @@
         GET     Hdr:Proc
         GET     Hdr:ColourTran
         GET     Hdr:ScrBlank
+        GET     Hdr:PaletteV
+        GET     Hdr:UpCall
 
         GET     Hdr:HostFS
         GET     Hdr:Debug
@@ -48,6 +52,11 @@
         GBLL    WorkRoundCallEveryBug
 WorkRoundCallEveryBug   SETL    True            ; CallEvery seems to add 1 to the specified timeout
 
+        GBLL    LCDSupport
+LCDSupport      SETL    True
+
+        GBLL    Stork
+Stork           SETL    LCDSupport
 
         GBLL    Debugging
 Debugging       SETL    False
@@ -71,12 +80,15 @@ TickDelta        *      100 / TicksPerSec
 MinFlashOnTicks  *      2               ; about half a second
 MinFlashOffTicks *      2
 MinNormOnTicks   *      5 * TicksPerSec
+ [ Stork
+MinDimTicks      *      5 * TicksPerSec
+ ]
 
 StrBuffLen       *      20
 BlTime           *      10*60           ; Default delay.
 
 FirstReason      *      ScreenBlankerReason_Blank
-LastReason       *      ScreenBlankerReason_ReadTimeout
+LastReason       *      ScreenBlankerReason_StrictUnblank
 
 ; Workspace
 
@@ -87,6 +99,16 @@ TimeOff         #       4               ; zero used to indicate non-flashing
 NormOnTime      #       4               ; time the screen remains on under normal operation, in ticks
 LastMouse       #       4               ; as returned by OS_Word 21,4
 Blanked         #       4               ; non-zero means blanked
+Blanked_NotBlanked      *       0
+Blanked_Blanked         *       1
+Blanked_Standby         *       2
+
+ [ Stork
+OnAPortable     #       4               ; Value returned by Portable_ReadFeatures (0 if not supported)
+timer2          #       4               ;
+DimTime         #       4               ; time before the screen dims
+Dimmed          #       4
+ ]
 
 VecStat         #       4               ; flags word indicating claim status
 VecStat_WrchVClaimed    * (1 :SHL: 0)   ; WrchV is claimed
@@ -103,7 +125,7 @@ LastServiceTime #       4
 DelayCancel     #       4               ; Set to the number of flash cycles remaining before
                                         ; wakeup allowed; zero means wakeup is OK.
 
-messagefile     #       4
+messagefilehand #       4
 messageblock    #       20
 
 ; This must start word aligned
@@ -167,6 +189,18 @@ SWIDecode
         B       Go_Flash
         B       Go_SetTimeout
         B       Go_ReadTimeout
+ [ Stork
+        B       Go_ReadTimeout2
+        B       Go_SetDimTime
+        B       Go_ReadDimTime
+ |
+        B       badreason
+        B       badreason
+        B       badreason
+ ]
+        B       Go_Standby
+        B       Go_Online
+        
 ;; NOTREACHED
 
 badswi
@@ -179,21 +213,32 @@ badreason
 
         MakeErrorBlock  ModuleBadSWI
 
+
+Go_Standby
+        MOV     R0, #Blanked_Standby
+        B       %FT00
+ 
 ; This call will immediately cancel flashing if it is active
 Go_Blank
-        MOV     R0, #0
-        STR     R0, DelayCancel
-        STR     R0, FlashFlags
-        STR     R0, TimeOff
-        STR     R0, timer
-        LDR     R0, NormOnTime
-        STR     R0, TimeOn
+        MOV     R0, #Blanked_Blanked
+00
+        MOV     LR, #0
+        STR     LR, DelayCancel
+        STR     LR, FlashFlags
+        STR     LR, TimeOff
+        STR     LR, timer
+        LDR     LR, NormOnTime
+        STR     LR, TimeOn
         BL      TurnScreenOff
         CLRV
         Pull    "PC"
 
 ; This call will immediately cancel flashing if it is active
 Go_Unblank
+        LDR     LR, Blanked
+        TEQ     LR, #Blanked_Standby
+        Pull    "PC",EQ
+Go_Online
         MOV     R0, #0
         STR     R0, DelayCancel
         STR     R0, FlashFlags
@@ -202,6 +247,9 @@ Go_Unblank
         STR     R0, TimeOn
         STR     R0, timer
         BL      TurnScreenOn
+ [ Stork
+        BL      CancelDim       ;iff on a portable
+ ]
         CLRV
         Pull    "PC"
 
@@ -220,6 +268,14 @@ ConvertTicksToSecs      ENTRY   "R0,R2"
         DivRem  R1, R0, R2, LR
         EXIT
 
+ [ Stork
+; R0 is time in ticks.  Leaves time in centi-seconds in R1.
+
+ConvertTicksToCS        ENTRY   "R0,R2"
+        MOV     R2, #TickDelta  ;centi-seconds per tick
+        MUL     R1, R0, R2
+        EXIT
+ ]
 
 ; R1 is unblanked time in centiseconds
 ; R2 is blanked time in centiseconds
@@ -229,6 +285,10 @@ ConvertTicksToSecs      ENTRY   "R0,R2"
 ; Input registers are corrupted
 
 Go_Flash
+        LDR     LR, Blanked
+        TEQ     LR, #Blanked_Standby
+        EXIT    EQ
+
         STR     R3, DelayCancel
         STR     R4, FlashFlags
         BL      TurnScreenOn
@@ -269,13 +329,51 @@ Go_ReadTimeout
         CLRV
         Pull    "PC"
 
+ [ Stork
+Go_ReadTimeout2
+        LDR     R0, NormOnTime
+        BL      ConvertTicksToCS
+        CLRV
+        Pull    "PC"
+
+; R1 holds dimmer time in centiseconds (or 0 for "never")
+; Input registers corrupted
+
+Subr_SetDimTime ENTRY           ; CORRUPTS REGISTERS
+Go_SetDimTime
+        TEQ     R1, #0          ; 0 means "never blank"
+        MOVEQ   R0, #0
+        BEQ     %FT01
+        BL      ConvertCSToTicks
+        CMP     R0, #MinDimTicks
+        MOVLT   R0, #MinDimTicks
+01      STR     R0, DimTime
+        STR     R0, timer2
+       ;B       Go_UnDim
+        Pull    "PC"
+
+Go_ReadDimTime
+        LDR     R0, DimTime
+        BL      ConvertTicksToCS
+        CLRV
+        Pull    "PC"
+ ]
+
 Command
         DCB     "BlankTime", 0
         ALIGN
         DCD     BlankTime - Module_BaseAddr
-        DCD     &0002FF00:OR:International_Help
+        DCD     &0002FF00:OR:International_Help         ;0..2 parameters
         DCD     BlankTimeSyn - Module_BaseAddr
         DCD     BlankTimeHlp - Module_BaseAddr
+ [ Stork
+        DCB     "DimTime", 0
+        ALIGN
+        DCD     DimTimeCmd - Module_BaseAddr
+        DCD     &0001FF00:OR:International_Help         ;0..1 parameters
+        DCD     DimTimeSyn - Module_BaseAddr
+        DCD     DimTimeHlp - Module_BaseAddr
+ ]
         DCD     0                  ; No more cmd's
 
 SyntaxError
@@ -313,7 +411,6 @@ BlankTimeLoop
         EXIT                            ; return V set
 
 BlankTimeNP
-
         BL      openmsgfile
         EXIT    VS
 
@@ -338,7 +435,7 @@ BlankTimeNP
 
         SUB     sp, sp, #80
         BL      openmsgfile
-        LDRVC   r0, messagefile
+        LDRVC   r0, messagefilehand
         MOVVC   r2, sp
         MOVVC   r3, #80
         SWIVC   XMessageTrans_Lookup
@@ -393,6 +490,93 @@ DecodeErr
         ORRS    PC, LR, #V_bit
 
 
+ [ Stork
+ [ International_Help=0
+DimTimeHlp      DCB     "*DimTime (seconds) sets the delay before an idle machine dims it's screen.", 13
+                DCB     "If used with no parameters, it displays the current status.", 13
+                DCB     "To turn screen dimming off use *DimTime 0", 13
+DimTimeSyn      DCB     "Syntax: *DimTime [Time]", 0
+ |
+DimTimeHlp
+        DCB     "HSCDIM", 0
+DimTimeSyn
+        DCB     "SSCDIM", 0
+ ]
+        ALIGN
+
+DimTimeCmd      ENTRY
+        LDR     R12, [R12]              ; get workspace pointer
+
+        TEQ     R1,#0
+        BEQ     DimTimeNP
+
+DimTimeLoop
+        LDRB    R1,[R0]                 ; Check for end
+        CMP     R1,#32                  ; and chop off leading spaces.
+        ADDEQ   R0,R0,#1
+        BEQ     DimTimeLoop
+        EXITS   LT                      ; Exit if control-char.
+        BL      DecodeDimPar
+        BVC     DimTimeLoop
+        EXIT                            ; return V set
+
+DimTimeNP
+        BL      openmsgfile
+        EXIT    VS
+
+        LDR     R2,DimTime
+        MOV     R1, #TickDelta
+        MUL     R0, R2, R1
+        TEQ     R0, #0
+        ADREQ   R1,DimOff
+        ADRNE   R1,StrBuff
+        MOVNE   R2,#StrBuffLen
+        SWINE   XOS_BinaryToDecimal
+        SUBNE   R2, R2, #2              ; convert to seconds (sort of)
+        MOVNE   R4,R1
+        MOVNE   r0, #0
+        STRNEB  r0, [r4, r2]
+        MOVNE   R1,R2
+        ADRNE   R1,DimTim
+
+        SUB     sp, sp, #80
+        BL      openmsgfile
+        LDRVC   r0, messagefilehand
+        MOVVC   r2, sp
+        MOVVC   r3, #80
+        SWIVC   XMessageTrans_Lookup
+        MOVVC   r0, r2
+        SWIVC   XOS_Write0
+        ADD     sp, sp, #80
+
+        SWIVC   XOS_NewLine
+
+        EXIT
+
+DimOff  DCB     "DimOff", 0
+DimTim  DCB     "DimTm", 0
+                ALIGN
+
+DecodeDimPar    ENTRY   "R6"
+        LDRB    R1,[R0]
+        MOV     R1,R0                   ; Move strpointer to R1
+        MOV     R0,#(1<<29)             ; Check  0<=R2<=2^18 (ca. 3 days)
+        MOV     R2,#(1<<18)             ; Restrict to moderate positive int (used to be MVN (a bug!))
+        SWI     XOS_ReadUnsigned
+        BVS     DecodeDimErr            ; Print error and exit.
+        MOV     R6, R1                  ; save the updated strpointer
+        MOV     R3, #100
+        MUL     R1,R2,R3
+        BL      Subr_SetDimTime         ; Corrupts some registers
+        MOV     R0,R6
+        EXITS
+
+DecodeDimErr
+        Pull    "R6,LR"
+        ORRS    PC, LR, #V_bit
+ ]
+
+
 ClaimWriteCV  ENTRY  "R0-R3"
         LDR     R3,VecStat
         TST     R3,#VecStat_WrchVClaimed
@@ -439,11 +623,14 @@ ClaimVectorsAndStuff  ENTRY "R0-R3"
         MOV     R1,#0
         STR     R1,LastMouse
         STR     R1,Blanked      ; unblanked
+ [ Stork
+        STR     R1,Dimmed       ; undimmed
+ ]
         STR     R1,VecStat      ; no vectors claimed
         STR     R1,DelayCancel  ; no forced cycles
         STR     R1,FlashFlags   ; not flashing
         STR     R1,TimeOff      ; what reminds us we're not flashing
-        STR     R1,messagefile
+        STR     R1,messagefilehand
 
         MOV     R0,#ReadCMOS
         MOV     R1,#Misc1CMOS
@@ -460,6 +647,24 @@ ClaimVectorsAndStuff  ENTRY "R0-R3"
         STR     R0, NormOnTime
         STR     R0, TimeOn
 
+ [ Stork
+        SWI     XPortable_ReadFeatures
+        MOVVS   R1, #0
+        STR     R1, OnAPortable
+
+        MOV     R0, #ReadCMOS
+        MOV     R1, #StorkCMOS+2
+        SWIVC   XOS_Byte
+
+        MOVVS   R2, #0          ;On error, default to off
+        AND     R2, R2, #2_00000111     ;Leave index in R2 (must mul by 4 cos )
+        ADR     R0, BlankTimes          ; must multiply by 4 - table of words
+        LDR     R1, [R0,R2,LSL #2]      ; R1 is time in centiseconds
+        BL      ConvertCSToTicks
+
+        STR     R0, timer2
+        STR     R0, DimTime
+ ]
         MOV     R3, R2
         [ WorkRoundCallEveryBug :LAND: TickDelta > 1
         MOV     R0, #TickDelta - 1
@@ -478,7 +683,7 @@ ClaimVectorsAndStuff  ENTRY "R0-R3"
         ADR     R1,EventAction
         MOV     R2, R12
         SWI     XOS_Claim
-        BVC     %FT00
+        BVC     %FT20
 
         ADR     R0, Tick                ; if claim of eventV fails, bail out
         MOV     R1, R12
@@ -487,7 +692,8 @@ ClaimVectorsAndStuff  ENTRY "R0-R3"
         SETV
         EXIT                            ; hope the MOS frees my workspace!
 
-00      MOV     R0, #14                 ; request keyboard events
+20
+        MOV     R0, #14                 ; request keyboard events
         MOV     R1, #Event_Keyboard
         SWI     XOS_Byte
 
@@ -540,7 +746,7 @@ Finish
 
         BL      Action          ; Ensure screen is on when module dies
 
-        LDR     r0, messagefile
+        LDR     r0, messagefilehand
         CMP     r0, #0
         SWINE   XMessageTrans_CloseFile
 
@@ -639,22 +845,30 @@ EventAction
         ; fall thru...
 
 Action  ENTRY   "R0"
+        LDR     LR, Blanked
+        TEQ     LR, #Blanked_Standby
+        EXIT    EQ
+ [ Stork
+        BL      CancelDim       ;iff on a portable
+ ]
         BL      CancelFlash
         EXIT    NE              ; screen must not be unblanked yet
         LDR     R0,TimeOn
         STR     R0,timer
         LDR     R0, Blanked
-        TEQ     R0, #0
-        EXIT    EQ
-        BL      TurnScreenOn    ; if so, then screen ON.
+        TEQ     R0, #Blanked_Blanked
+        BLEQ    TurnScreenOn    ; if so, then screen ON.
         EXIT
-
 
 ; Tick is called from OS_CallEvery, and is therefore effectively an interrupt
 ; handler.
 
 Tick    ENTRY   "R0-R5"
 
+        LDR     LR, Blanked
+        TEQ     LR, #Blanked_Standby
+        EXIT    EQ
+ 
 ; Locate mouse and see if it's changed.  If so, unblank.
         MOV     R4,PC           ; save current mode
         ORR     R3,R4,#SVC_mode
@@ -674,6 +888,19 @@ Tick    ENTRY   "R0-R5"
         TEQP    R4,#0           ; restore previous mode
         MOV     R0,R0           ; nop, because of prefetch
 
+ [ Stork
+        LDR     R0, Dimmed
+        TEQ     R0, #0
+        BNE     %FT00
+        LDR     R0,timer2
+        TEQ     R0, #0          ; timer == 0?
+        BEQ     %FT00           ; then don't autodim
+        SUBS    R0,R0,#1        ; decrement; is it now zero?
+        STRNE   R0,timer2       ; no, so continue countdown
+        BLEQ    DimScreen       ; yes, so reduce screen brightness
+00
+ ]
+
         ASSERT  Blanked = LastMouse + 4
         ADR     R2, LastMouse
         LDMIA   R2, {R4,LR}
@@ -684,6 +911,9 @@ Tick    ENTRY   "R0-R5"
         CMP     R5, R4          ; mouse pos the same?
         BEQ     %FT00           ; yes, so try ticking instead
         STR     R5, LastMouse   ; they're different
+ [ Stork
+        BL      CancelDim
+ ]
         BL      CancelFlash     ; can we stop flashing?
         BNE     %FT00           ; no; so try ticking instead
         LDR     R0,TimeOn       ; action from user => timer=max
@@ -703,6 +933,7 @@ Tick    ENTRY   "R0-R5"
         STRNE   R1, DelayCancel
         LDR     R1, TimeOff     ; re-init the timer with the
         STR     R1, timer       ; off period (0 unless flashing)
+        MOV     R0, #Blanked_Blanked
         BL      TurnScreenOff      ; and blank the screen
         EXIT
 
@@ -711,6 +942,9 @@ offcode
         CMP     R5, R4          ; mouse pos the same?
         BEQ     %FT01           ; yes, so try ticking instead
         STR     R5, LastMouse   ; they're different
+ [ Stork
+        BL      CancelDim
+ ]
         BL      CancelFlash     ; can we stop flashing?
         BEQ     offaction       ; yes, so unblank
 
@@ -759,6 +993,7 @@ CallBackHandler  ENTRY  "R0-R12"
 
 
 ; Turn the screen off.
+; R0 = reason for blanking (Blank_*)
 
 TurnScreenOff  ENTRY       "R0-R9"
 
@@ -770,13 +1005,23 @@ TurnScreenOff  ENTRY       "R0-R9"
         MOV     R0,R0           ; nop, because of prefetch
         Push    "R4,LR"         ; push SVC_link
 
-        MOV     R4, #6          ; Blank/unblank
+        [ LCDSupport
+        SWI     XPortable_Status
+        BVS     %FT00
+        TST     R0, #8                  ;Is it actually in use?
+        MOVNE   R0, #0
+        LDRNE   R1, =:NOT:(PortableControl_LCDEnable :OR: PortableControl_BacklightEnable)
+        SWINE   XPortable_Control
+        ]
+
+        ASSERT  paletteV_BlankScreen = 6
+00      MOV     R4, #paletteV_BlankScreen
         MOV     R0, #1          ; unblank
         MOV     R9, #PaletteV
         SWI     XOS_CallAVector
         BVS     %FT00
 
-        MOV     R1, #1
+        LDR     R1, [SP, #8]
         STR     R1, Blanked
 
         MOV     R1,#Service_ScreenBlanked
@@ -809,13 +1054,23 @@ TurnScreenOn  ENTRY       "R0-R9"
         MOV     R0,R0           ; nop, because of prefetch
         Push    "R4,LR"         ; push SVC_link
 
-        MOV     R4, #6          ; Blank/unblank
+        ASSERT  paletteV_BlankScreen = 6
+        MOV     R4, #paletteV_BlankScreen
         MOV     R0, #0          ; unblank
         MOV     R9, #PaletteV
         SWI     XOS_CallAVector
-        BVS     %FT00
+        BVS     %FT01
 
-        MOV     R1, #0
+        [ LCDSupport
+        SWI     XPortable_Status
+        BVS     %FT00
+        TST     R0, #8                  ;Is it actually in use?
+        LDRNE   R0, =(PortableControl_LCDEnable :OR: PortableControl_BacklightEnable)
+        LDRNE   R1, =:NOT:(PortableControl_LCDEnable :OR: PortableControl_BacklightEnable)
+        SWINE   XPortable_Control
+        ]
+
+00      MOV     R1, #Blanked_NotBlanked
         STR     R1, Blanked
 
         MOV     R1,#Service_ScreenRestored
@@ -830,11 +1085,78 @@ TurnScreenOn  ENTRY       "R0-R9"
         ]
         SWI     XOS_AddCallBack
 
-00
+01
         Pull    "R4,LR"         ; pop SVC_link
         TEQP    R4,#0           ; restore previous mode
         MOV     R0,R0           ; nop, because of prefetch
         EXIT
+
+ [ Stork
+;
+; DimScreen - Dim the screen.
+;
+DimScreen ENTRY "R0-R9"
+
+; We could be in an interrupt, so we have to save the svc_link register
+; before calling any SWI's
+        MOV     R4,PC                   ; save current mode
+        ORR     R3,R4,#SVC_mode
+        TEQP    R3,#0                   ; switch to SVC mode
+        MOV     R0,R0                   ; nop, because of prefetch
+        Push    "R4,LR"                 ; push SVC_link
+
+        MOV     R4, #paletteV_DimScreen ; Dim/undim
+        MOV     R0, #1                  ; undim
+        MOV     R9, #PaletteV
+        SWI     XOS_CallAVector
+        BVS     %FT00
+
+        MOV     R1, #1
+        STR     R1, Dimmed
+00
+        Pull    "R4,LR"                 ; pop SVC_link
+        TEQP    R4,#0                   ; restore previous mode
+        MOV     R0,R0                   ; nop, because of prefetch
+        EXIT
+
+
+CancelDim
+        Push    "R0"
+        LDR     R0, DimTime
+        STR     R0, timer2
+
+        LDR     R0, Dimmed
+        TEQ     R0, #0
+        Pull    "R0"
+        MOVEQS  PC, LR
+                                ;drop into...
+;
+; UndimScreen - Restore full brightness
+;
+UndimScreen ENTRY "R0-R9"
+
+; We could be in an interrupt, so we have to save the svc_link register
+; before calling any SWI's
+        MOV     R4,PC                   ; save current mode
+        ORR     R3,R4,#SVC_mode
+        TEQP    R3,#0                   ; switch to SVC mode
+        MOV     R0,R0                   ; nop, because of prefetch
+        Push    "R4,LR"                 ; push SVC_link
+
+        MOV     R4, #paletteV_DimScreen ; Dim/undim
+        MOV     R0, #0                  ; undim
+        MOV     R9, #PaletteV
+        SWI     XOS_CallAVector
+        BVS     %FT01
+
+        MOV     R1, #0
+        STR     R1, Dimmed
+01
+        Pull    "R4,LR"         ; pop SVC_link
+        TEQP    R4,#0           ; restore previous mode
+        MOV     R0,R0           ; nop, because of prefetch
+        EXIT
+ ]
 
 messagefilename
         DCB     "Resources:$.Resources.ScrBlanker.Messages", 0
@@ -842,13 +1164,13 @@ messagefilename
 
 openmsgfile
         ENTRY   r0-r2
-        LDR     r0, messagefile
+        LDR     r0, messagefilehand
         CMP     r0, #0
         ADREQ   r0, messageblock
         ADREQ   r1, messagefilename
         MOVEQ   r2, #0
         SWIEQ   XMessageTrans_OpenFile
-        STRVC   r0, messagefile
+        STRVC   r0, messagefilehand
         STRVS   r0, [sp]
         EXIT
 
@@ -856,7 +1178,7 @@ error_lookup
         ENTRY   r1-r2
         BL      openmsgfile
         EXIT    VS
-        LDR     r1, messagefile
+        LDR     r1, messagefilehand
         MOV     r2, #0
         SWI     XMessageTrans_ErrorLookup
         EXIT
