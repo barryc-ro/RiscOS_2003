@@ -44,9 +44,10 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES}
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
@@ -61,7 +62,10 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-#WRAPPER   = RISCOSLIB:s.ModuleWrap
+SOCKLIB   = TCPIPLibs:o.socklibzm
+INETLIB   = TCPIPLibs:o.inetlibzm
+UNIXLIB   = TCPIPLibs:o.unixlibzm
+LIBSD     = <Lib$Dir>.DebugLib.o.debuglibzm
 
 # -----------------------------------------------------------------------------
 # Include files
@@ -69,11 +73,12 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 
 INCLUDES = -Itbox:,C:
 
-LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
-LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
-LIBSZRAM = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
+LIBS      = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
+LIBSZ     = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
+LIBSZRAM  = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
+LIBSZRAMD = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib ${LIBSD} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
 
-DFLAGS   = ${BUILDFLAGS}
+DFLAGS   = ${BUILDFLAGS} -DDEBUGLIB
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -86,10 +91,15 @@ APP       = abs.!RunImage
 OBJS      = o.handlers o.main o.oskbutils o.oskbime o.windowops
 OBJSZ     = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWrap
 OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWra1
+OBJSZRAMD = od.handlers od.main od.oskbutils od.oskbime od.windowops oz.ModuleWra1
 EXPORTS   = 
 INSTALLDIR = <Install$Dir>.${APPNAME}
 
-.SUFFIXES: .oz
+NORMAL_TARGET = ${COMPONENT}
+DEBUG_TARGET  = ${COMPONENT}d
+MODULE_TARGET = ${COMPONENT}zm
+
+.SUFFIXES: .oz .od
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -102,6 +112,7 @@ RESAPP = <resource$dir>.Apps.${APPNAME}
 #
 
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.od:;     ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.oz:;     ${CC} ${CFLAGS} -zM -zps1 -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
@@ -135,20 +146,27 @@ ram: rm.${COMPONENT}
 	@echo ${COMPONENT}: soft-load module installed
 	@echo
 
+ram_debug: rm.${COMPONENT}d
+	@echo ${COMPONENT}: soft-load debug module installed
+	@echo
+
 clean:
 	${WIPE} o ${WFLAGS}
 	${WIPE} oz ${WFLAGS}
+	${WIPE} od ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
 	${WIPE} aof ${WFLAGS}
 	${WIPE} abs ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${APP}
+	${STRIP}
 	@echo
 	@echo ${COMPONENT}: cleaned
 
 o.dirs:
 	@${MKDIR} o
+	@${MKDIR} od
 	@${MKDIR} oz
 	@${MKDIR} rm
 	@${MKDIR} aof
@@ -208,6 +226,9 @@ ${APP}: ${OBJS} ${LIBS} o.dirs
 
 rm.${COMPONENT}: ${OBJSZRAM} ${LIBSZRAM} o.dirs
 	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
+
+rm.${COMPONENT}d: ${OBJSZRAMD} ${LIBSZRAMD} o.dirs
+	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAMD} ${LIBSZRAMD}
 
 oz.ModuleWrap: s.ModuleWrap s.AppName o.dirs
 	${AS} ${AFLAGS} s.ModuleWrap $@
