@@ -40,7 +40,7 @@ RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
+ABSSYM    = RISC_OSLib:o.c_AbsSym
 
 #
 # Include files
