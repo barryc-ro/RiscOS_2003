@@ -1,4 +1,4 @@
-# Makefile for BASIC
+# Makefile for BASICTrans
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -30,7 +30,7 @@ TOKENS   = Hdr:Tokens
 #
 # Program specific options:
 #
-COMPONENT = BASIC
+COMPONENT = BASICTrans
 EXPORTS   = ${EXP_HDR}.BASICTrans
 TARGETS   = rm.BASICTrans
 
