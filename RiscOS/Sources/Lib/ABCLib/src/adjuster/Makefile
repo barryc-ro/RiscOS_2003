@@ -1,0 +1,2 @@
+
+OBJECTS = o.events
