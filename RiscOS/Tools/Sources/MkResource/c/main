@@ -1,0 +1,257 @@
+/* main.c for mkresource utility */
+
+/*
+ * mkresource <modname> <filename1> <filename2> .... <filenamen>
+ *
+ *  will create a file "c.resources" containing the contents of the specified
+ *  files defined as a static array ready to be registered with ResourceFS.
+ *
+ *  This file starts with the comment: "resources.c for <modname> module" 
+ *
+ * *** All filenames are taken relative to the current directory ***
+ *
+ * Example:   mkresource ATProbe Res Messages !Sprites !Sprites22
+ */
+
+
+#define  VERSION  "0.02"
+
+
+#include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+
+
+#include "swis.h"
+#include "kernel.h"
+
+#define error _kernel_oserror
+
+typedef int Bool;    
+#define TRUE  1
+#define FALSE 0
+
+
+/* to make _swi(..) and _swix(..) easier to use */
+
+#define I0 _IN(0)
+#define I1 _IN(1)
+#define I2 _IN(2)
+#define I3 _IN(3)
+#define I4 _IN(4)
+#define I5 _IN(5)
+#define I6 _IN(6)
+#define I7 _IN(7)
+#define I8 _IN(8)
+#define I9 _IN(9)
+
+#define O0 _OUT(0)
+#define O1 _OUT(1)
+#define O2 _OUT(2)
+#define O3 _OUT(3)
+#define O4 _OUT(4)
+#define O5 _OUT(5)
+#define O6 _OUT(6)
+#define O7 _OUT(7)
+#define O8 _OUT(8)
+#define O9 _OUT(9)
+
+#define BIT(n) (((unsigned int) 1) << (n))
+
+
+#define ER(stmt) {error *e = (stmt); if (e) {return e;}}
+#define EG(label, stmt) {err = (stmt); if (err) goto label;}
+
+
+static FILE *f = NULL;       /* output file handle */
+static error err;            /* to construct my own */
+
+
+
+/*
+ * Creates a resource file data block in memory.
+ */
+
+static error * create_resource_block
+(
+    char *fromfile,        /* from this file */
+    char *tofile,          /* file name in ResourceFS::$ */
+    unsigned int **blk     /* returns address of malloc'd memory containing
+                               resource file data block */
+)
+{
+    unsigned int load;
+    unsigned int exec;
+    unsigned int len;
+    unsigned int attr;
+    int n1, n2;
+    unsigned int *buff;
+
+    /* get catalogue info for file */
+    ER (_swix (OS_File, I0|I1|O2|O3|O4|O5,
+                   5,                 /* read catalogue info */
+                   fromfile,          /* about this file */
+                   &load,
+                   &exec,
+                   &len,
+                   &attr));
+
+    /* work out how big a block is needed and malloc it */
+    n1 = ((strlen (tofile) + 1) + 3) & ~3;
+    n2 = (len + 3) & ~3;
+    buff = (unsigned int *) calloc (24 + n1 + n2, 1);
+    if (!buff)
+    {
+        err.errnum = 0;
+        strcpy (err.errmess, "Insufficient memory available");
+        return &err;
+    }
+
+    /* fill in the block header */
+    buff[0] = n1 + n2 + 24;           /* size of the block */
+    buff[1] = load;
+    buff[2] = exec;
+    buff[3] = len;
+    buff[4] = attr;
+    strcpy ((char *) (buff + 5), tofile);
+    buff[5 + (n1 >> 2)] = len + 4;    /* 4 more than file size */
+
+    /* load file into buffer */
+    ER (_swix (OS_File, I0|I1|I2|I3,
+                   255,               /* load file */
+                   fromfile,
+                   buff + 6 + (n1 >> 2),
+                   0));
+
+    *blk = buff;
+    return NULL;
+}
+
+
+/*
+ * Creates and outputs the start of the output file
+ */
+
+static error * start_file (char *filename, char *modname)
+{
+    /* open file for writing */
+    f = fopen (filename, "w");
+    if (!f)
+    {
+        err.errnum = 0;
+        strcpy (err.errmess, "Cannot open output file");
+        return &err;
+    }
+
+    /* output header */
+    fprintf (f, "\
+/* resources.c for %s module */\n\
+\n\
+#include \"resources.h\"\n\
+\n\
+\n\
+unsigned int resources [] = {\n\
+", modname);
+
+    return NULL;
+}
+
+
+/*
+ * Outputs the end of the output file and closes it
+ */
+
+static error * end_file (void)
+{
+    fprintf (f, "\
+\n\
+/* terminator */\n\
+0\n\
+};\n\
+");
+
+    fclose (f);
+
+    return NULL;
+}
+
+
+/*
+ * Outputs a header line (comment) preceding each resource in the output
+ *  file.
+ */
+
+static error * out_resource_header (char *filename)
+{
+    fprintf (f, "\n/* resource file block for %s */\n", filename);
+
+    return NULL;
+}
+
+
+/*
+ * Outputs a resource block
+ */
+
+static error * out_resource_block (unsigned int *blk)
+{
+    int len = blk[0]/4;   /* length of block in words */
+    int i;
+
+    for (i = 0; i < len; i++)
+        fprintf (f, "0x%08x,\n", blk[i]);
+
+    return NULL;
+}
+
+
+int main (int argc, char *argv[])
+{
+    unsigned int *resblk;
+    error *err;
+    int i;
+
+    printf ("mkresource - version %s\n", VERSION);
+
+    if (argc < 3)
+    {
+        printf ("*** not enough arguments: use mkresource <modname> <filename> ...\n");
+        return 1;
+    }
+
+    EG (ret, start_file ("c.resources", argv[1]));
+
+    for (i = 2; i < argc; i++)
+    {
+        char resfname[256];
+
+        sprintf (resfname, "Resources.%s.%s", argv[1], argv[i]);
+
+        EG (ret, create_resource_block (
+                     argv[i],
+                     resfname,
+                     &resblk ));
+        EG (ret, out_resource_header (argv[i]));
+        EG (ret, out_resource_block (resblk));
+        free (resblk);
+    }
+
+    EG (ret, end_file ());
+
+
+ /* everything's ok */
+    return 0;
+
+      
+ /* some problem has arisen */
+  ret:
+    /* print error message */
+    printf ("*** %s\n", err->errmess);
+
+    /* close output file if it's open */
+    if (f)
+        fclose (f);
+
+    return 1;
+}
