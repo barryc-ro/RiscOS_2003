@@ -51,9 +51,7 @@ install: ${TARGET} dirs
         @echo ${COMPONENT}: module installed
 
 clean:
-        ${RM} ${ZIPFS}
-        ${RM} ${ZIP_FILER}
-        ${RM} ${PPA}
+        ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
