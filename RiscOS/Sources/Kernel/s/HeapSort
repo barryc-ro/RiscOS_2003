@@ -4,11 +4,14 @@
 ; HeapSort routine. Borrowed from Knuth by Tutu. Labels h(i) correspond to
 ; steps in the algorithm.
 
-; In    r0 = n
+;mjs June 2001, API adjusted to allow for full 32-bit addresses
+
+; In    r0 = n (maximum of 268,435,455), and flags in top 4 bits
+;              bit 31 *must* be set, flagging new API to allow full 32-bit addresses
+;              bit 30 set -> use r4,r5 on postpass
+;              bit 29 set -> build (r1) from r4,r5 in prepass
+;              bit 28 set -> use r6 as temp slot
 ;       r1 = array(n) of word size objects (r2 determines type)
-;              bit 31 set -> use r4,r5 on postpass
-;              bit 30 set -> build (r1) from r4,r5 in prepass
-;              bit 29 set -> use r6 as temp slot
 ;       r2 = address of comparison procedure
 ;              Special cases:
 ;                0 -> treat r(n) as array of cardinal
@@ -18,9 +21,17 @@
 ;                4 -> treat r(n) as array of char* (case insensitive)
 ;                5 -> treat r(n) as array of char* (case sensitive)
 ;       r3 = wsptr for comparison procedure (only needed if r2 > 5)
-;       r4 = array(n) of things (only needed if r1 & 0xC0000000)
+;       r4 = array(n) of things (only needed if r0 & &60000000)
 ;       r5 = sizeof(element)    ( ---------  ditto  ---------- )
-;       r6 = address of temp slot (only needed if r5 > 16K or r1 & 0x20000000)
+;       r6 = address of temp slot (only needed if r5 > 16K or r0 & &10000000)
+
+;For backward compatibility, supports old API assuming addresses are safe
+;(specifically, that address in r1 does not have any of top 3 bits set)
+;
+;The old API uses bits 31-29 of r1 to mean the equivalent of bits 30-28 of r0
+;as defined above. Just to make this more confusing, the old API always behaves
+;as if bit 31 of r1 mirrors bit 30 (ie. bit 30 set forces bit 31 set, see PRM 5a-662),
+;so we preserve this for old API, but do originally intended thing for new API.
 
 ; r10-r12 trashable
 
@@ -47,7 +58,9 @@ hs_r    RN      r11
 
 HeapSortRoutine ROUT
 
-        CMP     r0, #2                  ; 0 or 1 elements? No data moved either
+        BIC     r10, r0, #&F0000000     ; n (zapping flag bits)
+
+        CMP     r10, #2                 ; 0 or 1 elements? No data moved either
         ExitSWIHandler LO               ; VClear in lr and psr
 
         Push    "r0-r3, hs_array, hs_procadr, hs_i, hs_j, hs_K, hs_R, lr"
@@ -57,8 +70,14 @@ HeapSortRoutine ROUT
  [ False
         STR     r0, ndump               ; For debugging porpoises
  ]
-        TST     r1, #1 :SHL: 30         ; Are we to build the pointer array?
-        BIC     r1, r1, #2_111 :SHL: 29 ; Take out flag bits for now
+
+        TST     r0, #&80000000          ; test old/new API
+        MOVNE   r10, r0                 ; new, flags are in r0
+        BICNE   r0, r0, #&F0000000      ; zap new flags
+        MOVEQ   r10, r1, LSR #1         ; old, flags are in r1, 1 bit to left
+        BICEQ   r1, r1, #&E0000000      ; zap old flags
+
+        TST     r10, #&20000000         ; Are we to build the pointer array?
         BEQ     %FT01
 
 ; Build array of pointers to data blocks for the punter if he desires this
@@ -72,7 +91,6 @@ HeapSortRoutine ROUT
         ADD     r4, r4, r5              ; r4 += sizeof(element)
         SUBS    r10, r10, #1
         BNE     %BT00
-
 
 01      SUB     hs_array, r1, #4        ; HeapSort assumes r(1..n) not (0..n-1)
 
@@ -158,14 +176,21 @@ h8      STR     hs_R, [hs_array, hs_i, LSL #2] ; R(i) = R
 
 ; Array now sorted into order
 
-90      LDR     r14, [sp, #4*1]         ; r1in
-        TST     r14, #1 :SHL: 30
+90      LDR     r14, [sp, #4*0]         ; r0in
+        LDR     r2, [sp, #4*1]          ; r1in
+        TST     r14, #&80000000         ; check for old/new API
+        ANDEQ   r8, r2, #&E0000000
+        ORREQ   r14, r14, r8, LSR #1    ; old, munge old flag bits into r14
+        BICEQ   r2, r2, #&E0000000      ; clear from r2
+
+        ORREQ   r14, r14, #&40000000    ; ho hum fudge to make old bit 31 mirror
+        TSTEQ   r14, #&20000000         ; old bit 30 if using old API (behave as errata
+        BICEQ   r14, r14, #&40000000    ; in PRM 5a-662)
+
+        TST     r14, #&40000000         ; check for postpass
         BEQ     %FA99                   ; [no shuffle required, exit]
 
 ; Reorder the blocks according to the sorted array of pointers
-
-        BIC     r2, r14, #2_111 :SHL: 29 ; r2 -> list of pointers
-                                        ; keep r14 ok for below
 
         ADD     r1, sp, #4*4
         LDMIA   r1, {r1, r8, r9}        ; r4,r5,r6in
@@ -176,9 +201,9 @@ h8      STR     hs_R, [hs_array, hs_i, LSL #2] ; R(i) = R
  DREG r8, "sizeof(element) "
  ]
         MOV     r3, r2                  ; r3 -> first item of current cycle
-        LDR     r0, [sp, #0*4]          ; r0 = n
+        BIC     r0, r14, #&F0000000     ; r0 = n
         ADD     r6, r2, r0, LSL #2      ; r6 -> end of array of pointers
-        TST     r14, #1 :SHL: 29        ; punter forcing use of his temp slot?
+        TST     r14, #&10000000         ; punter forcing use of his temp slot?
         BNE     %FT94                   ; fine by me!
         CMP     r8, #ScratchSpaceSize
         LDRLS   r9, =ScratchSpace       ; r9 -> temp slot (normally ScratchSpc)
