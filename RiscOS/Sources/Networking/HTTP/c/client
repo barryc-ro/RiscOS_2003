@@ -4,6 +4,7 @@
 
  */
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -104,6 +105,7 @@ static char *transitions[] =
 /* internal certificate structure */
 typedef struct http_cert_info http_cert_info;
 typedef struct http_cert_context http_cert_context;
+typedef struct http_slot_info http_slot_info;
 
 /* There are one of these structures for each certificate found on the
  * token during the client certificate callback.  */
@@ -126,9 +128,19 @@ struct http_cert_info
     X509 *x509;			/* x509 structure version of 'data' used when file-based */
 
 #if FLAVOUR_PKCS11
+    int slot_index;		/* slot this came from */
     CK_OBJECT_HANDLE key_object; /* key object from the token that matches this cert */
 #endif
 };
+
+#if FLAVOUR_PKCS11
+struct http_slot_info
+{
+    CK_SLOT_ID slot_id;		/* slots on token being used */
+    CK_SESSION_HANDLE session;	/* open session handle used for all Cryptki calls */
+    int need_to_logout;		/* did we have to log in ourselves to access the token? */
+};
+#endif
 
 /* One of these context structures is created when the client cert
  * callback is first called and attached to the SSL connection
@@ -139,16 +151,15 @@ struct http_cert_context
     http_cert_info *cert_list;	/* head of list of certificates */
 
 #if FLAVOUR_PKCS11
-    CK_SLOT_ID slot;		/* slot on token being used */
-    CK_SESSION_HANDLE session;	/* open session handle used for all Cryptki calls*/
+    http_slot_info *slots;
+    int n_slots;
+
+    CK_RV last_rv;
 #endif /* FLAVOUR_PKCS11 */
-    int need_to_logout;		/* did we have to log in ourselves to access the token? */
+
     int which_cert;		/* index of certificate chosen by user */
 
     certop_state state;		/* current state */
-#if FLAVOUR_PKCS11
-    CK_RV last_rv;
-#endif /* FLAVOUR_PKCS11 */
 
     STACK *CA_list;		/* [] X509_NAME * really */
     
@@ -236,6 +247,10 @@ static char *extract_name(const char *dn, const char *field)
 
     if ((s1 = strstr(s, field)) != NULL)
     {
+	const char *in;
+	char *out;
+	char c;
+	
 	/* inc past the match string */
 	s1 += strlen(field);
 	
@@ -243,7 +258,42 @@ static char *extract_name(const char *dn, const char *field)
 	s2 = strchr(s1, '/');
 	if (s2)
 	    *s2 = 0;
+	
+	/* unescape any necessary characters */
+	in = s1;
+	out = s1;
+	while ((c = *in++) != 0)
+	{
+	    if (c == '\\')
+	    {
+		switch (in[0])
+		{
+		case 'x':
+		    if ( isxdigit(in[1]) && isxdigit(in[2]) )
+		    {
+			char hex[3];
+			hex[0] = in[1];
+			hex[1] = in[2];
+			hex[2] = 0;
+			c = (char)strtoul(hex, NULL, 16);
+			in += 3;
+		    }
+		    break;
 
+		case 0:
+		    c = 0;
+		    break;
+		    
+		default:
+		    c = *in++;
+		    break;
+		}
+	    }
+	    *out++ = c;
+	}
+	*out = 0;
+
+	/* copy processed string */
 	descr = mm_strdup(s1);
     }
 
@@ -393,7 +443,7 @@ static void cert_list_free( http_cert_info **pcert_list )
 }
 
 #if FLAVOUR_PKCS11
-static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, STACK *CA_list, http_cert_info **pcert_list)
+static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, STACK *CA_list, int slot_index, http_cert_info **pcert_list)
 {
     CK_RV rv, rv2;
 
@@ -468,6 +518,10 @@ static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, 
 
 		    if (cert)
 		    {
+			/* record which slot this came from */
+			cert->slot_index = slot_index;
+			
+			/* copy over data from the card */
 			cert->data_len = (size_t)cert_attributes[0].ulValueLen;
 			cert_attributes[0].pValue = cert->data = mm_malloc( cert->data_len );
 
@@ -488,12 +542,13 @@ static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, 
 			{
 			    fdebugf( log_file, "Failed to get cert attributes, rv = 0x%lx\n", rv);
 			}
+
 			/* Compare label with a mask string. The label
                            length is known and the mask string will be
                            terminated. */
 			else if (label_mask && cert->label && strncmp(cert->label, label_mask, cert->label_len) != 0)
 			{
-			    fdebugf( log_file, "Label didn't match - ignoring (%s)\n", cert->label);
+			    fdebugf( log_file, "Label didn't match - ignoring (%.*s)\n", cert->label_len, cert->label);
 			}
 			else
 			{
@@ -543,14 +598,50 @@ static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, 
 
     fdebugf( log_file, "cert_list_get: got %p\n", cert_list );
 
-    *pcert_list = cert_list;
+    /* add new certs to old list */
+    if (cert_list)
+    {
+	if (*pcert_list == NULL)
+	{
+	    *pcert_list = cert_list;
+	}
+	else
+	{
+	    http_cert_info *c = *pcert_list;
+	    while (c->next)
+		c = c->next;
+	    c->next = cert_list;
+	}
+    }
 
     return rv;
 }
 
 /* ------------------------------------------------------------------------- */
 
-static CK_RV get_slot(CK_SLOT_ID_PTR pSlot)
+static BOOL is_slot_suitable(CK_SLOT_ID slot_id)
+{
+    CK_SLOT_INFO slotinfo;
+    CK_RV rv;
+    BOOL suitable = FALSE;
+
+    fdebugf( log_file, "get_slot: slot id %ld \n", slot_id );
+    
+    if ((rv = C_GetSlotInfo(slot_id, &slotinfo)) == CKR_OK)
+    {
+	fdebugf( log_file, "get_slot: id %ld '%.*s' flags 0x%lx \n", slot_id,
+		 sizeof(slotinfo.slotDescription), slotinfo.slotDescription, slotinfo.flags );
+
+	if ((slotinfo.flags & (CKF_HW_SLOT|CKF_TOKEN_PRESENT)) == (CKF_HW_SLOT|CKF_TOKEN_PRESENT))
+	{
+	    suitable = TRUE;
+	}
+    }
+
+    return suitable;
+}
+
+static CK_RV get_slots(http_slot_info **ppSlot, int *pSlotCount)
 {
     CK_RV rv;
     CK_ULONG SlotCount;
@@ -579,38 +670,52 @@ static CK_RV get_slot(CK_SLOT_ID_PTR pSlot)
 
     fdebugf( log_file, "get_slot: rv 0x%lx pSlotList %p SlotCount %ld -- end\n", rv, pSlotList, SlotCount );
 
-    /* see which is suitable (HW slot)*/
-    *pSlot = INVALID_SLOT;
+    /* see which are suitable (HW slot with token) */
     if (rv == CKR_OK)
     {
-	int i;
-	for (i = 0; rv == CKR_OK && i < SlotCount && *pSlot == INVALID_SLOT; i++)
+	http_slot_info *slots;
+	int i, count = 0;
+
+	slots = mm_calloc(sizeof(*slots), (size_t)SlotCount);
+	for (i = 0; i < SlotCount; i++)
+	    if ( is_slot_suitable(pSlotList[i]) )
+		slots[count++].slot_id = pSlotList[i];
+	
+	*ppSlot = slots;
+	*pSlotCount = count;
+
+	fdebugf( log_file, "get_slot: useable slots @ %p count %ld\n", slots, count );
+    }
+
+    mm_free(pSlotList);
+    
+    return rv;
+}
+
+static void slots_close(http_cert_context *ctx)
+{
+    int i;
+    for (i = 0; i < ctx->n_slots; i++)
+    {
+	http_slot_info *info = &ctx->slots[i];
+
+	if ( info->session )
 	{
-	    CK_SLOT_INFO slotinfo;
-
-	    fdebugf( log_file, "get_slot: %d slot id %ld \n", i, pSlotList[i] );
-	    
-	    if ((rv = C_GetSlotInfo(pSlotList[i], &slotinfo)) == CKR_OK)
+	    if ( info->need_to_logout )
 	    {
-		fdebugf( log_file, "get_slot: %d '%.*s' flags 0x%lx \n", i, sizeof(slotinfo.slotDescription), slotinfo.slotDescription, slotinfo.flags );
-
-		if ((slotinfo.flags & (CKF_HW_SLOT|CKF_TOKEN_PRESENT)) == (CKF_HW_SLOT|CKF_TOKEN_PRESENT))
-		{
-		    *pSlot = pSlotList[i];
-		}
+		C_Logout( info->session );
+		info->need_to_logout = FALSE;
 	    }
+	
+	    C_CloseSession( info->session );
+	    info->session = NULL;
 	}
     }
 
-#if BORDER_DEBUG
-    border((*pSlot != INVALID_SLOT) ? 1 : 0); /* green or red */
-#endif
-    
-    fdebugf( log_file, "get_slot: %ld rv 0x%lx\n", *pSlot, rv );
-
-    free(pSlotList);
-
-    return rv;
+    mm_free(ctx->slots);
+    ctx->slots = NULL;
+	
+    ctx->n_slots = 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -744,19 +849,8 @@ static void cert_context_close( http_cert_context *ctx )
 	cert_list_free( &ctx->cert_list );
 
 #if FLAVOUR_PKCS11
-	if ( ctx->session )
-	{
-	    if ( ctx->need_to_logout )
-	    {
-		C_Logout( ctx->session );
-		ctx->need_to_logout = FALSE;
-	    }
+	slots_close( ctx );
 	
-	    C_CloseSession( ctx->session );
-	    ctx->session = NULL;
-	}
-
-	ctx->slot = INVALID_SLOT;
 	ctx->last_rv = CKR_OK;
 #endif /* FLAVOUR_PKCS11 */
 	
@@ -814,7 +908,7 @@ static void build_return_values( const http_cert_context *ctx, const http_cert_i
     /* build our private key structure, stores session handle and key
      * object handle */
     info = mm_calloc(sizeof(*info), 1);
-    info->hSession = ctx->session;
+    info->hSession = ctx->slots[cert->slot_index].session;
     info->hKeyObject = cert->key_object;
     
     /* Create an RSA structure with our smartcard methods, and attach
@@ -944,14 +1038,25 @@ static void process_token_given( http_cert_context *ctx )
     
 	fdebugf( log_file, "process_token_given: ctx %p\n", ctx );
 
-	if ((rv = get_slot(&ctx->slot)) == CKR_OK)
+	slots_close( ctx );
+	
+	if ((rv = get_slots( &ctx->slots, &ctx->n_slots )) == CKR_OK)
 	{
-	    if (ctx->slot != INVALID_SLOT)
+	    if (ctx->n_slots != 0)
 	    {
-		ctx->token_count ++;
+		int slot_index;
 
-		if ((ctx->session != NULL || (rv = C_OpenSession(ctx->slot, CKF_SERIAL_SESSION, NULL, NULL, &ctx->session)) == CKR_OK) &&
-		    (rv = cert_list_get(ctx->session, AUTHENTICATION_MASK, ctx->CA_list, &ctx->cert_list)) == CKR_OK)
+		ctx->token_count ++;
+		
+		/* for each slot check for suitable certificates*/
+		for ( slot_index = 0; slot_index < ctx->n_slots && rv == CKR_OK; slot_index++ )
+		{
+		    http_slot_info *slot = &ctx->slots[slot_index];
+		    if ( (rv = C_OpenSession( slot->slot_id, CKF_SERIAL_SESSION, NULL, NULL, &slot->session )) == CKR_OK )
+			rv = cert_list_get( slot->session, AUTHENTICATION_MASK, ctx->CA_list, slot_index, &ctx->cert_list );
+		}
+
+		if ( rv == CKR_OK )
 		{
 		    select_state_with_cert_list( ctx );
 		}
@@ -999,11 +1104,6 @@ static void process_token_given( http_cert_context *ctx )
 
 static void process_cert_chosen( http_cert_context *ctx, http_certop_data_cert_chosen *data )
 {
-#if FLAVOUR_PKCS11
-    CK_RV rv;
-    CK_SESSION_INFO sess_info;
-#endif /* FLAVOUR_PKCS11 */
-    
     fdebugf( log_file, "process_cert_chosen: ctx %p\n", ctx );
 
     /* store the selected cert index */
@@ -1012,8 +1112,13 @@ static void process_cert_chosen( http_cert_context *ctx, http_certop_data_cert_c
 #if FLAVOUR_PKCS11
     if (ctx->use_cryptobox)
     {
+	CK_SESSION_INFO sess_info;
+	CK_RV rv;
+	http_cert_info *cert = cert_lookup( ctx->cert_list, ctx->which_cert );
+	http_slot_info *slot = &ctx->slots[ cert->slot_index ];
+
 	/* try and open a session */
-	if ((rv = C_GetSessionInfo(ctx->session, &sess_info )) == CKR_OK)
+	if ( (rv = C_GetSessionInfo( slot->session, &sess_info )) == CKR_OK )
 	{
 	    if (sess_info.state != CKS_RO_USER_FUNCTIONS)
 		set_state(ctx, state_PIN_REQUIRED);
@@ -1048,10 +1153,6 @@ static void process_cert_chosen( http_cert_context *ctx, http_certop_data_cert_c
 
 static void process_pin_entered( http_cert_context *ctx, http_certop_data_pin_entered *data )
 {
-#if FLAVOUR_PKCS11
-    CK_RV rv;
-#endif /* FLAVOUR_PKCS11 */
-
     fdebugf( log_file, "process_pin_entered: ctx %p pin %.*s (%d)\n", ctx, data->pin_len, data->pin, data->pin_len );
 
     ctx->pin_count++;
@@ -1059,10 +1160,14 @@ static void process_pin_entered( http_cert_context *ctx, http_certop_data_pin_en
 #if FLAVOUR_PKCS11
     if (ctx->use_cryptobox)
     {
+	CK_RV rv;
+	http_cert_info *cert = cert_lookup( ctx->cert_list, ctx->which_cert );
+	http_slot_info *slot = &ctx->slots[ cert->slot_index ];
+
 	/* try and login */
-	if ((rv = C_Login(ctx->session, CKU_USER, (CK_CHAR_PTR)data->pin, data->pin_len )) == CKR_OK)
+	if ( (rv = C_Login( slot->session, CKU_USER, (CK_CHAR_PTR)data->pin, data->pin_len )) == CKR_OK )
 	{
-	    ctx->need_to_logout = TRUE;
+	    slot->need_to_logout = TRUE;
 
 	    set_state(ctx, state_LOGGED_IN);
 	}
@@ -1097,10 +1202,6 @@ static void process_pin_entered( http_cert_context *ctx, http_certop_data_pin_en
 
 static void process_read_pkey( http_cert_context *ctx )
 {
-#if FLAVOUR_PKCS11
-    CK_RV rv;
-#endif /* FLAVOUR_PKCS11 */
-
     http_cert_info *cert;
 
     fdebugf( log_file, "process_read_pkey: ctx %p\n", ctx );
@@ -1110,7 +1211,10 @@ static void process_read_pkey( http_cert_context *ctx )
 #if FLAVOUR_PKCS11
     if (ctx->use_cryptobox)
     {
-	if ((rv = get_private_key( ctx->session, cert->id, cert->id_len, &cert->key_object )) == CKR_OK)
+	CK_RV rv;
+	const http_slot_info *slot = &ctx->slots[ cert->slot_index ];
+
+	if ((rv = get_private_key( slot->session, cert->id, cert->id_len, &cert->key_object )) == CKR_OK)
 	{
 	    set_state(ctx, state_GOT_PKEY);
 	}
@@ -1480,6 +1584,10 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
     int rc = rc_FAILED;
     http_cert_context *ctx;
 
+#if BORDER_DEBUG
+    BORDER_RED;
+#endif
+    
     /* get the context */
     ctx = (http_cert_context *) SSL_get_app_data( ssl );
 
@@ -1491,7 +1599,12 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
 
 	ctx = cert__ctx;
 	if (!ctx)
+	{
+#if BORDER_DEBUG
+	    BORDER_YELLOW;
+#endif
 	    return rc_FAILED;
+	}
 
 	/* if there is an attempt to get client certs in progress
            already then just return waiting. This will keep on
@@ -1603,6 +1716,10 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
 	ctx->CA_list = NULL;
     }
     
+#if BORDER_DEBUG
+    BORDER_GREEN;
+#endif
+
     return rc;
 }
 
@@ -1903,7 +2020,7 @@ void client_cli_read_certificates(void)
     process_token_given( ctx );
     if (ctx->last_rv != CKR_OK)
     {
-	fprintf(stderr, "token_given: slot %d error %lx:\n", ctx->slot, ctx->last_rv);
+	fprintf(stderr, "token_given: n slots %d error %lx:\n", ctx->n_slots, ctx->last_rv);
     }
 
     if (ctx->last_rv == CKR_OK)
@@ -1917,8 +2034,8 @@ void client_cli_read_certificates(void)
 	     cert;
 	     i++, cert = cert->next)
 	{
-	    printf(" %2d: label '%.*s' description '%s'\n",
-		    i + 1, cert->label_len, cert->label, cert->descr ? cert->descr : "");
+	    printf(" %2d: slot %d label '%.*s' description '%s'\n",
+		    i + 1, cert->slot_index, cert->label_len, cert->label, cert->descr ? cert->descr : "");
 	}
 
 	if (i > 1)
