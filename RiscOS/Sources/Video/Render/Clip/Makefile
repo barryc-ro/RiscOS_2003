@@ -54,6 +54,12 @@ resources:
         $(CP) LocalRes:Messages $(RESDIR).$(COMPONENT).Messages
         @echo $(COMPONENT): resource files copied
 
+install: $(TARGET)
+        $(MKDIR) $(INSTDIR)
+        $(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+        $(CP) LocalRes:Messages $(INSTDIR).Messages $(CPFLAGS)
+        @echo $(COMPONENT): module installed
+
 clean:
         $(WIPE) o $(WFLAGS)
         $(WIPE) rm $(WFLAGS)
