@@ -13,40 +13,18 @@
 #
 
 EXP_HDR		= <export$dir>
-LIBDIR		= <Lib$Dir>
+LIBDIR		= <Lib$Dir>.${COMPONENT}
 
 
 # ------------------------------------------------------------------------------
 # Generic options
 #
 
-MKDIR		= cdir
-AS		= objasm
-CP		= copy
-CC		= cc
-CM		= cmhg
-RM		= remove
-LD		= link
-LB		= libfile
-WIPE		= -wipe
+include Makefiles:StdTools
 
-CCFLAGS		= -c -zm -zps1 -Wp -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
+CCFLAGS		= -c -zm -zps1 -Wp -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -quit
-CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
-WFLAGS		= ~CFR~V
-
-
-# ------------------------------------------------------------------------------
-# Libraries
-#
-
-CLIB		= CLIB:o.stubs
-RLIB		= RISCOSLIB:o.risc_oslib
-RSTUBS		= RISCOSLIB:o.rstubs
-ROMSTUBS	= RISCOSLIB:o.romstubs
-ROMCSTUBS	= RISCOSLIB:o.romcstubs
-ABSSYM		= RISC_OSLib:o.AbsSym
 
 
 # ------------------------------------------------------------------------------
@@ -98,21 +76,23 @@ clean:
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.callx dirs
-	${CP}	h.callx		${LIBDIR}.${COMPONENT}.h.callx	${CPFLAGS}
+	${CP}	h.callx		${LIBDIR}.h.callx	${CPFLAGS}
+	${MKDIR} ${LIBDIR}.Docs
+	${CP}	!ReadMe		${LIBDIR}.Docs.callx	${CPFLAGS}
+	${CP}	VersionNum	${LIBDIR}.LibVersion	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} dirs
-	${CP}	${TARGET}	${LIBDIR}.${COMPONENT}.o.${TARGET}	${CPFLAGS}
+	${CP}	${TARGET}	${LIBDIR}.o.${TARGET}	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (libs)
 
 local_dirs:
 	${MKDIR} o
 
 dirs:
-	${MKDIR} ${LIBDIR}
-	${MKDIR} ${LIBDIR}.callx
-	${MKDIR} ${LIBDIR}.callx.h
-	${MKDIR} ${LIBDIR}.callx.o
+	${MKDIR} ${LIBDIR}.Docs
+	${MKDIR} ${LIBDIR}.h
+	${MKDIR} ${LIBDIR}.o
         
 
 # ------------------------------------------------------------------------------
@@ -120,7 +100,7 @@ dirs:
 #
 
 ${TARGET}: ${OBJS} local_dirs
-	${LB} ${LBFLAGS} -o ${TARGET} ${OBJS}
+	${AR} ${ARFLAGS} -o ${TARGET} ${OBJS}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
