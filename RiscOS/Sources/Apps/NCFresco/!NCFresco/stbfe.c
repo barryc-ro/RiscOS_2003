@@ -1886,7 +1886,7 @@ int fe_check_download_finished(fe_view v)
 	    }
 #endif
 	    if (strncmp(top->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
-		pointer_limit(top->box.x0, top->box.y0, top->box.x1, top->box.y1);
+		pointer_limit(top->box.x0, top->box.y0, top->box.x1-frontend_dx, top->box.y1-frontend_dy);
 	}
 	else
 	{
