@@ -890,7 +890,12 @@ checkversion
         TEQLT   R0,R0                   ; If 200 <= v < 300 Then v=200 !
         BEQ     %FT01
        [ true
+       [ ChildWindows
+        TEQ     R0,#380
+        LDRNE   R0,=310                 ; unless v=380, set v=310
+       |
         LDR     R0,=310                 ; IF v>300 Then v=310
+       ]
         TEQ     R0,R0
         |
         LDR     R14,=310
@@ -1329,7 +1334,9 @@ int_setmode     ROUT
 
         Push    "R0-R2,LR"
 
-
+      [ ChildWindows
+        BL      int_flush_opens         ; do this BEFORE the mode change
+      ]
 
         MOV     R14,#6                  ; read current pointer position
         STRB    R14,[sp,#-8]!           ; (not buffered)
@@ -1637,6 +1644,15 @@ int_allbutmode ROUT
         BL      readvduvars2            ; including screen size
         BL      calcborders             ; ignore errors
 ;
+; assert that there are no opens pending at this point
+;
+      [ debug :LAND: ChildWindows
+        LDRB    R14,openspending
+        TEQ     R14,#0
+        MOVNE   R14,#0
+        STRNE   R14,[R14]               ; crash!
+      ]
+;
 ; recalculate border positions for all (created) windows
 ;
         Push    "R1-R2,x0,y0,x1,y1,handle"
@@ -1661,10 +1677,18 @@ int_allbutmode ROUT
         BIC     y1,y1,R0
         BIC     R11,R11,R0       ; scroll y
         STMIA   R14,{x0,y0,x1,y1,R10,R11}
+      [ ChildWindows
+        ADD     R14,R14,#w_old_wax0 - w_wax0    ; keep 'old' position in step
+        STMIA   R14,{x0,y0,x1,y1,R10,R11}
+      ]
         Pull    "R10,R11"
         BL      calc_w_x0y0x1y1
         ADD     R14,handle,#w_x0
         STMIA   R14,{x0,y0,x1,y1}
+      [ ChildWindows
+        ADD     R14,handle,#w_old_x0            ; keep 'old' outline in step
+        STMIA   R14,{x0,y0,x1,y1}
+      ]
         B       %BT01
 02
         Pull    "R1,R2,x0,y0,x1,y1,handle"
@@ -2225,8 +2249,12 @@ inittasks
 ;
         ADRL    R1, allwinds+lh_indicator
         STR     R1, allwinds+lh_forwards
+      [ ChildWindows
+        STR     R0, allwinds+lh_indicator
+      |
         MOV     R1, #nullptr
         STR     R1, allwinds+lh_indicator
+      ]
         ADRL    R1, allwinds+lh_forwards
         STR     R1, allwinds+lh_backwards
 ;
@@ -2234,10 +2262,37 @@ inittasks
 ;
         ADRL    R1, activewinds+lh_indicator
         STR     R1, activewinds+lh_forwards
+      [ ChildWindows
+        STR     R0, activewinds+lh_indicator
+      |
         MOV     R1, #nullptr
         STR     R1, activewinds+lh_indicator
+      ]
         ADRL    R1, activewinds+lh_forwards
         STR     R1, activewinds+lh_backwards
+;
+; Initialise old active winds list to be empty
+;
+      [ ChildWindows
+        ADRL    R1, oldactivewinds+lh_indicator
+        STR     R1, oldactivewinds+lh_forwards
+        STR     R0, oldactivewinds+lh_indicator
+        ADRL    R1, oldactivewinds+lh_forwards
+        STR     R1, oldactivewinds+lh_backwards
+;
+; Initialise opening winds list to be empty
+; NB: This must be done BEFORE initrectptrs is first called
+;
+        ADRL    R1, openingwinds+lh_indicator
+        STR     R1, openingwinds+lh_forwards
+        STR     R0, openingwinds+lh_indicator
+        ADRL    R1, openingwinds+lh_forwards
+        STR     R1, openingwinds+lh_backwards
+;
+; Initialise heldoverwinds to null (this is a singly-linked list)
+;
+        STR     R0, heldoverwinds
+      ]
 ;
 ; reset mouse flags, buttons etc.
 ;
@@ -2247,6 +2302,9 @@ inittasks
         STRB    R0,dotdash2
 ;
         MOV     R0,#0
+      [ ChildWindows
+        STRB    R0,openspending
+      ]
         STRB    R0,memoryOK
         STR     R0,menus_temporary      ; there aren't any!
         STR     R0,dragtype
@@ -2307,6 +2365,9 @@ inittasks
         STR     R14,backwindowhandle    ; created when Wimp_Init called 1st
         STR     R14,errorhandle         ; created when Wimp_Init called 1st
         STR     R14,headpointer         ; no messages on queue
+      [ NKmessages1
+        STR     R14,lastpointer
+      ]
         STR     R14,iconbarhandle       ; no iconbar window
         STR     R14,iconbarleft+icd_list        ; no filing system icons
         STR     R14,iconbarright+icd_list       ; no accessory icons
@@ -2336,7 +2397,7 @@ inittasks
 ; set up free pointers for rectangle area
 ;
 
-initrectptrs
+initrectptrs    ROUT
         Push    "R0-R2,LR"
 ;
         Debug   xx,"initptrs; taskcount =",#taskcount
@@ -2365,6 +2426,21 @@ clearrlinks
         CMP     R1,R2
         BCC     clearrlinks
 ;
+; rectangle area has been cleared, so openingwinds -> #w_oldwindowrects must be set to NULL
+;
+      [ ChildWindows
+        LDR     R1,openingwinds + lh_forwards
+
+01      LDR     R14,[R1,#ll_forwards]
+        CMP     R14,#nullptr
+
+        MOVNE   R14,#nullptr
+        STRNE   R14,[R1,#w_oldwindowrects - w_opening_link]
+
+        LDRNE   R1,[R1,#ll_forwards]
+        BNE     %BT01
+      ]
+;
         Debug   xx,"initptrs; taskcount =",#taskcount
 ;
         Pull    "R0-R2,PC"
@@ -2374,7 +2450,7 @@ clearrlinks
 ; That should also remove input focus etc.
 ;
 
-wipewindows
+wipewindows     ROUT
         Push    "R1,R5-R7,handle,LR"
 ;
         LDR     R7,taskhandle
@@ -2408,6 +2484,7 @@ wipelp
 ; Otherwise, delete the next window.
 ;
         SUB     R0,R0,#w_all_link
+        Debug   opn,"**** Deleting task's remaining window",R7,R0
         Rel     R0,R0
         BL      int_delete_window
 wipenext
@@ -2759,11 +2836,18 @@ setfontcolours
 ;; Force_Redraw - mark specified region invalid - will be redrawn later
 ;; Entry:  R0 = window handle (if -1, then consider whole screen)
 ;;         R1-R4 = x0,y0,x1,y1 - box to make invalid
+;;    or:  R0 = window handle
+;;         R1 = "TASK"
+;;         R2 = border icon to redraw (3 => title bar, others reserved)
 ;;-----------------------------------------------------------------------------
 
 SWIWimp_ForceRedraw
         BL      checkredrawhandle
-        BVS     ExitWimp
+      [ ChildWindows
+        BL      int_flush_opens         ; it's too complicated - wimp out for now!
+      |
+        BVS     ExitWimp                ; this is pointless
+      ]
 ;
         MOV     handle,R0               ; now only -1 => redraw whole screen
         CMP     handle,#-1              ; (-2 => redraw icon bar)
@@ -2772,6 +2856,12 @@ SWIWimp_ForceRedraw
         BL      checkhandle_iconbar
         BVS     ExitWimp
 ;
+      [ ChildWindows
+        LDR     R14,taskidentifier
+        TEQ     R1,R14                  ; watch out for the 'special' value
+        BEQ     force_redraw_special
+      ]
+
         Push    "R1-R4"
         Pull    "x0,y0,x1,y1"
         BL      int_force_redraw
@@ -2790,6 +2880,62 @@ markscreeninvalid
         BL      markinvalid_cx0cy0cx1cy1
         B       ExitWimp
 
+      [ ChildWindows
+
+force_redraw_special
+
+        CMP     R2,#1
+        RSBGES  R14,R2,#7
+        MOVGE   R0,R2                           ; ignore all values except 1 to 7
+        BLGE    int_force_redraw_border
+
+        B       ExitWimp
+
+;..............................................................................
+
+; In    R0 = border icon number
+;       handle -> window definition
+; Out   old visible portion of relevant border icon invalidated
+;       R0,R1,x0,y0,x1,y1 corrupted
+; Note that this routine must NOT be called within int_flush_opens, after we've copied invalidrects to oldinvalidrects
+
+int_force_redraw_border  ENTRY
+
+        LDR     R1,[handle,#w_old_flags]
+        ASSERT  wf_icon1 = 1 :SHL: 24
+        MOV     R14,#1 :SHL: 23
+        TST     R1,R14,LSL R0                   ; was this icon enabled?
+        TSTNE   R1,#ws_open                     ; and was the window open?
+        EXIT    EQ
+
+        ADD     R14,handle,#w_old_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        BL      calc_w_iconposn_R1              ; get OLD icon position
+
+        Debug   opn,"int_force_redraw_border",R0,x0,y0,x1,y1
+
+        BL      oldvisibleportion_x0y0x1y1
+        MOV     R1,#wf_inborder
+        BL      oldsubtract_children            ; clip out child windows that could overlap the title bar
+      [ debug
+        Push    "handle,userblk"
+        SetRectPtrs
+        LDR     R1,[rectlinks,#windowrects]
+        CMP     R1,#nullptr
+        BNE     %FT01
+        Debug   opn,"**** int_force_redraw_border clipped out"
+        B       %FT02
+01
+        getxy   R1,cx,cy
+        Debug   opn,"int_force_redraw_border first rectangle:",cx0,cy0,cx1,cy1
+02
+        Pull    "handle,userblk"
+      ]
+        BL      markinvalidrects                ; we can do this either during int_flush_open, or after int_flush_opens has finished
+        BL      losewindowrects
+
+        EXIT
+      ]
 
 ;;-----------------------------------------------------------------------------
 ;; Create_Window - set up window definition from parameter block
@@ -2855,6 +3001,29 @@ crw5e
         LDR     R14,taskhandle
         STR     R14,[handle,#w_taskhandle]
 
+      [ ChildWindows
+        ASSERT  lh_forwards=0 :LAND: lh_indicator=4 :LAND: lh_backwards=8
+
+        ADD     R2,handle,#w_children + lh_indicator
+        MOV     R3,#nullptr
+        ADD     R4,handle,#w_children + lh_forwards
+        ADD     R14,handle,#w_children
+        STMIA   R14,{R2-R4}
+        STR     R3,[handle,#w_parent]                           ; default to top-level when opening
+
+        ADD     R2,handle,#w_old_children + lh_indicator
+        MOV     R3,#nullptr
+        ADD     R4,handle,#w_old_children + lh_forwards
+        ADD     R14,handle,#w_old_children
+        STMIA   R14,{R2-R4}
+        STR     R3,[handle,#w_old_parent]
+        STR     R3,[handle,#w_oldwindowrects]
+
+        MOV     R14,#0
+        STR     R14,[handle,#w_alignflags]                      ; all alignment flags default to zero
+        STR     R14,[handle,#w_old_flags]
+        STR     R14,[handle,#w_opening_link + ll_forwards]      ; not on the list of opening windows
+      ]
 
         ; Window is now completely valid
 
@@ -2902,7 +3071,7 @@ crw5e
         ADD     R14,handle,#w_wex0
         LDMIA   R14,{x0,y0,x1,y1}
         BL      checkextent
-        Pull    "PC",VS
+        Pull    "PC",VS                         ; urk - we should really delete the window if this fails!
         ADD     R14,handle,#w_wex0
         STMIA   R14,{x0,y0,x1,y1}
 
@@ -2911,10 +3080,35 @@ crw5e
         STR     R14,[handle,#w_origflags]                        ; for automatic scroll bars
  ]
 ;
+; set up window outline from work area and flags (allows Wimp_GetWindowOutline to be called)
+;
+      [ ChildWindows
+        ADD     R1,handle,#w_wax0
+        LDMIA   R1,{x0,y0,x1,y1}
+        BL      calc_w_x0y0x1y1                 ; calculate x0,y0,x1,y1
+        ADD     R1,handle,#w_x0
+        STMIA   R1,{x0,y0,x1,y1}
+;
+; copy all window data (makes it easier to check that old window data is correct)
+;
+        ASSERT  (w_old_end - w_old_parent ) = 13*4
+        ASSERT  handle = R10
+
+        ADD     R14,handle,#w_parent            ; copy from new data to old
+        ADD     R9, handle,#w_old_parent
+        LDMIA   R14!,{R0-R6}
+        STMIA   R9!, {R0-R6}                    ; copy first 7 words
+        LDMIA   R14!,{R0-R5}
+        STMIA   R9!, {R0-R5}                    ; then the next 6 words
+      ]
+;
 ; return handle of window to the user
 ;
         Rel     R0,handle
-        Debug   crw,"Window created with handle ",R0
+      [ debug
+        LDR     R14,[handle,#w_opening_link+ll_forwards]
+        Debug   crw,"Window created with handle/opening_link",R0
+      ]
         Pull    "PC"
 
 ;
@@ -2923,16 +3117,34 @@ crw5e
 
 bodgewindowflags
         Push    "LR"
-;
+
+      [ ChildWindows
+        LDRB    R14,[handle,#w_tfcol]           ; if title fg colour=255 ...
+        TEQ     R14,#&FF
+        LDRNE   R14,[handle,#w_flags]           ; ... cancel all border bits
+        BNE     %FT01
+
+        LDR     R14,taskhandle                  ; but only if task doesn't know about Wimp 3.80
+        CMP     R14,#0
+        MOVLE   R14,#380                        ; treat the system task as knowing what to do
+        LDRGT   R14,[wsptr,R14]
+        LDRGT   R14,[R14,#task_wimpver]
+        CMP     R14,#380
+        LDR     R14,[handle,#w_flags]
+        BICLT   R14,R14,#wf_iconbits
+        BICLT   R14,R14,#wf_title:OR:wf_vscroll:OR:wf_hscroll:OR:wf_nobackquit
+01
+      |
         LDRB    R14,[handle,#w_tfcol]           ; if title fg colour=255 ...
         TEQ     R14,#&FF
         LDR     R14,[handle,#w_flags]           ; ... cancel all border bits
         BICEQ   R14,R14,#wf_iconbits
         BICEQ   R14,R14,#wf_title:OR:wf_vscroll:OR:wf_hscroll:OR:wf_nobackquit
+      ]
         TST     R14,#wf_newformat
         BICEQ   R14,R14,#wf_iconbits            ; cancel 'other' bits
         BICNE   R14,R14,#wf_title:OR:wf_vscroll:OR:wf_hscroll:OR:wf_nobackquit
-;
+
         TST     R14,#wf_title
         ORRNE   R14,R14,#wf_icon1:OR:wf_icon2:OR:wf_icon3
         TST     R14,#wf_nobackquit
@@ -2972,36 +3184,48 @@ crwerror2
 ;;----------------------------------------------------------------------------
 
 SWIWimp_SetExtent
+
+        Debug   err,"Wimp_SetExtent task,handle",#taskhandle,R0
+
         MOV     handle,R0
         BL      checkhandle_owner               ; window must be owned by task
         BVS     ExitWimp
-;
+
         LDMIA   userblk,{x0,y0,x1,y1}
         BL      checkextent
         ADDVC   R14,handle,#w_wex0
         STMVCIA R14,{x0,y0,x1,y1}
-;
-        BLVC    calctoggle                      ; reset flag word if nec.
-;
+
+        BLVC    calctoggle                      ; calls int_force_redraw_border if toggle bit changes
+
+      [ ChildWindows
+        MOVVC   R0,#5
+        BLVC    int_force_redraw_border         ; redraw vertical scrollbar (if present)
+
+        MOVVC   R0,#7
+        BLVC    int_force_redraw_border         ; redraw horizontal scrollbar (if present)
+      |
         LDRVC   x0,[handle,#w_wax1]             ; vertical scroll bar
         LDRVC   y0,[handle,#w_way0]
         LDRVC   x1,[handle,#w_x1]
         LDRVC   y1,[handle,#w_y1]               ; (including toggle box)
         BLVC    visibleportion_x0y0x1y1
         BLVC    markinvalidrects
-;
+
         LDRVC   x0,[handle,#w_wax0]             ; horizontal scroll bar
         LDRVC   y0,[handle,#w_y0]
         LDRVC   x1,[handle,#w_wax1]
         LDRVC   y1,[handle,#w_way0]
         BLVC    visibleportion_x0y0x1y1
         BLVC    markinvalidrects
-;
+      ]
+
         BLVC    recalcdrag                      ; if window is being dragged
-;
+
         B       ExitWimp
 
-;
+;.............................................................................
+
 ; Ensure window extent is not smaller than the minimum window size!
 ; In    x0,y0,x1,y1 = new extent of window
 ;       handle -> window data (ie. absolute handle of window)
@@ -3173,6 +3397,10 @@ SWIWimp_DeleteWindow
 ;
         B       ExitWimp
 
+      [ ChildWindows
+        LTORG                           ; we need one of these sometime!
+      ]
+
 int_delete_window
         Push    "R1-R9,LR"
         Debug   crw,"Deleting window",R0
@@ -3208,6 +3436,31 @@ int_delete_window
         BL      int_close_window
         Pull    "R1"                    ; R1 = relative handle
         Pull    "R1-R9,PC",VS           ; preserve R0
+;
+; close the window's children (so we can delete it once we've flushed the opens)
+;
+      [ ChildWindows
+        Push    "handle"
+
+        LDR     handle,[handle,#w_children + lh_forwards]
+02
+        ASSERT  ll_forwards = 0
+        LDR     R14,[handle],#-w_active_link
+        CMP     R14,#nullptr
+        BEQ     %FT03
+
+        BL      int_close_window        ; must call this so we get the child window on the 'opening' list
+
+        LDR     handle,[handle,#w_active_link + ll_forwards]
+        B       %BT02
+03
+        Pull    "handle"
+;
+; For now we just call int_flush_opens to ensure that the window isn't on the oldactivewinds list
+; TODO: a more sophisticated method would be to defer the discarding of the window block until the next call of int_flush_opens
+;
+        BL      int_flush_opens         ; remove from old window list
+      ]
 ;
 ; Delink window from all-winds list
 ;
@@ -3321,26 +3574,103 @@ goshuffdel
 
 SWIWimp_OpenWindow
         MyEntry "Open_Window"
-;
+
+      [ ChildWindows
+        CMP     userblk,#0              ; If R1=0 or -1 on entry, just flush the pending opens
+        CMPNE   userblk,#nullptr
+        BEQ     doflush
+
+        BL      int_open_window         ; child windows can be opened by a task other than the owner
+        B       ExitWimp
+
+doflush
+        BL      int_flush_opens
+        B       ExitWimp
+      |
         LDR     handle,[userblk,#u_handle]
         BL      checkhandle_owner       ; only check this when SWI entry called
         BLVC    int_open_window
         B       ExitWimp
+      ]
+
+      [ ChildWindows
+        MakeErrorBlock WimpBadParent
+
+openidentifier1         DCB     "TASK"  ; for new-style opens
+      ]
+
+; New version attempts to buffer coordinate changes and do all the invalidation/copying together at the end
+; It also performs auto-aligning of parents and children, and attempts to combine movements of parent and child windows
 
 int_open_window
         Push    "LR"
-;
+
         BL      checkredrawhandle       ; we're going to destroy rectangles!
-;
+
+      [ :LNOT: ChildWindows
         LDRVC   handle,[userblk,#u_handle]
         BLVC    checkhandle             ; handle -> window block
-        BLVC    calc_w_status           ; find out window above us
-      [ debug
-        Push    R0
-        LDR     R0,[userblk,#u_bhandle]
-        Debug   opn,"Opening window,behind:",handle,R0
-        Pull    R0
+      |
+
+        CheckAllWindows "int_open_window (before)"
+
+        LDR     handle,[userblk,#u_handle]
+        BL      checkhandle_iconbar     ; handle -> window block (allow direct opening of iconbar)
+        Pull    "PC",VS
+
+        ; note that int_close_window calls int_start_opens, and we call int_close_window from within int_open_window
+
+        LDR     R14,openidentifier1
+        TEQ     R2,R14
+        LDRNE   R3,[handle,#w_parent]           ; keep same parent
+        LDRNE   R4,[handle,#w_alignflags]       ; and alignment flags
+        BNE     %FT01
+
+        CMP     R3,#nullptr
+        BEQ     %FT06                           ; top-level window
+
+        ; validate parent handle now (and make it absolute)
+
+        Push    "handle"
+        MOV     handle,R3
+        BL      checkhandle_iconbar     ; yes, you can open windows inside the iconbar!
+        MOVVC   R3,handle
+        Pull    "handle"
+        Pull    "PC",VS
+
+        ; check that the proposed parent is not itself a child (or grandchild etc.) of this window
+
+        MOV     R14,R3
+05      CMP     R14,handle
+        MyXError  WimpBadParent,EQ              ; can't nest a window inside itself
+        Pull    "PC",VS
+        LDR     R14,[R14,#w_parent]
+        CMP     R14,#nullptr                    ; check parent's parent (etc.)
+        BNE     %BT05
+
+        ; check for window flags being altered by the caller
+
+06      TST     R4,#alf_setflags
+        BEQ     %FT01
+        BIC     R4,R4,#alf_setflags             ; never set this in the actual alignment flags
+        LDR     R5,[handle,#w_flags]            ; R5 = existing flags
+        LDR     R14,[userblk,#u_flags]
+        STR     R14,[handle,#w_flags]           ; stick new ones in
+        BL      bodgewindowflags                ; resolve old/new border flag settings [ oops - this destroys the ws_system flags ]
+        LDR     R14,[handle,#w_flags]
+        BIC     R14,R14,#ws_system
+        AND     R5,R5,#ws_system                ; now restore the old status flags that were clobbered by bodgewindowflags
+        ORR     R14,R14,R5
+        STR     R14,[handle,#w_flags]
+
+01      STR     R3,newparent                    ; absolute handle
+        STR     R4,newalignflags
       ]
+      [ debug
+        LDR     R14,[userblk,#u_bhandle]
+        Debug   opn,"Opening window,parent,behind:",handle,R3,R14
+      ]
+        BLVC    calc_w_status                   ; find out window above us
         Pull    "PC",VS
 
         [ Mode22
@@ -3350,15 +3680,15 @@ int_open_window
         STREQ   R14,[handle,#w_origflags]
         ]
 ;
-        LDR     R0,[handle,#w_taskhandle]   ; A system window ?
+        LDR     R0,[handle,#w_taskhandle]       ; A system window ?
         CMP     R0,#0
-        BLE     %FT01                       ; Yes, skip.
-        LDR     R0,[wsptr,R0]               ; Get task pointer.
+        BLE     %FT01                           ; Yes, skip.
+        LDR     R0,[wsptr,R0]                   ; Get task pointer.
         LDR     R14,[R0,#task_windows]
         ADD     R14,R14,#1
-        STR     R14,[R0,#task_windows]      ; Now has one more window.
+        STR     R14,[R0,#task_windows]          ; Now has one more window.
         LDR     R14,[R0,#task_priority]
-        ORR     R14,R14,#priority_windows   ; Set priority to reflect it.
+        ORR     R14,R14,#priority_windows       ; Set priority to reflect it.
         STR     R14,[R0,#task_priority]
 01
         LDR     R0,[userblk,#u_handle]
@@ -3425,7 +3755,7 @@ int_open_window
         LDR     R14,dy_1
         BIC     cy0,cy0,R14             ; watch out!
 ;
-; check that the window is completely on-screen
+; check that the window is completely on-screen (or within parent's work area)
 ;
         LDR     R14,[handle,#w_flags]
         TST     R14,#wf_nochecks
@@ -3442,26 +3772,38 @@ int_open_window
         SUB     cy1,cy1,y1
 ;
         Push    "cx0,cy0,cx1,cy1"
-        [ AutoScroll
+      [ AutoScroll
         Push    "R0"
         MOV     R0,#0
-        ]
-        ADR     R14,scrx0
-        LDMIA   R14,{cx0,cy0,cx1,cy1}
+      ]
+
+      [ ChildWindows
+        LDR     cx0,newparent           ;  in: cx0 = parent handle (absolute)
+        BL      getparentbounds         ; out: cx0,cy0,cx1,cy1 = bounds of parent or screen
+
+        SUB     cx1,cx1,cx0             ; don't assume that cx0,cy0 = 0,0
+        SUB     cy1,cy1,cy0
+      ]
+
         SUB     R14,x1,x0               ; never allow window size > screen size
         CMP     R14,cx1
         ADDGT   x1,x0,cx1
-        [ AutoScroll
+      [ AutoScroll
         ORRGT   R0,R0,#wf_icon7:OR:wf_icon6       ; automatically put hscroll on
-        ]
+      ]
         SUB     R14,y1,y0               ; never allow window size > screen size
         CMP     R14,cy1
         SUBGT   y0,y1,cy1               ; (keep upper-left corner still)
-        [ AutoScroll
+      [ AutoScroll
         ORRGT   R0,R0,#wf_icon5:OR:wf_icon6       ; automatically put vscroll on
-        ]
-;
-   [ Mode22
+      ]
+
+      [ ChildWindows
+        ADD     cx1,cx0,cx1             ; restore cx1,cy1 to top-right corner
+        ADD     cy1,cy0,cy1
+      ]
+
+    [ Mode22
         LDR     R14,[handle,#w_origflags]             ; if onscreen flags = 0, and
         AND     R14,R14,#wf_iconbits
         ORR     R0,R14,R0
@@ -3473,17 +3815,23 @@ int_open_window
         Pull    "R0"
     |
         LDR     R14,[handle,#w_flags]
-        [ AutoScroll
+      [ AutoScroll
         TST     R14,#wf_newformat
         ORRNE   R14,R14,R0
         STRNE   R14,[handle,#w_flags]
         Pull    "R0"
-        ]
+      ]
     ]
         EOR     R14,R14,#ws_open                  ; if window was closed
         TST     R14,#ws_onscreenonce :OR: ws_open ; or ws_onscreenonce set
         TSTEQ   R14,#wf_onscreen                  ; or wf_onscreen set
         BNE     %FT01
+
+      [ ChildWindows
+        LDR     R14,newparent
+        CMP     R14,#nullptr            ; only use system flags if this is a top-level window
+        BNE     %FT01
+      ]
 
         LDRB    R14,sysflags
         TST     R14,#sysflags_nobounds  ; if cmos bit set,
@@ -3501,15 +3849,23 @@ int_open_window
         EOR     R14,R14,#ws_open                  ; if window was closed
         TST     R14,#ws_onscreenonce :OR: ws_open ; or ws_onscreenonce set
         TSTEQ   R14,#wf_onscreen                  ; or wf_onscreen set
+      [ ChildWindows
+        LDREQ   R14,newparent
+        CMPEQ   R14,#nullptr            ; only use system flags if this is a top-level window
+      ]
         LDREQB  R14,sysflags
         ANDEQ   R14,R14,#sysflags_offscreen
         TEQEQ   R14,#sysflags_offscreen ; if cmos bit set,
         BEQ     %FT01                   ; don't force bottom-right corner in
-;
+
         SUBS    R14,x1,cx1              ;; try to keep bottom-right in
         SUBGT   x0,x0,R14               ;; by moving the window's position
         SUBGT   x1,x1,R14               ;;
-        SUBS    R14,y0,#sz_scrbot       ;; allow for icon bar
+      [ ChildWindows                    ;;
+        SUBS    R14,y0,cy0              ;; use correct lower y bound
+      |                                 ;;
+        SUBS    R14,y0,#sz_scrbot       ;; sz_scrbot = 0 now (we can overlap the iconbar)
+      ]                                 ;;
         SUBLT   y0,y0,R14               ;;
         SUBLT   y1,y1,R14               ;;
 01
@@ -3519,11 +3875,16 @@ int_open_window
         TSTEQ   R14,#wf_onscreen                  ; or wf_onscreen set
         BNE     %FT02
 
+      [ ChildWindows
+        LDR     R14,newparent
+        CMP     R14,#nullptr            ; only use system flags if this is a top-level window
+        BNE     %FT02
+      ]
         LDRB    R14,sysflags
         TST     R14,#sysflags_nobounds  ; if cmos bit set,
         BNE     %FT03                   ; don't force top-left corner in
 02
-        SUBS    R14,x0,cx0              ; finally try to keep the top-left in
+        SUBS    R14,x0,cx0              ; next try to keep the top-left in
         SUBLT   x0,x0,R14               ; by changing the window's size
         SUBS    R14,y1,cy1
         SUBGT   y1,y1,R14
@@ -3538,6 +3899,22 @@ int_open_window
         Pull    "x0,y0"                 ; scroll positions
 
 dontforceit
+
+; check that the window has not been scrunched below the absolute minimum size required for correct redrawing of the borders
+
+      [ ChildWindows
+        SUB     cx1,cx1,cx0
+        SUB     cy0,cy1,cy0
+
+        Push    "x0,y0"
+        BL      minwindow_borders
+        max     cx1,x0
+        max     cy0,y0
+        Pull    "x0,y0"
+
+        ADD     cx1,cx0,cx1
+        SUB     cy0,cy1,cy0
+      ]
 
 ; check that scroll bar positions are within limits
 
@@ -3567,6 +3944,8 @@ dontforceit
 ;
 ; in case we are just scrolling, check whether the outline is changing
 ;
+      [ :LNOT: ChildWindows             ; this lot is done later, when the opens are flushed
+
         Push    "x0,y0,x1,y1"
 ;
         Push    "cx0,cy0,cx1,cy1"
@@ -3578,7 +3957,9 @@ dontforceit
         MOV     R1,#invalidrects        ; only the currently VALID bits !!!
         BL      subrects
         Pull    "cx0,cy0,cx1,cy1"
-;
+
+; if window was previously open at the same stack position, and we're ONLY scrolling, perform custom invalidation of scrollbars
+
         LDR     R14,[handle,#w_flags]
         TST     R14,#ws_open
         LDR     R14,[handle,#w_bhandle]
@@ -3594,7 +3975,9 @@ dontforceit
         STR     PC,isborderok
         MOVNE   R0,#windowrects         ; we can't mark the border valid
         BLNE    loserects
-;
+
+; invalidate h-scrollbar if we've scrolled horizontally
+
         LDR     R14,[handle,#w_scx]     ; see if h-scroll bar has changed
         LDR     R0,[R13,#0*4]           ; get x0 from stack
         TEQ     R14,R0
@@ -3614,6 +3997,9 @@ dontforceit
         SUB     cy1,y1,R14
         BL      subwindowrect           ; this bit isn't valid!
 01
+
+; invalidate v-scrollbar if we've scrolled vertically
+
         LDR     R14,[handle,#w_scy]     ; see if v-scroll bar has changed
         LDR     R0,[R13,#1*4]           ; get y0 from stack
         TEQ     R14,R0
@@ -3635,7 +4021,7 @@ dontforceit
 01
         Pull    "x0,y0,x1,y1"
 ;
-; transfer the list to 'borderrects'
+; transfer the list to 'borderrects' - the list of stationary unchanged rectangles in the border area (work area scrolled)
 ;
         LDR     R0,rlinks+borderrects
         LDR     R1,rlinks+windowrects
@@ -3643,7 +4029,7 @@ dontforceit
         STR     R1,rlinks+borderrects        ; swap the lists!
 ;
 ; work out offset from old window posn to new (work area coords!)
-; also work out whether size or scroll bars are changing
+; also work out whether size or scroll bars are changing - ie. can we block-copy the borders together with the work area
 ;
         ADD     R14,handle,#w_wax0
         LDMIA   R14,{R0,R1,cx0,cy0,cx1,cy1}
@@ -3678,38 +4064,175 @@ dontforceit
         LDMIA   R14,{x0,y0,x1,y1}
         BL      visibleportion_x0y0x1y1         ; get correct amount of window
         BL      int_translatelist               ; translate coords
+      ]
 ;
-; close window, then copy in the new Open_Window data
+; close window (we'll reinsert it into the stack later on)
 ;
-        BL      int_close_window        ; remove window from stack
+        BL      int_close_window                ; remove window from stack, and add to openingwinds list
+;
+; we need to reopen child windows according to their alignment flags - make a note of how the parent's moving
+;
+      [ ChildWindows
+        Push    "handle,userblk"
+
+        ADD     R14,handle,#w_ow0
+        LDMIA   R14,{R0-R5}                     ; R0-R3 = old window work area on screen
+        SUB     R4,R0,R4
+        SUB     R5,R3,R5                        ; R4,R5 = old work area origin on screen
+
+        ADD     R14,userblk,#u_ow0
+        LDMIA   R14,{R6-R11}                    ; R6-R9 = new window work area on screen
+        SUB     R10,R6,R10
+        SUB     R11,R9,R11                      ; R10,R11 = new work area origin on screen
+
+        SUB     R0,R6,R0
+        SUB     R1,R7,R1
+        SUB     R2,R8,R2
+        SUB     R3,R9,R3
+        SUB     R4,R10,R4
+        SUB     R5,R11,R5
+
+        Pull    "handle,userblk"
+
+        Push    "R0-R5"                         ; stash for later
+      ]
+;
+; copy in the new Open_Window data (NB: must be done BEFORE adjusting the children!)
+;
         ADD     R6,userblk,#u_ow0
-        ADD     R7,handle,#w_ow0        ; start of Open window params
+        ADD     R7,handle,#w_ow0                ; start of Open window params
         LDMIA   R6,{R0-R5}
-        STMIA   R7,{R0-R5}              ; work area x0,y0,x1,y1,scx,scy
+        STMIA   R7,{R0-R5}                      ; work area x0,y0,x1,y1,scx,scy
 ;
 ; work out outer bounding box from inner ones and flags
 ;
         ADD     R1,handle,#w_wax0
         LDMIA   R1,{x0,y0,x1,y1}
-        BL      calc_w_x0y0x1y1         ; calculate x0,y0,x1,y1
+        BL      calc_w_x0y0x1y1                 ; calculate x0,y0,x1,y1
         ADD     R1,handle,#w_x0
         STMIA   R1,{x0,y0,x1,y1}
 ;
-; put window into active list below specified window
+; now deal with moving the children according to the alignment flags
 ;
-; R4 points at activewinds header as if it were a link for inserting forwards of
+      [ ChildWindows
+        Pull    "R0-R5"                         ; retrieve coordinate offsets
+
+        LDR     R6,newparent                    ; NB: stash these (corrupted by int_open_window)
+        LDR     R7,newalignflags
+        Push    "R6,R7,handle,userblk,R12"
+
+        LDR     R12,[handle,#w_children + lh_forwards]
+
+01      LDR     R14,[R12,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT02
+
+        SUB     R12,R12,#w_active_link
+
+        ADD     R14,R12,#w_ow0
+        LDMIA   R14,{R6-R11}                    ; R6-R9 = new window work area on screen
+        SUB     R10,R6,R10
+        SUB     R11,R9,R11                      ; R10,R11 = new work area origin on screen
+
+        Push    "R12"
+        LDR     R12,[R12,#w_alignflags]
+
+        AND     R14,R12,#alm_x0
+        CMP     R14,#al0_x0                     ; align with: LT => scx, EQ => x0, GT => x1
+        ADDLT   R6,R6,R4
+        ADDEQ   R6,R6,R0
+        ADDGT   R6,R6,R2
+
+        AND     R14,R12,#alm_y0
+        CMP     R14,#al0_y0                     ; align with: LT => scy, EQ => y0, GT => y1
+        ADDLT   R7,R7,R5
+        ADDEQ   R7,R7,R1
+        ADDGT   R7,R7,R3
+
+        AND     R14,R12,#alm_x1
+        CMP     R14,#al0_x1                     ; align with: LT => scx, EQ => x0, GT => x1
+        ADDLT   R8,R8,R4
+        ADDEQ   R8,R8,R0
+        ADDGT   R8,R8,R2
+
+        AND     R14,R12,#alm_y1
+        CMP     R14,#al0_y1                     ; align with: LT => scy, EQ => y0, GT => y1
+        ADDLT   R9,R9,R5
+        ADDEQ   R9,R9,R1
+        ADDGT   R9,R9,R3
+
+        AND     R14,R12,#alm_scx
+        CMP     R14,#al0_scx                    ; align with: LT => scx, EQ => x0, GT => x1
+        ADDLT   R10,R10,R4
+        ADDEQ   R10,R10,R0
+        ADDGT   R10,R10,R2
+
+        AND     R14,R12,#alm_scy
+        CMP     R14,#al0_scy                    ; align with: LT => scy, EQ => y0, GT => y1
+        ADDLT   R11,R11,R5
+        ADDEQ   R11,R11,R1
+        ADDGT   R11,R11,R3
+
+        SUB     R10,R6,R10
+        SUB     R11,R9,R11                      ; convert back to scroll offsets
+
+        LDR     R12,[SP]                        ; R12 = child window handle (absolute)
+        Rel     R12,R12
+
+        Push    "R0-R5"
+
+        MOV     R0,R12                          ; R0 = relative handle as well
+
+        Push    "R0,R6-R11,R12"                 ; handle, x0,y0,x1,y1,scx,scy, bhandle
+
+        LDR     R12,[SP,#(8+6+1+4)*4]           ; R12 -> workspace (this is important!)
+
+        MOV     userblk,SP
+        BL      int_open_window                 ; NB: shouldn't change stacking order!
+
+        ADD     SP,SP,#8*4
+        Pull    "R0-R5,R12"
+
+        LDR     R12,[R12,#w_active_link + ll_forwards]
+        B       %BT01
+
+02
+        Pull    "R0,R1,handle,userblk,R12"
+        STR     R0,newparent                    ; we haven't finished with these yet!
+        STR     R1,newalignflags
+      ]
 ;
+; put window into active list (top-level, or as a child of the specified parent) below specified window
+;
+      [ ChildWindows
+        LDR     R14,newparent
+        CMP     R14,#nullptr
+        ADREQL  R4,activewinds+lh_forwards-ll_forwards          ; top-level window
+        ADDNE   R4,R14,#w_children+lh_forwards-ll_forwards      ; child window - NB: parent already checked
+      |
+        ; R4 points at activewinds header as if it were a link for inserting forwards of
         ADRL    R4,activewinds+lh_forwards-ll_forwards
+      ]
 
 ; Check handle for being 'On top'
 
-        Push    handle
+        Push    "handle"
+
         LDR     handle,[userblk,#u_bhandle]
         CMP     handle,#nullptr
-        Pull    handle,EQ
+        Pull    "handle",EQ
         BEQ     openwlp3end
 
-; Check bhandle for being a valid window
+; Check for special cases explicitly, rather than generating an error and then swallowing it
+
+      [ ChildWindows
+        CMP     handle,#nullptr2                        ; open at back (but in front of backwindow)
+        CMPNE   handle,#-3                              ; open behind backwindow
+        Pull    "handle",EQ
+        BEQ     openwlp3
+      ]
+
+; Check bhandle for being a valid window - must be open, and have the same parent!
 
 ;        CLRV    ; NK 348
 
@@ -3717,8 +4240,14 @@ dontforceit
         LDRVC   R14,[handle,#w_flags]
         TST     R14,#ws_open
         SETV    EQ
+      [ ChildWindows
+        LDRVC   R14,[handle,#w_parent]                  ; check that bhandle has the same parent
+        LDRVC   R0,newparent
+        TEQVC   R0,R14
+        SETV    NE
+      ]
         ADDVC   R4,handle,#w_active_link
-        Pull    handle
+        Pull    "handle"
         BVC     openwlp3end
 
 ; Handle isn't a valid window, drop to the bottom
@@ -3750,23 +4279,33 @@ openwlp3
 
 openwlp3end
 
-; R4->window link to insert our window forwards of.
+; R4 -> window link to insert our window forwards of.
 ; On the active stack forwards listwise means behind windowstackwise
 
         LDR     R14,[R4,#ll_forwards]
         STR     R4,[handle,#w_active_link+ll_backwards]
         STR     R14,[handle,#w_active_link+ll_forwards]
         ADD     R0,handle,#w_active_link
+        Debug   child,"Insert window into back/forwards",R0,R4,R14
         STR     R0,[R4,#ll_forwards]
         STR     R0,[R14,#ll_backwards]
-;
+
+      [ ChildWindows
+        LDR     R14,newparent
+        STR     R14,[handle,#w_parent]          ; this is now the absolute handle of the parent
+        LDR     R14,newalignflags
+        STR     R14,[handle,#w_alignflags]
+      ]
+
         LDR     R14,[handle,#w_flags]
         ORR     R14,R14,#ws_open
         STR     R14,[handle,#w_flags]
-        BL      calc_w_status           ; set up flags
+        BL      calc_w_status                   ; set up flags
 ;
+; now done later (when the opens are flushed)
 ; get visible portion of new window (with or without scroll bars)
 ;
+      [ :LNOT: ChildWindows
         LDR     R14,borderlinked
         TEQP    R14,#0                          ; restore status
         ADDEQ   R14,handle,#w_x0
@@ -3805,16 +4344,22 @@ openwlp3end
 openfinished
         MOV     R0,#borderrects
         BL      loserects
+      ]
 ;
 ; work out whether the window is now toggled, and redraw if necessary
 ;
-        BL      calctoggle              ; invalidates icon if necessary
+        BL      calctoggle                ; invalidates icon (OLD position) if necessary
+
         LDR     R14,[handle,#w_flags]
         BIC     R14,R14,#ws_onscreenonce  ; only cancel this on Open_Window
         STR     R14,[handle,#w_flags]     ; (not on Set_Extent)
+
         Pull    "LR"                    ; drop through
 
         Debug   opn,"Opening window complete"
+
+        CheckAllWindows "int_open_window (after)"
+
 ;
 ; When the window extent changes, and dragtype = drag_size,
 ; recalculate the dragging variables (ie. parent box size)
@@ -3857,11 +4402,20 @@ calctoggle
         LDMIA   R14,{x0,y0,x1,y1}
         SUB     x0,x1,x0
         SUB     y0,y1,y0                ; x0,y0 = window outline size
-;
+
+      [ ChildWindows
+        Push    "cx0,cy0,cx1,cy1"
+        LDR     cx0,[handle,#w_parent]
+        BL      getparentbounds         ; new feature: if nochecks set, we still only toggle to full screen size
+        SUB     x1,cx1,cx0
+        SUB     y1,cy1,cy0
+        Pull    "cx0,cy0,cx1,cy1"
+      |
         TST     R1,#wf_nochecks         ; screen limit doesn't apply here
         MOVNE   x1,#bignum
         LDREQ   x1,scrx1
         LDR     y1,scry1                ; x1,y1 = max window outline size
+      ]
 ;
       [ Version >= 317 :LAND: togglebits
         TST     R1,#ws_toggled2         ; is the extra toggling bit set?
@@ -3890,18 +4444,1072 @@ calctoggle
         BIC     R14,R1,#ws_toggled :OR: ws_toggling
         ORRGE   R14,R14,#ws_toggled
 02
+        Debug   opn,"calctoggle sets flags for handle, from, to",handle,R1,R14
         STR     R14,[handle,#w_flags]
 ;
         EOR     R14,R14,R1
         TST     R14,#ws_toggled         ; has the toggle bit changed?
         Pull    "R1,cx0-y1,PC",EQ
-;
+
+; To redraw the toggle icon, we must rely on the snazzy new int_flush_open code to spot that the 'toggled' bit has been altered
+
         MOV     R0,#4                   ; toggle icon
+      [ ChildWindows
+        BL      int_force_redraw_border ; force a redraw of the toggle icon
+      |
         BL      calc_w_iconposn
         BLVC    visibleportion_x0y0x1y1
         BLVC    markinvalidrects        ; ensure it's redrawn
+      ]
+
         Pull    "R1,cx0-y1,PC"
 
+
+;;-----------------------------------------------------------------------------
+;; int_flush_opens
+;; In   various windows are marked as having been moved
+;;      their old and new positions differ
+;;      [oldinvalidrects] indicates what was valid before the opens
+;;      [oldactivewinds] indicates the old stacking order
+;;      [handle,#w_old_data] indicates the old positions of the windows
+;;      [handle,#w_new_data] indicates the current positions of the windows
+;;      note that w_old_flags indicates whether the window was open
+;;                w_new_flags indicates whether the window is open
+;; Out  old and new positions brought into line
+;;      [invalidrects] updated to reflect bits that need redrawing
+;;      various rectangles may have been block-copied
+;;-----------------------------------------------------------------------------
+
+      [ ChildWindows
+
+int_flush_opens ROUT
+
+        CheckAllWindows "int_flush_opens (before)"
+
+        Push    "handle,userblk,LR"
+
+        LDRB    R14,openspending
+        TEQ     R14,#0
+        Pull    "handle,userblk,PC",EQ
+
+        Push    "R0-y1"                         ; save all registers!
+
+        MOV     R14,#0
+        STRB    R14,openspending
+
+        Debug   opn,"int_flush_opens"
+
+; child windows can be ignored if they are moving with their parent's work area
+; for each window in the 'opening' list, go through its list of children (from back to front)
+; removing them from the list if they're moving with the parent (and not changing stack order)
+
+        LDR     handle,openingwinds+lh_forwards
+
+10      LDR     R14,[handle,#ll_forwards]
+        CMP     R14,#nullptr
+        MOVNE   R14,#0
+        STRNE   R14,[handle,#w_xoffset - w_opening_link]
+        LDRNE   handle,[handle,#ll_forwards]
+        BNE     %BT10
+
+        ; having marked all windows on the list as 'unvisited', we can scan the list
+
+        LDR     handle,openingwinds+lh_forwards
+11
+        ASSERT  ll_forwards = 0
+        LDR     R14,[handle],#-w_opening_link
+        CMP     R14,#nullptr
+        BEQ     %FT12
+
+        BL      remove_children                 ; attempt to remove child windows from the list (transfer to heldover list)
+
+        LDR     handle,[handle,#w_opening_link + ll_forwards]
+        B       %BT11
+12
+
+; invalidate relevant border area of parent if child window with wf_inborder set is moving (non-optimized)
+; currently only the h-scrollbar moves to accommodate overlapping child windows
+
+        LDR     handle,openingwinds+lh_forwards
+13
+        ASSERT  ll_forwards = 0
+        LDR     R14,[handle],#-w_opening_link
+        CMP     R14,#nullptr
+        BEQ     %FT19
+
+        MOV     userblk,#w_old_data
+        BL      check_scrollbar_overlap         ; note that old and new parents might be different
+
+        MOV     userblk,#w_new_data             ; so we have to check these twice
+        BL      check_scrollbar_overlap         ; (up to 4 parent scrollbars may be invalidated)
+
+        LDR     handle,[handle,#w_opening_link + ll_forwards]
+        B       %BT13
+19
+
+; copy the invalid rectangle list first,
+; so int_flush_open can distinguish between stuff that's already invalid, and stuff that's being made invalid
+
+        MOV     R0,#invalidrects
+        MOV     R1,#oldinvalidrects
+        BL      copyrects                       ; copy invalid rectangle list
+
+; call int_flush_open for each window remaining in the opening list
+
+        LDR     handle,openingwinds+lh_forwards
+
+01      LDR     R14,[handle,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT02
+
+        ASSERT  ll_forwards = 0
+        LDR     R14,[handle],#-w_opening_link
+        BL      int_flush_open                  ; does NOT remove this window from the list
+        LDR     handle,[handle,#w_opening_link + ll_forwards]
+        B       %BT01
+
+; invalidrects has now been updated, so we can lose the old set
+
+02      MOV     R0,#oldinvalidrects
+        BL      loserects
+
+; go through the list of 'heldover' windows, updating their information
+
+        LDR     handle,heldoverwinds
+        B       %FT29
+27
+        ASSERT  (w_old_end - w_old_parent ) = 13*4
+        ASSERT  handle = R10
+
+        ADD     R14,handle,#w_parent            ; copy from new data to old
+        ADD     R9, handle,#w_old_parent
+        LDMIA   R14!,{R0-R6}
+        STMIA   R9!, {R0-R6}                    ; copy first 7 words
+        LDMIA   R14!,{R0-R5}
+        STMIA   R9!, {R0-R5}                    ; then the next 6 words
+
+        LDR     handle,[handle,#w_opening_link + ll_backwards]
+29      CMP     handle,#nullptr
+        BNE     %BT27
+
+        STR     handle,heldoverwinds
+
+; go through the list of 'opening' windows, updating their information
+; TODO: discard windows that couldn't be deleted straightaway
+
+        LDR     handle,openingwinds + lh_forwards
+
+03      LDR     R14,[handle,#w_opening_link + ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT04
+
+        ASSERT  (w_old_end - w_old_parent ) = 13*4
+        ASSERT  handle = R10
+
+        ADD     R14,handle,#w_parent - w_opening_link       ; copy from new data to old
+        ADD     R9, handle,#w_old_parent - w_opening_link
+        LDMIA   R14!,{R0-R6}
+        STMIA   R9!, {R0-R6}                    ; copy first 7 words
+        LDMIA   R14!,{R0-R5}
+        STMIA   R9!, {R0-R5}                    ; then the next 6 words
+
+        LDR     handle,[handle,#ll_forwards]
+        B       %BT03
+
+; correct the stack separately, as it requires more complex treatment
+
+04
+      ; Debug   opn,"**** copy_new_links_to_old for activewinds"
+        ADRL    R0,activewinds
+        ADR     R1,oldactivewinds
+        BL      copy_new_links_to_old
+
+; correct child window stacks (use allwinds for this, since children can be moved while the parent is closed)
+
+        LDR     handle,allwinds + lh_forwards
+
+05      LDR     R14,[handle,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT06
+
+      ; Debug   opn,"**** copy_new_links_to_old for children of",handle
+
+        ADD     R0,handle,#w_children - w_all_link
+        ADD     R1,handle,#w_old_children - w_all_link
+        BL      copy_new_links_to_old
+
+        LDR     handle,[handle,#ll_forwards]
+        B       %BT05
+06
+
+; now perform the block-copy of all relevant rectangles
+
+        BL      int_blockcopy_all               ; frees rectangles as it copies them, and removes windows from the 'opening' list
+
+        Debug   opn,"int_flush_opens exitting"
+
+        CheckAllWindows "int_flush_opens (after)"
+
+      [ debugcheck :LAND: debug
+        LDR     handle,allwinds + lh_forwards
+10
+        ASSERT  ll_forwards = 0
+        LDR     R14,[handle],#-w_all_link
+        CMP     R14,#nullptr
+        BEQ     %FT20
+
+        LDR     R14,[handle,#w_opening_link+ll_forwards]
+        TEQ     R14,#0
+        BEQ     %FT15
+
+        Debug   check,"**** After int_flush_opens, window still has non-null w_opening_link ****",handle
+        MOV     R14,#0
+        STR     R14,[R14]
+
+15      ADD     R14,handle,#w_old_wax0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        ADD     R14,handle,#w_wax0
+        LDMIA   R14,{x0,y0,x1,y1}
+        TEQ     cx0,x0
+        TEQEQ   cy0,y0
+        TEQEQ   cx1,x1
+        TEQEQ   cy1,y1
+        ADDEQ   R14,handle,#w_old_x0
+        LDMEQIA R14,{cx0,cy0,cx1,cy1}
+        ADDEQ   R14,handle,#w_x0
+        LDMEQIA R14,{x0,y0,x1,y1}
+        TEQEQ   cx0,x0
+        TEQEQ   cy0,y0
+        TEQEQ   cx1,x1
+        TEQEQ   cy1,y1
+        LDREQ   cx0,[handle,#w_old_scx]
+        LDREQ   cy0,[handle,#w_old_scy]
+        LDREQ   x0,[handle,#w_scx]
+        LDREQ   y0,[handle,#w_scy]
+        TEQEQ   cx0,x0
+        TEQEQ   cy0,y0
+        LDREQ   cx0,[handle,#w_old_flags]
+        LDREQ   x0,[handle,#w_flags]
+        EOREQ   cx0,cx0,x0
+        TSTEQ   cx0,#ws_open
+        BEQ     %FT17
+
+        Debug   check,"**** After int_flush_opens, old window data disagrees",handle
+        ADD     R14,handle,#w_old_wax0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        Debug   check,"old work area",cx0,cy0,cx1,cy1
+        ADD     R14,handle,#w_wax0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        Debug   check,"new work area",cx0,cy0,cx1,cy1
+        ADD     R14,handle,#w_old_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        Debug   check,"old outline",cx0,cy0,cx1,cy1
+        ADD     R14,handle,#w_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        Debug   check,"new outline",cx0,cy0,cx1,cy1
+        LDR     cx0,[handle,#w_old_scx]
+        LDR     cy0,[handle,#w_old_scy]
+        LDR     R14,[handle,#w_old_flags]
+        Debug   check,"old scx,scy,flags",cx0,cy0,R14
+        LDR     cx0,[handle,#w_scx]
+        LDR     cy0,[handle,#w_scy]
+        LDR     R14,[handle,#w_flags]
+        Debug   check,"new scx,scy,flags",cx0,cy0,R14
+
+        MOV     R14,#0
+        STR     R14,[R14]
+
+17      LDR     handle,[handle,#w_all_link+ll_forwards]
+        B       %BT10
+20
+      ]
+
+        Pull    "R0-y1,handle,userblk,PC"
+        LTORG
+
+;..............................................................................
+
+; In    handle -> child window to consider
+;       userblk = offset to old/new data (ie. w_old_data or w_new_data)
+; Out   old h/v scrollbar(s) of parent invalidated if child has/had wf_inborder set and overlaps/ped parent's scrollbars
+
+check_scrollbar_overlap  ENTRY  "handle"
+
+        ADD     R0,handle,userblk               ; R0 -> child window's data (old or new)
+
+        LDR     R14,[R0,#w_flags - w_new_data]
+        TST     R14,#ws_open
+        TSTNE   R14,#wf_inborder
+        LDRNE   R1,[R0,#w_parent - w_new_data]
+        CMPNE   R1,#nullptr
+        EXIT    EQ
+
+        ADD     userblk,R1,userblk              ; userblk -> parent window's data (old or new)
+
+      ; Debug   ,"check_scrollbar_overlap (h): handle,R1, R0,userblk",handle,R1,R0,userblk
+
+        ; check whether h-scrollbar of parent should be invalidated (only if it's not changing anyway)
+
+        LDR     R2,=ws_open :OR: wf_icon7
+        LDR     R14,[R1,#w_old_flags]
+        AND     R14,R14,R2
+        TEQ     R14,R2
+        LDREQ   R14,[R1,#w_flags]
+        ANDEQ   R14,R14,R2
+        TEQEQ   R14,R2
+        BNE     %FT18
+
+        ; work out whether the child window overlaps the parent's h-scrollbar
+
+        LDR     y1,dy
+
+        LDR     cy0,[R0,#w_y0 - w_new_data]
+        LDR     y0,[userblk,#w_y0 - w_new_data]
+        ADD     y0,y0,y1
+        CMP     cy0,y0
+        BGT     %FT18
+
+        ; invalidate OLD h-scrollbar of the parent (must have been present if we got this far)
+
+17      LDR     x0,[R1,#w_old_x0]
+        LDR     y0,[R1,#w_old_y0]
+        LDR     x1,[R1,#w_old_wax1]
+        LDR     y1,[R1,#w_old_way0]
+        LDR     R14,[R1,#w_old_flags]
+        AND     R14,R14,#wf_icon5 :OR: wf_icon6
+        TEQ     R14,#wf_icon6
+        LDREQ   R14,vscroll_width
+        SUBEQ   x1,x1,R14
+
+      ; Debug   ,"invalidating old h-scrollbar of parent",x0,y0,x1,y1
+
+        Push    "R0,R1,handle,userblk"
+        MOV     handle,R1
+        BL      oldvisibleportion_x0y0x1y1      ; windowrects = old visible portion of parent's h-scrollbar
+        MOV     R1,#wf_inborder
+        BL      oldsubtract_children            ; don't redraw the child windows that can overlap the parent's borders
+      ; BL      markoldinvalidrects             ; add to OLD invalid list - old scrollbar is not to be trusted
+        BL      markinvalidrects                ; in fact we need to add to both lists (oldinvalidrects is supposed to be a copy)
+        BL      losewindowrects
+        Pull    "R0,R1,handle,userblk"
+
+18      ; check whether v-scrollbar of parent should be invalidated (only if it's not changing anyway)
+
+      ; Debug   ,"check_scrollbar_overlap (v): handle,R1, R0,userblk",handle,R1,R0,userblk
+
+        LDR     R2,=ws_open :OR: wf_icon5
+        LDR     R14,[R1,#w_old_flags]
+        AND     R14,R14,R2
+        TEQ     R14,R2
+        LDREQ   R14,[R1,#w_flags]
+        ANDEQ   R14,R14,R2
+        TEQEQ   R14,R2
+        EXIT    NE
+
+        ; work out whether the child window overlaps the parent's v-scrollbar
+
+        LDR     x0,dx
+
+        LDR     cx1,[R0,#w_x1 - w_new_data]
+        LDR     x1,[userblk,#w_x1 - w_new_data]
+        SUB     x1,x1,x0
+        CMP     cx1,x1
+        EXIT    LT
+
+        ; invalidate OLD v-scrollbar of the parent (must have been present if we got this far)
+
+27      LDR     x0,[R1,#w_old_wax1]
+        LDR     y0,[R1,#w_old_way0]
+        LDR     x1,[R1,#w_old_x1]
+        LDR     y1,[R1,#w_old_way1]
+        LDR     R14,[R1,#w_old_flags]
+        AND     R14,R14,#wf_icon6 :OR: wf_icon7
+        TEQ     R14,#wf_icon6
+        LDREQ   R14,hscroll_height
+        ADDEQ   y0,y0,R14
+
+      ; Debug   ,"invalidating old v-scrollbar of parent",x0,y0,x1,y1
+
+        MOV     handle,R1
+        BL      oldvisibleportion_x0y0x1y1      ; windowrects = old visible portion of parent's h-scrollbar
+        MOV     R1,#wf_inborder
+        BL      oldsubtract_children            ; don't redraw the child windows that can overlap the parent's borders
+      ; BL      markoldinvalidrects             ; add to OLD invalid list - old scrollbar is not to be trusted
+        BL      markinvalidrects                ; in fact we need to add to both lists (oldinvalidrects is supposed to be a copy)
+        BL      losewindowrects
+
+        EXIT
+        LTORG
+
+;..............................................................................
+
+; Debugging routine to detect crapping-on windows as it happens
+; Use the CheckAllWindows macro to invoke this code
+; Out   EQ => one or more windows were found to be corrupt
+;       NE => all windows OK
+;
+; Currently this is used to check the window flags only
+
+       [ debugcheck :LAND: debug
+
+checkallwindows ROUT
+
+        Push    "R0-R11,LR"
+
+        LDR     handle,allwinds + lh_forwards
+
+        LDR     R0,=&FFFF
+
+01      LDR     R14,[handle,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT02
+
+        LDR     R14,[handle,#w_flags - w_all_link]
+        AND     R14,R14,R0
+        TEQ     R14,R0
+        Pull    "R0-R11,PC",EQ                  ; EQ => window flags are naff!
+
+        LDR     handle,[handle,#ll_forwards]
+        B       %BT01
+
+02      CMP     PC,#0                           ; NE => window flags all OK
+
+        Pull    "R0-R11,PC"
+        LTORG
+      ]
+
+;..............................................................................
+
+; Optimization to treat child windows that move with the parent as part of the parent's background
+; In    handle -> parent window (on the 'opening' list)
+; Out   child windows moved onto the heldover list if they're moving with the parent window anyway
+;       cx0-cy1,x0-y1 corrupted
+; All children of parents that are on the opening list will also be on the list, so we can just scan that
+
+remove_children ROUT
+
+        Push    "R0,R1,LR"
+
+        LDR     R14,[handle,#w_xoffset]         ; 0 => not yet scanned
+        TEQ     R14,#0
+        Pull    "R0,R1,PC",NE                   ; we've scanned this one
+
+        MOV     R14,#1
+        STR     R14,[handle,#w_xoffset]         ; mark as 'done'
+
+        Debug   child,"remove_children from opening list for window",handle
+
+        BL      isborderlinked                  ; out: borderlinked EQ => border will be block-copied with work area
+
+        LDR     cx1,[handle,#w_old_wax0]
+        LDR     R14,[handle,#w_old_scx]
+        SUB     cx1,cx1,R14                     ; cx1 = parent's old work area origin x
+
+        LDR     cy1,[handle,#w_old_way1]
+        LDR     R14,[handle,#w_old_scy]
+        SUB     cy1,cy1,R14                     ; cy1 = parent's old work area origin y
+
+        LDR     x1,[handle,#w_wax0]
+        LDR     R14,[handle,#w_scx]
+        SUB     x1,x1,R14                       ; x1 = parent's new work area origin x
+
+        LDR     y1,[handle,#w_way1]
+        LDR     R14,[handle,#w_scy]
+        SUB     y1,y1,R14                       ; y1 = parent's new work area origin y
+
+        SUB     x1,x1,cx1
+        SUB     y1,y1,cy1                       ; x1,y1 = change in parent's work area origin
+
+        LDR     R0,[handle,#w_old_children + lh_backwards]
+        LDR     R1,[handle,#w_children + lh_backwards]
+01
+        LDR     R14,[R0,#ll_backwards]
+        CMP     R14,#nullptr
+        BEQ     %FT20
+
+        ADD     R14,R0,#w_active_link - w_old_link
+        CMP     R14,R1
+        BNE     %FT20                           ; give up if old and new stacks disagree
+
+      [ debug
+        LDR     R14,[R1,#w_opening_link + ll_forwards - w_active_link]
+        CMP     R14,#0
+        STREQ   R14,[R14]                       ; all children must be on the list if the parent hasn't been scanned yet!
+      ]
+
+        LDR     R14,[R1,#w_flags - w_active_link]
+        LDR     R2,[R1,#w_old_flags - w_active_link]
+        EOR     R2,R2,R14
+        LDR     R14,=ws_hasfocus :OR: wf_inborder :OR: wf_iconbits
+        TST     R2,R14                          ; can't optimise if any of these bits are changing
+        BNE     %FT20
+
+        TST     R14,#wf_inborder                ; if child overlaps the border,
+        LDRNE   R14,borderlinked                ; we can only optimize it if the parent isn't resizing or scrolling
+        TEQNEP  R14,#0
+        BNE     %FT20
+
+        Push    "x1,y1"
+        ADD     R14,R1,#w_old_wax0 - w_active_link
+        LDMIA   R14,{cx0,cy0,cx1,cy1,x0,y0}
+        SUB     cx1,cx1,cx0
+        SUB     cy1,cy1,cy0
+        ASSERT  w_scx = w_wax0 + 4*4
+        ADD     R14,R1,#w_scx - w_active_link
+        LDMIA   R14,{x1,y1}                     ; if child scrolls, we must deal with it separately
+        CMP     x0,x1
+        CMPEQ   y0,y1
+        Debug   child,"--- old/new scroll",x0,y0,x1,y1
+        LDMEQDB R14,{x0,y0,x1,y1}               ; get new work area coordinates
+        SUBEQ   x1,x1,x0
+        SUBEQ   y1,y1,y0
+        CMPEQ   cx1,x1                          ; make sure size hasn't changed either
+        CMPEQ   cy1,y1
+        Debug   child,"--- old/new size",cx1,cy1,x1,y1
+        Pull    "x1,y1"
+        SUBEQ   x0,x0,cx0
+        SUBEQ   y0,y0,cy0                       ; x0,y0 = change in child window's coordinates
+        Debug   child,"--- child/parent offset",x0,y0,x1,y1
+        CMPEQ   x0,x1
+        CMPEQ   y0,y1
+        BNE     %FT20                           ; NB: don't scan any more once we find one that can't be removed (might overlap)
+
+        ; we must transfer the window onto a different list, so its info will be updated later on
+
+        Debug   child,"*** Child moving with parent",R1,handle
+
+        ADD     R14,R1,#w_opening_link - w_active_link
+        LDMIA   R14,{x0,y0}
+        STR     x0,[y0,#ll_forwards]
+        STR     y0,[x0,#ll_backwards]
+        MOV     R14,#0                          ; mark as not being in the chain
+        STR     R14,[R1,#w_opening_link + ll_forwards - w_active_link]
+
+        LDR     R14,heldoverwinds
+        STR     R14,[R1,#w_opening_link + ll_backwards - w_active_link]  ; sneaky - re-use this for the singly-linked list
+        SUB     R14,R1,#w_active_link
+        STR     R14,heldoverwinds
+
+; OK, we've removed this window, but if any of its children can't be removed, we must stop removing siblings of this window
+
+        Push    "handle"
+        SUB     handle,R0,#w_old_link
+        BL      remove_children
+        LDR     R14,[handle,#w_yoffset]
+        Pull    "handle"
+        CMP     R14,#nullptr
+        BNE     %FT20                           ; OK, we'll have to give up now - our siblings and the parent's etc. won't be removed
+
+        LDR     R0,[R0,#ll_backwards]
+        LDR     R1,[R1,#ll_backwards]
+        B       %BT01
+
+20      LDR     R14,[R0,#ll_backwards]
+        CMP     R14,#nullptr
+        LDREQ   R14,[R1,#ll_backwards]
+        STR     R14,[handle,#w_yoffset]         ; if nullptr, none of the children (or its descendants) was un-optimized
+
+        Pull    "R0,R1,PC"
+        LTORG
+
+;..............................................................................
+
+; In    handle -> window block
+; Out   borderlinked flags set up:
+;           EQ => border will be block-copied with the work area
+;           NE => border will be dealt with separately
+
+isborderlinked  ENTRY  "R0,R1,cx0,cy0,cx1,cy1,x0,y0,x1,y1"
+
+        BL      hasfocus_changing
+        LDREQ   R14,[handle,#w_flags]
+        LDREQ   R2,[handle,#w_old_flags]
+        EOREQ   R14,R14,R2
+        TSTEQ   R14,#wf_iconbits                ; can't link border if focus or border flags are changing
+        BNE     %FT90
+
+        ADD     R14,handle,#w_wax0
+        LDMIA   R14,{cx0,cy0,cx1,cy1,x0,y0}
+
+        SUB     x1,cx1,cx0                      ; x1,y1 = new size of window
+        SUB     y1,cy1,cy0                      ; x0,y0 = new scroll posns
+
+        ADD     R14,handle,#w_old_wax0
+        LDMIA   R14,{R0,R1,cx0,cy0,cx1,cy1}
+;
+        SUB     R14,cx0,R0                      ; R0 = old x0
+        CMP     R14,x1
+        SUB     R14,cy0,R1                      ; cy0 = old y1
+        CMPEQ   R14,y1
+        CMPEQ   cx1,x0                          ; cx1 = old scx
+        CMPEQ   cy1,y0                          ; cy1 = old scy
+
+90      STR     PC,borderlinked
+
+        EXIT
+        LTORG
+
+;..............................................................................
+
+; In    R0 -> list head of source data
+;       R1 -> list head of destination
+; Out   list in [R0] copied to [R1], with correct offsets for the new list
+
+copy_new_links_to_old   ROUT
+
+        Push    "handle,LR"
+
+      ; Debug   opn,"copy_new_links_to_old",R0,R1
+
+        ADD     R2,R1,#lh_indicator             ; R2 = forward link for next window
+        ADD     R3,R1,#lh_backwards             ; R3 = pointer to previous backwards pointer
+
+        LDR     handle,[R0,#lh_backwards]       ; handle = first window + w_active_link, or list head
+
+01      CMP     handle,R0                       ; stop when we get back to the list head
+        BEQ     %FT02
+
+        ADD     R14,handle,#w_old_link - w_active_link
+        STR     R14,[R3]                        ; previous back pointer -> this window
+        STR     R2,[R14,#ll_forwards]           ; this window's forward pointer -> previous link (or head)
+
+      ; Debug   opn,"prev. backwards set up",R3,R14
+      ; Debug   opn,"this forwards set up",R14,R2
+
+        ADD     R3,R14,#ll_backwards            ; R3 -> next backwards pointer
+        MOV     R2,R14                          ; R2 = forwards pointer to put in next link
+
+        LDR     handle,[handle,#ll_backwards]
+        B       %BT01
+
+02      STR     R2,[R1,#lh_forwards]            ; head forwards -> last window visited (or head itself)
+        STR     R1,[R3]                         ; previous backwards -> list head itself
+
+      ; Debug   opn,"final backwards set up",R3,R1
+      ; Debug   opn,"final forwards set up",R1,R2
+
+        Pull    "handle,PC"
+
+;..............................................................................
+
+; In    handle -> window whose 'open' is to be flushed
+
+int_flush_open  ROUT
+
+        Push    "LR"
+
+        Debug   opn,"int_flush_open",handle
+
+        MOV     R0,#borderrects
+        BL      loserects                       ; just in case
+        BL      losewindowrects                 ; ditto
+
+; unless window is re-opening (ie. it was and still is open), we've practically finished
+
+        LDR     R14,[handle,#w_flags]
+        LDR     R0,[handle,#w_old_flags]
+        AND     R14,R0,R14
+        TST     R14,#ws_open
+        BLEQ    invalidate_oldnew
+        BEQ     %FT80
+
+; check for invalidation of border areas - if we're only scrolling, we may be able to keep parts of the border valid
+
+        BL      hasfocus_changing               ; NE => borders need redrawing due to ws_hasfocus turning on/off
+
+        ADDEQ   R14,handle,#w_old_wax0          ; compare old and new work area coords
+        LDMEQIA R14,{x0,y0,x1,y1}
+        ADDEQ   R14,handle,#w_wax0              ; check old work area coords
+        LDMEQIA R14,{cx0,cy0,cx1,cy1}
+        TEQEQ   x0,cx0
+        TEQEQ   y0,cy0
+        TEQEQ   x1,cx1
+01      TEQEQ   y1,cy1                  ; unless all coords are the same
+        STR     PC,isborderok           ; we invalidate all border areas anyway
+        BNE     %FT02
+
+; get border rectangles, that were and still are valid and visible
+
+        BL      oldvisibleouterportion  ; get previously-visible outer portion
+        BL      subwindowrect           ; subtract work area (cx0..cy1 are still set up from above)
+        BL      visible_knockout        ; clip to still-visible outer portion
+
+      ; MOV     R0,#windowrects
+      ; MOV     R1,#oldinvalidrects     ; must also have been valid to begin with
+      ; BL      subrects                ; NOTE: there's no need to do this, since oldinvalidrects is a subset of invalidrects
+
+        MOV     R0,#windowrects
+        MOV     R1,#invalidrects        ; and still be valid at the end (NB: we haven't yet called invalidate_oldnew)
+        BL      subrects
+
+; some border areas that aren't changing can be affected by other border bits turning on/off
+; icons are numbered clockwise from the top-left:
+; 1=back,2=quit,3=title,4=toggle,5=vscroll,6=size,6=hscroll
+
+        LDR     R1,[handle,#w_flags]    ; R1 = new flag settings
+        LDR     R0,[handle,#w_old_flags]
+        EOR     R0,R1,R0                ; R0 = flags that have changed
+        ANDS    R0,R0,#wf_iconbits
+        BEQ     %FT10                   ; common case - no change in flags
+
+        Push    "R0,R1"
+        ADD     R14,handle,#w_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}   ; if flags have changed, we must clip to the new outer portion as well
+        MOV     R0,#windowrects
+        MOV     R1,R0
+        BL      intrect
+        Pull    "R0,R1"
+
+        ; check title / v-scroll / h-scroll for other bits that cause them to be resized
+
+        MOV     R2,#3                   ; see if title bar is resizing
+        BL      check_redraw_border
+        MOV     R2,#5                   ; see if v-scrollbar is resizing
+        BL      check_redraw_border
+        MOV     R2,#7                   ; see if h-scrollbar is resizing
+        BL      check_redraw_border
+
+        ; special case: check for back/quit changing places (this won't affect the title bar, so needs separate treatment)
+
+        AND     R14,R1,#wf_icon1 :OR: wf_icon2
+        TEQ     R14,#wf_icon1
+        TEQNE   R14,#wf_icon2
+        ANDEQ   R14,R0,#wf_icon1 :OR: wf_icon2
+        TEQEQ   R14,#wf_icon1 :OR: wf_icon2     ; EQ => back/quit have changed places
+        BNE     %FT08
+
+        Push    "R0,R1"
+        TST     R1,#wf_icon1
+        MOVNE   R0,#1
+        MOVEQ   R0,#2
+        BL      calc_w_iconposn         ; x0,y0,x1,y1 = screen position of size box
+        Push    "x0,y0,x1,y1"
+        Pull    "cx0,cy0,cx1,cy1"
+        BL      subwindowrect           ; must redraw size box if it's changing and scrollbars aren't
+        Pull    "R0,R1"
+
+        ; special case: check for size toggling on/off while the scrollbars don't change
+
+08      TST     R0,#wf_icon5 :OR: wf_icon7
+        BNE     %FT10
+        TST     R0,#wf_icon6
+        MOVNE   R0,#6                   ; h-scroll bar
+        BLNE    calc_w_iconposn         ; x0,y0,x1,y1 = screen position of size box
+        Push    "x0,y0,x1,y1",NE
+        Pull    "cx0,cy0,cx1,cy1",NE
+        BLNE    subwindowrect           ; must redraw size box if it's changing and scrollbars aren't
+
+; knock out h-scrollbar if we've scrolled horizontally
+
+10      LDR     R14,[handle,#w_scx]     ; see if h-scroll bar has changed
+        LDR     R0,[R13,#0*4]           ; get x0 from stack
+        TEQ     R14,R0
+        BEQ     %FT01
+        MOV     R0,#7                   ; h-scroll bar
+        BL      calc_w_iconposn         ; x0,y0,x1,y1 = screen position of h-scrollbar
+        LDR     R14,left_width
+;<<<    LDRB    R14,xborder
+        ADD     cx0,x0,R14
+        LDR     R14,right_width
+        SUB     cx1,x1,R14
+        LDR     R14,dx
+        ADD     cx0,cx0,R14             ; border is OK
+        SUB     cx1,cx1,R14
+        LDR     R14,dy
+        ADD     cy0,y0,R14
+        SUB     cy1,y1,R14
+        BL      subwindowrect           ; this bit isn't valid!
+01
+
+; knock out v-scrollbar if we've scrolled vertically
+
+        LDR     R14,[handle,#w_scy]     ; see if v-scroll bar has changed
+        LDR     R0,[R13,#1*4]           ; get y0 from stack
+        TEQ     R14,R0
+        BEQ     %FT01
+        MOV     R0,#5                   ; v-scroll bar
+        BL      calc_w_iconposn
+;<<     LDRB    R14,yborder
+        LDR     R14,down_height
+        ADD     cy0,y0,R14
+        LDR     R14,up_height
+        SUB     cy1,y1,R14
+        LDR     R14,dy
+        ADD     cy0,cy0,R14                     ; border is OK
+        SUB     cy1,cy1,R14
+        LDR     R14,dx
+        ADD     cx0,x0,R14
+        SUB     cx1,x1,R14
+        BL      subwindowrect                   ; this bit isn't valid!
+01
+
+; transfer the list to 'borderrects' - the list of rectangles to be re-validated in the border area (work area scrolled)
+
+02      LDR     R0,rlinks+borderrects
+        LDR     R1,rlinks+windowrects
+        STR     R0,rlinks+windowrects
+        STR     R1,rlinks+borderrects           ; swap the lists!
+
+; work out offset from old window posn to new (work area coords!)
+; also work out whether size or scroll bars are changing - ie. can we block-copy the borders together with the work area
+; NB: if any border areas are being turned on or off, we also can't link the borders
+
+        BL      hasfocus_changing               ; can't link borders if focus bit is changing
+        LDREQ   R2,[handle,#w_old_flags]
+        LDREQ   R3,[handle,#w_flags]
+        EOREQ   R14,R2,R3
+        TSTEQ   R14,#wf_iconbits                ; EQ => borders haven't been altered
+
+        ADD     R14,handle,#w_wax0
+        LDMIA   R14,{cx0,cy0,cx1,cy1,x0,y0}
+
+        SUB     x1,cx1,cx0                      ; x1,y1 = new size of window
+        SUB     y1,cy1,cy0                      ; x0,y0 = new scroll posns
+
+        ADD     R14,handle,#w_old_wax0
+        LDMIA   R14,{R0,R1,cx0,cy0,cx1,cy1}
+
+        SUB     R14,cx0,R0                      ; R0 = old x0
+        CMPEQ   R14,x1
+        SUBEQ   R14,cy0,R1                      ; cy0 = old y1
+        CMPEQ   R14,y1
+        CMPEQ   cx1,x0                          ; cx1 = old scx
+        CMPEQ   cy1,y0                          ; cy1 = old scy
+;
+        LDR     x0,[handle,#w_wax0]             ; new x0
+        LDR     y0,[handle,#w_way1]             ; new y1
+        LDR     x1,[handle,#w_scx]              ; new scx
+        LDR     y1,[handle,#w_scy]              ; new scy
+;
+        SUB     cx0,R0,cx1                      ; x <- x-scx (old)
+        SUB     cy0,cy0,cy1                     ; y <- y-scy (old)
+        SUB     cx1,x0,x1                       ; x <- x-scx (new)
+        SUB     cy1,y0,y1                       ; y <- y-scy (new)
+        SUB     x0,cx1,cx0                      ; x-offset
+        SUB     y0,cy1,cy0                      ; y-offset
+
+        STR     x0,[handle,#w_xoffset]
+        STR     y0,[handle,#w_yoffset]
+        STR     x0,xoffset                      ; for int_translatelist
+        STR     y0,yoffset
+        STR     PC,borderlinked                 ; save flag status
+
+; invalidate old and new visible work areas (will revalidate later on, when rectangles are copied)
+; NB: child windows still in the 'opening' list are clipped out of the old and new visible areas
+
+        BL      invalidate_oldnew
+
+; get the old visible portion (with or without scroll bars etc.)
+
+        LDR     R14,borderlinked
+        TEQP    R14,#0                          ; restore status
+        ADDEQ   R14,handle,#w_old_x0
+        ADDNE   R14,handle,#w_old_wax0
+        LDMIA   R14,{x0,y0,x1,y1}
+        BL      oldvisibleportion_x0y0x1y1      ; get correct amount of window
+        MOV     R0,#windowrects
+        MOV     R1,#oldinvalidrects             ; get rid of OLD invalid rectangles
+        BL      subrects
+        BL      oldsubtract_openingchildren
+        BL      int_translatelist               ; translate coords, moving to oldwindowrects
+        MOV     R0,#oldwindowrects
+        BL      subtract_openingchildren        ; ignore bits that are being done separately
+
+        LDR     R14,borderlinked
+        TEQP    R14,#0                          ; restore status
+        ADDEQ   R14,handle,#w_x0
+        ADDNE   R14,handle,#w_wax0
+        LDMIA   R14,{x0,y0,x1,y1}
+        BL      visibleportion_x0y0x1y1         ; new visible list (WITHOUT subtracting invalid rectangles)
+
+; clip old visible region to the new one, and stash the block-copy rectangles for later
+
+        MOV     R0,#oldwindowrects
+        MOV     R1,#windowrects
+        BL      intrects
+        BL      losewindowrects
+
+; keep hold of list of block-copy rectangles - we'll need those later
+
+        LDR     R14,rlinks + oldwindowrects
+        STR     R14,[handle,#w_oldwindowrects]
+        MOV     R14,#nullptr
+        STR     R14,rlinks + oldwindowrects
+;
+; if border unlinked, but in same place (ie. scrolling)
+; mark borders valid, except for the relevant scroll bar(s) which have already been removed from the list
+;
+        LDR     R14,borderlinked
+        TEQP    R14,#0                  ; exit if border linked
+        BEQ     %FT01
+
+        LDR     R14,isborderok          ; always redraw border if it toggled
+        TEQP    R14,#0                  ; set flags
+;
+        MOVEQ   R0,#invalidrects        ; mark border bits valid again
+        MOVEQ   R1,#borderrects
+        BLEQ    subrects
+;
+01      MOV     R0,#borderrects
+        BL      loserects
+
+; skip straight to here if window wasn't / isn't open
+
+80
+        Debug   opn,"int_flush_open exitting"
+
+        Pull    "PC"
+
+;..............................................................................
+
+; In    handle -> window to consider
+; Out   NE => borders need redrawing due to ws_hasfocus bit changing
+
+hasfocus_changing  ENTRY  "R1,R2"
+
+        LDR     R14,[handle,#w_old_flags]
+        LDR     R1,[handle,#w_flags]
+        AND     R2,R14,R1
+        EOR     R14,R14,R1
+        TST     R14,#ws_hasfocus
+;       LDRNEB  R14,[handle,#w_tbcol]           ; for compatibility, we mustn't optimize the case where the colours are the same,
+;       LDRNEB  R1,[handle,#w_tbcol2]           ; because some apps use this method to force a redraw of the title bar
+;       TEQNE   R14,R1
+        TSTNE   R2,#wf_iconbits                 ; we can safely ignore this if window has no borders
+
+        EXIT
+
+;..............................................................................
+
+; In    R0 = flags being altered
+;       R1 = new flags
+;       R2 = icon index of icon to consider
+;       handle -> window block
+;       [rlinks,#windowrects] = rectangles that are to be re-validated within the border
+; Out   top/right/bottom border removed from list if relevant icon's position is changing
+;       cx0..cy1,x0..y1 corrupted
+
+check_redraw_border  ROUT
+
+        Push    "R0-R1,LR"
+
+        MOV     R14,#wf_icon1 :SHR: 1
+        MOV     R14,R14,LSL R2          ; R14 = relevant flag bit
+        Debug   opn,"Changing/new/testing",R0,R1,R14
+        TST     R1,R14
+        Pull    "R0-R1,PC",EQ           ; must be present
+        TST     R0,R14
+        Pull    "R0-R1,PC",NE           ; and not changing
+
+        MOV     R0,R2                   ; R0 = border icon handle (3=title,5=vscroll,7=hscroll)
+
+        LDR     R1,[handle,#w_old_flags]
+        ADD     R14,handle,#w_old_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        BL      calc_w_iconposn_R1      ; x0,y0,x1,y1 = old position of icon (ignoring snazzy stuff wrt. child windows)
+        Debug   opn,"Old position of icon",R0,x0,y0,x1,y1
+
+        Push    "x0,y0,x1,y1"
+
+        LDR     R1,[handle,#w_flags]
+        ADD     R14,handle,#w_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+        BL      calc_w_iconposn_R1      ; x0,y0,x1,y1 = new position of icon (ignoring snazzy stuff wrt. child windows)
+        Debug   opn,"New position of icon",R0,x0,y0,x1,y1
+
+        Pull    "cx0,cy0,cx1,cy1"
+
+        TEQ     x0,cx0
+        TEQEQ   y0,cy0
+        TEQEQ   x1,cx1
+        TEQEQ   y1,cy1
+        Pull    "R0-R1,PC",EQ           ; no change
+
+        ADD     R14,handle,#w_x0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}   ; redraw relevant border if its position has changed
+        CMP     R0,#5
+        LDRLT   cy0,[handle,#w_way1]    ; top border     (3)
+        LDREQ   cx0,[handle,#w_wax1]    ; right border   (5)
+        LDRGT   cy1,[handle,#w_way0]    ; bottom border  (7)
+
+        Debug   opn,"Invalidating border rectangle",cx0,cy0,cx1,cy1
+        BL      subwindowrect
+
+        Pull    "R0-R1,PC"
+
+;..............................................................................
+
+; mark old and new visible areas invalid
+
+invalidate_oldnew ROUT
+
+        Push    "LR"
+
+      [ Twitter
+        BL      oldvisibleoutertwitter          ; take account of antitwitter when building rects
+      |
+        BL      oldvisibleouterportion          ; remains in windowrects list
+      ]
+        MOV     R0,#windowrects
+        BL      oldsubtract_openingchildren     ; subtract children that are going to be done separately
+        BL      markinvalidrects                ; add to invalidrects list (ie. new set)
+
+        BL      visibleouterportion
+        MOV     R0,#windowrects
+        BL      subtract_openingchildren        ; subtract children that are going to be done separately
+        BL      markinvalidrects
+        BL      losewindowrects
+
+        Pull    "PC",,^                         ; MUST PRESERVE FLAGS
+
+
+;;-----------------------------------------------------------------------------
+;; getparentbounds
+;; Entry: cx0 -> parent window, or = nullptr
+;;        handle -> child window
+;; Exit:  cx0,cy0,cx1,cy1 = bounding box of parent or screen
+;;-----------------------------------------------------------------------------
+
+getparentbounds  ROUT
+
+        Push    "x0,y0,LR"
+
+        CMP     cx0,#nullptr
+        ADREQ   R14,scrx0
+        LDMEQIA R14,{cx0,cy0,cx1,cy1}
+        Pull    "x0,y0,PC",EQ
+
+        LDR     R14,[handle,#w_flags]   ; if child window lives in parent's border,
+        TST     R14,#wf_inborder
+        ADDNE   R14,cx0,#w_x0
+        LDMNEIA R14,{cx0,cy0,cx1,cy1}   ; bounding box is just the parent's window outline
+        Pull    "x0,y0,PC",NE
+
+        LDR     x0,[cx0,#w_wax0]
+        LDR     R14,[cx0,#w_scx]
+        SUB     x0,x0,R14
+
+        LDR     y0,[cx0,#w_way1]
+        LDR     R14,[cx0,#w_scy]
+        SUB     y0,y0,R14               ; x0,y0 = work area origin
+
+        ADD     R14,cx0,#w_wex0
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+
+        ADD     cx0,cx0,x0
+        ADD     cy0,cy0,y0
+        ADD     cx1,cx1,x0
+        ADD     cy1,cy1,y0
+
+        LDR     R14,dx                  ; expand box by 1 pixel all round
+        SUB     cx0,cx0,R14             ; this allows a window with a thin border to butt up against the top-left
+        ADD     cx1,cx1,R14
+        LDR     R14,dy
+        SUB     cy0,cy0,R14
+        ADD     cy1,cy1,R14
+
+        Pull    "x0,y0,PC"
+      ]
 
 ;;-----------------------------------------------------------------------------
 ;; topmost_window
@@ -3909,6 +5517,7 @@ calctoggle
 ;; Exit:   R0=handle of topmost window (or 0 if not windows) flags preserved
 ;; This function is used mainly by hotkey processing code.
 ;;-----------------------------------------------------------------------------
+
 topmost_window
         Push    "LR"
         LDR     R0,activewinds+lh_forwards
@@ -3928,37 +5537,45 @@ topmost_window
 
 SWIWimp_BlockCopy
         MyEntry "BlockCopy"
-;
+
         MOV     handle,R0
         BL      checkhandle_owner       ; drops all the way through if V set!
         BVS     ExitWimp
-;
+
+      [ ChildWindows
+        BL      int_flush_opens         ; wimp out for now
+      ]
+
         Push    "R1-R6"                 ; leave on stack for later
-;
+
         SUB     R5,R5,R1                ; x-offset
         SUB     R6,R6,R2                ; y-offset
         STR     R5,xoffset
         STR     R6,yoffset
-;
+
         pullx   "x0,y0,x1,y1"
         BLVC    int_visibleinner_x0y0x1y1 ; [windowrects] = visible part
-;
+
+        MOVVC   R0,#windowrects
+        MOVVC   R1,#invalidrects
+        BLVC    subrects
+
         BLVC    int_translatelist       ; [oldwindowrects] = translated list
-;
+
         BLVC    visibleinnerportion
         MOVVC   R0,#oldwindowrects      ; clip translated list to vis. window
         MOVVC   R1,#windowrects
         BLVC    intrects
-;
+
         Pull    "cx0,cy0,cx1,cy1,x0,y0"
         SUB     R14,cx1,cx0
         ADD     x1,x0,R14               ; coords of new rectangle
         SUB     R14,cy1,cy0
         ADD     y1,y0,R14
         BLVC    int_force_redraw        ; mark new rectangles invalid
-;
+
         BLVC    int_blockcopy           ; may re-validate some rectangles
-;
+
         B       ExitWimp
 
 ;
@@ -3970,10 +5587,12 @@ SWIWimp_BlockCopy
 
 int_translatelist
         Push    "LR"
-;
+
+      [ :LNOT: ChildWindows
         MOV     R0,#windowrects
-        MOV     R1,#invalidrects                ; only the VALID bits !!!
+        MOV     R1,#invalidrects                ; this is now done by the caller
         BL      subrects
+      ]
 ;
 ; copy this list to 'oldwindowrects'
 ;
@@ -4005,6 +5624,237 @@ openwlp1end
         BNE     openwlp1
 ;
         Pull    "handle,userblk,PC"
+
+;....................................................................................
+
+      [ ChildWindows
+
+; Entry:  oldwindowrects = source rectangle list, translated already
+;         x/yoffset = translation amount
+;         handle = window handle of relevant window
+;         no opens are pending at the moment
+; Exit:   rectangles fudged into the relevant window, and int_blockcopy_all called
+;         R0,R1,cx0..cy1,x0..y1 corrupted
+
+int_blockcopy   ROUT
+
+        Debug   opn,"int_block_copy"
+
+        ADR     R2,xoffset
+        LDMIA   R2,{x0,y0}
+        ADD     R2,handle,#w_xoffset
+        STMIA   R2,{x0,y0}
+
+        LDR     R2,rlinks+oldwindowrects
+        STR     R2,[handle,#w_oldwindowrects]
+        MOV     R2,#nullptr
+        STR     R2,rlinks+oldwindowrects
+
+        ADRL    R1,openingwinds+lh_forwards-ll_forwards          ; top-level window
+        LDR     R0,[R1,#ll_forwards]
+        ASSERT  ll_forwards = 0 :LAND: ll_backwards = 4
+        ADD     R2,handle,#w_opening_link
+        STMIA   R2,{R0,R1}
+        STR     R2,[R0,#ll_backwards]
+        STR     R2,[R1,#ll_forwards]
+
+        ; drop through to int_blockcopy_all
+
+;....................................................................................
+
+; Entry:  openingwinds = list of windows being opened
+;         for each window (handle) in list:
+;           [handle,#w_oldwindowrects] = source rectangle list, translated already
+;           [handle,#w_x/yoffset] = translation amount
+; Exit:   if possible, rectangles will be block-copied to the new position
+
+int_blockcopy_all
+        Push    "handle,userblk,LR"
+
+        Debug   opn,"int_blockcopy_all"
+
+        BL      defaultwindow                   ; set to whole screen
+        BL      forcedrag_off                   ; remove drag rectangle
+
+        SetRectPtrs
+
+blcopynext_outer
+
+        MOV     R14,#nullptr
+        STR     R14,oldlink                     ; no rectangles to get rid of so far
+
+        LDR     R2,openingwinds + lh_forwards
+
+blcopynext_window
+
+        LDR     R14,[R2,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     blcopyend_window                ; we got to the end - should we try again?
+
+        ADD     R1,R2,#w_oldwindowrects - w_opening_link
+        SUB     R1,R1,rectlinks                 ; bodge so [rectlinks,R1] -> next rectangle
+
+blcopynext
+        MOV     R14,R1
+        LDR     R1,[rectlinks,R1]
+        CMP     R1,#nullptr
+        BEQ     blcopyend
+
+; we found a rectangle - see if we can copy it
+
+      ; Debug   opn,"Try to block-copy old/rectangle",R14,R1
+        STR     R14,oldlink
+
+; check to see whether it would trash any other rectangles before block-copying it
+;       R1 = rectangle to consider
+;       R2 = handle + w_opening_link of the first window
+
+        Push    "R1,R2"                         ; remember R1,R2 for the outer loop
+
+        ADD     R14,R2,#w_xoffset - w_opening_link
+        LDMIA   R14,{x0,y0}
+        ADR     R14,xoffset                     ; x/yoffset hold offsets for the candidate rectangle
+        STMIA   R14,{x0,y0}
+
+        getxy   R1,cx,cy
+
+; inner loop - scan all rectangles from the beginning
+
+        LDR     x0,openingwinds + lh_forwards
+
+blcopynext_inner
+
+        LDR     R14,[x0,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     goblockcopy                     ; no rectangles intersect - go ahead and block-copy it
+
+        ADD     R14,x0,#w_xoffset - w_opening_link
+        LDMIA   R14,{x1,y1}
+        Push    "x0,x1,y1"                      ; parameters for the current window (inner loop)
+
+        ADD     R0,x0,#w_oldwindowrects - w_opening_link
+        SUB     R0,R0,rectlinks                 ; bodge so [rectlinks,R0] -> next rectangle
+
+01      LDR     R0,[rectlinks,R0]
+        CMP     R0,#nullptr
+        BEQ     %FT04                           ; try next window
+
+        CMP     R0,R1                           ; ignore the candidate rectangle itself
+        BEQ     %BT01
+
+        getxy   R0,x,y
+        LDR     R14,[SP,#4]
+        SUB     x0,x0,R14                       ; go back to old posn
+        SUB     x1,x1,R14
+        LDR     R14,[SP,#8]
+        SUB     y0,y0,R14
+        SUB     y1,y1,R14
+
+        CMP     x0,cx1                          ; see if new tramples on old
+        CMPLT   cx0,x1
+        CMPLT   y0,cy1
+        CMPLT   cy0,y1
+        BGE     %BT01                           ; continue if rectangles don't intersect
+
+; this rectangle couldn't be copied - let's try the next one
+
+        ADD     SP,SP,#12
+        Pull    "R1,R2"
+        B       blcopynext
+
+04
+        Pull    "x0,x1,y1"
+        LDR     x0,[x0,#ll_forwards]
+        B       blcopynext_inner
+
+; block-copy the rectangle
+
+goblockcopy
+        LDR     R0,xoffset
+        CMP     R0,#0
+        LDR     R14,yoffset
+        CMPEQ   R14,#0
+        BEQ     %FT10                           ; just mark valid if no move
+
+        SUB     x0,cx0,R0
+        SUB     y0,cy0,R14
+        SUB     x1,cx1,R0
+        SUB     y1,cy1,R14
+        Plot    4,x0,y0
+        LDR     R14,dx
+        SUB     x1,x1,R14
+        LDR     R14,dy
+        SUB     y1,y1,R14
+        Plot    4,x1,y1
+
+        CallFilter copyfilter,nohandle
+
+        Plot    190,cx0,cy0                     ; block copy!
+
+        Debug   opn,"Block-copied rectangle to",cx0,cy0,cx1,cy1
+
+10      MOV     R0,#invalidrects
+        MOV     R1,R0
+        BL      subrect                         ; mark cx0,cy0,cx1,cy1 valid
+
+; free this rectangle, and remove from the list
+
+        ADD     SP,SP,#2*4                      ; correct stack (we're starting again, so we don't need R1,R2)
+        LDR     R2,oldlink
+
+noblockcopy
+        LDR     R1,[rectlinks,R2]
+
+        Debug   opn,"Free old/rectangle",R2,R1
+
+        LDR     R14,[rectlinks,R1]
+        STR     R14,[rectlinks,R2]              ; remove from window's list,
+        LDR     R14,[rectlinks,#freerects]
+        STR     R14,[rectlinks,R1]
+        STR     R1,[rectlinks,#freerects]       ; and add to free list
+
+        B       blcopynext_outer                ; start again from the very beginning
+
+; got to the end of a window - if it had no rectangles, remove it from the list (speeds up the inner loop)
+
+blcopyend
+
+        LDR     R14,[R2,#w_oldwindowrects - w_opening_link]
+        CMP     R14,#nullptr
+        LDRNE   R2,[R2,#ll_forwards]
+        BNE     blcopynext_window               ; go on to the next window
+
+        Debug   opn,"Remove window from opening list (no more rectangles)",R2
+
+        LDMIA   R2,{x0,y0}
+        STR     x0,[y0,#ll_forwards]
+        STR     y0,[x0,#ll_backwards]
+        MOV     R14,#0                          ; mark as not being in the chain
+        STR     R14,[R2,#ll_forwards]
+
+        MOV     R2,x0                           ; don't load from the link - it's been reset!
+        B       blcopynext_window               ; go on to the next window
+
+; couldn't find ANY rectangles to copy
+; if we haven't done them all, the best we can do (so far) is to simply drop one of the rectangles and carry on
+
+blcopyend_window
+
+        Debug   opn,"*** Couldn't copy any more",#oldlink
+
+        LDR     R2,oldlink
+        CMP     R2,#nullptr
+        BNE     noblockcopy
+
+blcopydone
+
+        Debug   opn,"int_blockcopy_all exitting"
+
+        BL      forcedrag_on                    ; restore drag rectangle
+
+        Pull    "handle,userblk,PC"
+
+      |
 
 ;
 ; Entry:  [oldwindowrects] = source rectangle list, translated already
@@ -4100,6 +5950,7 @@ noblockcopy
         BL      loserects
 ;
         Pull    "PC"
+      ]
 
 ;;-----------------------------------------------------------------------------
 ;; Close_Window - remove window from the active list
@@ -4110,54 +5961,124 @@ SWIWimp_CloseWindow
 ;
         LDR     R0,[userblk]
         MOV     handle,R0
+      [ ChildWindows
+        BL      checkhandle                     ; window need not be owned by this task
+      |
         BL      checkhandle_owner               ; window must be owned by task
+      ]
         BLVC    nocaret                         ; R0,handle = rel/abs handles
         BLVC    int_close_window
 ;
         B       ExitWimp
 
+;.............................................................................
+
+; In    R0 = relative window handle of window being closed
+;       [caretdata+0] = relative window handle of window with caret
+; Out   [caretdata+0] = -1 if this window was closed
+;       [menucaretwindow] = -1 likewise
+
 nocaret
         Push    "R0,R1,handle,LR"
-;
+
+      [ ChildWindows
+        LDR     handle,caretdata
+        BL      isparentof                      ; EQ if R0 is a parent of handle
+        MOVEQ   R0,handle
+      |
         LDR     R14,caretdata                   ; turn caret off if nec.
         TEQ     R0,R14
+      ]
         MOVEQ   R14,#nullptr
         STREQ   R14,caretdata
         BLEQ    focusoff                        ; NB close panes before tools
-;
+
+      [ ChildWindows
+        BVS     %FT01
+
+        LDR     R0,[SP]                         ; restore R0
+        LDR     handle,menucaretwindow          ; check for previous owner of caret (before menu) being closed
+        BL      isparentof                      ; EQ if R0 is a parent of handle
+      |
         LDR     R14,menucaretwindow
         TEQ     R0,R14
+      ]
         MOVEQ   R14,#nullptr
         STREQ   R14,menucaretwindow
-;
-        MOV     R14,#0
+
+01      MOV     R14,#0
         STR     R14,caretscrollx
-;
+
         STRVS   R0,[R13]
         Pull    "R0,R1,handle,PC"
+
+;.............................................................................
+
+; In    handle = relative handle of window in question
+;       R0 = relative handle of what might be the parent
+; Out   EQ if R0 = handle, or its parent
+
+      [ ChildWindows
+
+isparentof      ROUT
+
+        Push    "R0,handle,LR"
+
+        CMP     handle,#nullptr
+        BEQ     %FT80
+        BL      checkhandle                     ; if handle illegal, leave it to someone else!
+        BVS     %FT80
+
+        Abs     R0,R0
+
+01      TEQ     handle,R0
+        BEQ     %FT90
+        LDR     handle,[handle,#w_parent]
+        CMP     handle,#nullptr
+        BNE     %BT01
+
+80
+        Pull    "R0,handle,LR"
+        BICS    PC,LR,#Z_bit                    ; NE => R0 wasn't a parent of handle
+
+90
+        Pull    "R0,handle,LR"
+        ORRS    PC,LR,#Z_bit                    ; EQ => R0 was a parent of handle
+      ]
 
 ;-----------------------------------------------------------------------------
 ; internal entry point - handle --> window definition
 ;-----------------------------------------------------------------------------
 
 int_close_window
-        Push    "R1-R9,LR"
-        Debug   opn,"Closing window ",handle
+        Push    "R1-R9,LR"                      ; must match stacking above
+
+        Debug   opn,"Closing window",handle
 ;
         BL      checkredrawhandle
-        Pull    "R1-R9,PC",VS
+    [ ChildWindows
+        BL      int_mark_window_opening         ; put onto openingwinds chain
+    |
+        Pull    "R1-R9,PC",VS           ; not actually needed
 ;
-; add visible list to the invalid list
+; all invalidation is now done in int_flush_opens
 ;
+      [ Twitter
+        BL      visibleoutertwitter     ; take account of antitwitter when building rects
+      |
         BL      visibleouterportion     ; remains in windowrects list
+      ]
         BL      markinvalidrects        ; add to invalidrects list
         BL      losewindowrects
+    ]
 ;
 ; if window was really open, remove handle from stack
 ;
         LDR     R0,[handle,#w_flags]
         TST     R0,#ws_open
         BEQ     endclose
+;
+; update task priority based on number of open windows
 ;
         LDR     R0,[handle,#w_taskhandle]
         CMP     R0,#0
@@ -4175,8 +6096,14 @@ int_close_window
 
         LDR     R2,[handle,#w_active_link+ll_backwards]
         LDR     R3,[handle,#w_active_link+ll_forwards]
+        Debug   child,"delink window: back/forwards =",R2,R3
         STR     R3,[R2,#ll_forwards]
         STR     R2,[R3,#ll_backwards]
+;
+; NB: set window's parent to -1 (must do this in case the parent is later deleted)
+;
+        MOV     R14,#nullptr
+        STR     R14,[handle,#w_parent]
 ;
 ; mark window as closed, and not top
 ;
@@ -4186,9 +6113,61 @@ endclose
         STR     R0,[handle,#w_flags]
 ;
         Pull    "R1-R9,PC"
-
-
         LTORG
+
+;..............................................................................
+
+; In    handle -> window to mark as being opened/closed
+; Out   window and all descendants added to openingwinds, if not already on it
+
+      [ ChildWindows
+
+int_mark_window_opening  ENTRY  "R0,R1"
+
+        MOV     R14,#1
+        STRB    R14,openspending
+
+        LDR     R14,[handle,#w_opening_link+ll_forwards]
+        TEQ     R14,#0
+        BLEQ    int_mark_children       ; stick window and descendants in openingwinds list (unless already in it)
+
+        EXITS
+
+;..............................................................................
+
+; We need to make sure that if a window is on the opening list, then so are all its descendents
+; They may get removed by remove_children, but that's another story
+; This routine assumes that the window on entry is NOT yet in the openingwinds list
+; In:   handle -> window to add to list
+; Out:  window and all descendants added to openingwinds list
+;       R0,R1 corrupted
+
+int_mark_children  ENTRY  "handle"
+
+        ADRL    R1,openingwinds+lh_forwards-ll_forwards          ; stick this window in the opening list first
+        LDR     R0,[R1,#ll_forwards]
+        ASSERT  ll_forwards = 0 :LAND: ll_backwards = 4
+        ADD     R14,handle,#w_opening_link
+        STMIA   R14,{R0,R1}
+        STR     R14,[R0,#ll_backwards]
+        STR     R14,[R1,#ll_forwards]
+
+        Debug   opn,"Stick handle in opening_link list",handle,R0,R1
+
+        LDR     handle,[handle,#w_children + lh_forwards]        ; makes no difference whether we traverse the old or new list
+01
+        ASSERT  ll_forwards = 0
+        LDR     R14,[handle],#-w_active_link
+        CMP     R14,#nullptr
+        EXIT    EQ
+
+        LDR     R14,[handle,#w_opening_link + ll_forwards]
+        TEQ     R14,#0
+        BLEQ    int_mark_children
+
+        LDR     handle,[handle,#w_active_link + ll_forwards]
+        B       %BT01
+      ]
 
 
 ;;-----------------------------------------------------------------------------
@@ -4201,9 +6180,17 @@ endclose
 
 SWIWimp_RedrawWindow
         MyEntry "Redraw_Window"
-;
+
+      [ ChildWindows
+        BL      int_flush_opens                 ; if we get any, we'll have to redraw the whole window
+      ]
+
         LDR     handle,[userblk]
         LDR     R1,redrawhandle
+      [ debug
+        LDR     R14,rlinks + windowrects
+        Debug   child,"Wimp_RedrawWindow: handle,redrawhandle,windowrects",handle,R1,R14
+      ]
         TEQ     handle,R1
         STRNE   handle,redrawhandle
         BL      checkhandle_owner               ; must preserve flags
@@ -4216,14 +6203,32 @@ SWIWimp_RedrawWindow
 ; internal entry point - called by Poll_Wimp sometimes
 ;-----------------------------------------------------------------------------
 
+              [ ChildWindows
+backicon        DCD     &0D85                   ; moved from the end
+quiticon        DCD     &0D84
+toggleicon1     DCD     &0D81
+toggleicon2     DCD     &0D82
+              ]
+
 int_redraw_window
         Push    LR
 ;
         Rel     R14,handle
         STR     R14,redrawhandle
-;
+
+        Debug   child,"Wimp_RedrawWindow",handle
+
         LDR     R14,[handle,#w_taskhandle]
         Task    R14,,"Redraw"                   ; page in window owner
+;
+; subtract child windows that are allowed to intrude on the border
+;
+      [ ChildWindows
+        LDR     R14,BPR_indication
+        CMP     R14,#BPR_continuelevel
+        MOVLO   R1,#wf_inborder
+        BLLO    subtract_children               ; remove border child windows from the list
+      ]
 ;
 ; use VDU 5 mode throughout
 ;
@@ -4251,6 +6256,8 @@ int_redraw_window
 redrawoutlp
         getxy   R1,x,y
 
+        Debug   child,"Redrawing rectangle",x0,y0,x1,y1
+
         CallFilter rectanglefilter
 
         BL      graphicswindow
@@ -4264,14 +6271,24 @@ redrawoutlp
         ADD     R14,handle,#w_wax0
         LDMIA   R14,{x0,y0,x1,y1}
 ;
-; if w_tfcol = 255, then don't draw border
+; if w_tfcol = 255, and there are no border elements, then don't draw border at all
 ;
         LDRB    R14,[handle,#w_tfcol]
         TEQ     R14,#255
+      [ ChildWindows
+        LDR     R14,[handle,#w_flags]   ; there's only NO border if these are off as well
+        TSTEQ   R14,#wf_iconbits
+      ]
         BEQ     doneborder              ; skip the lot!
 ;
-; draw border round work area
+; draw border round work area (unless w_tfcol = 255)
 ;
+      [ ChildWindows
+        LDRB    R14,[handle,#w_tfcol]
+        TEQ     R14,#255
+        BEQ     no_thin_border
+      ]
+
         LDR     R14,dx
         SUB     x0,x0,R14
         ADD     x1,x1,R14
@@ -4282,6 +6299,10 @@ redrawoutlp
         BL      window_fg
 
         BL      hollowrectangle
+
+      [ ChildWindows
+no_thin_border
+      ]
 ;
 ; set title background colour and draw window border
 ;
@@ -4303,9 +6324,22 @@ redrawoutlp
         LDR     R14,[handle,#w_titleflags]
         TST     R14,#if_fancyfont
       ]
+
+      [ ChildWindows
+        BEQ     %FT01
+
+        ;set => fancy font
+        LDRB    R1,titlecolour
+        LDRB    R2,[handle,#w_tfcol]
+        TEQ     R2,#&FF
+        MOVEQ   R2,#7                   ; title text colour if 'no border' colour set must be black
+        CMP     R2,#&100                ; set NE again
+01
+      |
         ;set => fancy font
         LDRNEB  R1,titlecolour
         LDRNEB  R2,[handle,#w_tfcol]
+      ]
 
         ;clear => system font
         ;do nothing
@@ -4428,10 +6462,89 @@ redrawoutlp_done_tracing
         TST     R3,#wf_icon5
         BEQ     novscroll
 ;
+      [ ChildWindows
+        Push    "cx0,cy0,cx1,cy1"
+
         MOV     R0,#iconposn_vscroll
-        BL      calc_w_iconposn         ; get the bounds of the scroll region
-;
+        BL      calc_w_iconposn2        ; x0..y1 = bounds of scroll region, cx0..cy1 = 'normal' bounds
+
+        LDR     R14,dy
+
+        SUB     R0,cy1,R14
+        CMP     y0,R0                   ; force within the 'normal' box
+        MOVGT   y0,R0
+
+        ADD     R0,cy0,R14
+        CMP     y1,R0
+        MOVLT   y1,R0
+
+        ADD     R0,y0,R14
+        CMP     y1,R0
+        MOVLT   y1,R0
+
+      ; Debug   ,"calc_w_iconposn (v-scrollbar)",R3,x0,y0,x1,y1
+
+        Push    "cy0"
+        CMP     y1,cy1
+        LDRLT   R14,dy
+        SUBLT   cy0,y1,R14
+        BLLT    scroll_fillin           ; redraw the missing rectangle (if within clip region)
+        Pull    "cy0"
+
+        CMP     cy0,y0
+        LDRLT   R14,dy
+        ADDLT   cy1,y0,R14
+        BLLT    scroll_fillin
+
+        Pull    "cx0,cy0,cx1,cy1"
+
+      ; Debug   ,"calc_w_iconposn (v-scrollbar)",R3,x0,y0,x1,y1
+
+        SUB     R0,y1,y0
+        LDR     R14,dy
+        CMP     R0,R14
+        BLE     novscroll
+
+        LDR     R1,up_height
+        LDR     R14,down_height
+        ADD     R1,R1,R14
+      |
+        MOV     R0,#iconposn_vscroll
+        BL      calc_w_iconposn         ; get the bounds of the scroll region (including the up/down arrows)
+      ]
+
         Push    "y0,y1"
+
+      [ ChildWindows
+        CMP     R1,R0                   ; if scrollbar gets too small, we must squash the arrows to fit
+        BLE     vscrollfits
+
+        MOV     R0,R0,LSR #1            ; divide equally between up/down arrows
+        LDR     R1,dy_1
+        BIC     R0,R0,R1                ; round to next pixel boundary
+        ADD     y0,y0,R0
+
+        MOV     R2,#windowicon_up       ; plot the up arrow (if possible)
+        LDR     R0,up_height
+        BL      plot_windowglyph_vscaled
+        LDREQ   R1,=sysicon             ; if not then use the normal text glyph!
+        ADREQ   R2,uparrowicon
+        BLEQ    drawicon_system         ; this should at least centre and clip the arrow
+
+        LDR     R14,dy
+        ADD     y1,y0,R14               ; overlap by one pixel
+        LDR     y0,[SP],#8              ; correct stack at the same time
+
+        MOV     R2,#windowicon_down
+        LDR     R0,down_height
+        BL      plot_windowglyph_vscaled ; plot the down arrow (if possible)
+        LDREQ   R1,=sysicon
+        ADREQ   R2,downarrowicon
+        BLEQ    drawicon_system         ; otherwise use VDU 5
+        B       novscroll
+
+vscrollfits
+      ]
         LDR     R1,dy
         LDR     R14,up_height
         ADD     R14,R14,R1
@@ -4509,10 +6622,88 @@ novscroll
         TST     R3,#wf_icon7
         BEQ     nohscroll
 ;
+
+      [ ChildWindows
+        Push    "cx0,cy0,cx1,cy1"
+
+        MOV     R0,#iconposn_hscroll
+        BL      calc_w_iconposn2        ; x0..y1 = actual bounds, cx0..cy1 = 'normal' bounds
+
+        LDR     R14,dx
+
+        SUB     R0,cx1,R14
+        CMP     x0,R0                   ; force within the 'normal' box
+        MOVGT   x0,R0
+
+        ADD     R0,cx0,R14
+        CMP     x1,R0
+        MOVLT   x1,R0
+
+        ADD     R0,x0,R14
+        CMP     x1,R0
+        MOVLT   x1,R0
+
+        Push    "cx1"
+        CMP     cx0,x0
+        LDRLT   R14,dx
+        ADDLT   cx1,x0,R14
+        BLLT    scroll_fillin           ; redraw the missing rectangle (if within clip region)
+        Pull    "cx1"
+
+        CMP     x1,cx1
+        LDRLT   R14,dx
+        SUBLT   cx0,x1,R14
+        BLLT    scroll_fillin
+
+        Pull    "cx0,cy0,cx1,cy1"
+
+        SUB     R0,x1,x0
+        LDR     R14,dx
+        CMP     R0,R14
+        BLE     nohscroll
+
+        LDR     R1,left_width
+        LDR     R14,right_width
+        ADD     R1,R1,R14
+      |
         MOV     R0,#iconposn_hscroll
         BL      calc_w_iconposn         ; get the bounds
-;
+      ]
+
         Push    "x0,x1"
+
+      [ ChildWindows
+        CMP     R1,R0                   ; if scrollbar gets too small, we must squash the arrows to fit
+        BLE     hscrollfits
+
+        MOV     R0,R0,LSR #1            ; divide equally between up/down arrows
+        LDR     R1,dx_1
+        BIC     R0,R0,R1                ; round to next pixel boundary
+        ADD     x1,x0,R0
+        LDR     R14,dx
+        ADD     x1,x1,R14               ; overlap by one pixel
+
+        MOV     R2,#windowicon_left     ; plot the left arrow (if possible)
+        LDR     R0,left_width
+        BL      plot_windowglyph_hscaled
+        LDREQ   R1,=sysicon             ; if not then use the normal text glyph!
+        ADREQ   R2,leftarrowicon
+        BLEQ    drawicon_system         ; this should at least centre and clip the arrow
+
+        LDR     R14,dx
+        SUB     x0,x1,R14               ; overlap by one pixel
+        Pull    "R2,x1"                 ; retrieve x1 and correct stack
+
+        MOV     R2,#windowicon_right
+        LDR     R0,right_width
+        BL      plot_windowglyph_hscaled ; plot the right arrow (if possible)
+        LDREQ   R1,=sysicon
+        ADREQ   R2,rightarrowicon
+        BLEQ    drawicon_system         ; otherwise use VDU 5
+        B       nohscroll
+
+hscrollfits
+      ]
         LDR     R1,dx
         LDR     R14,left_width
         ADD     R14,R14,R1
@@ -4556,18 +6747,23 @@ novscroll
         BL      drawicon_system
 
 nohscroll
-;
+      [ Twitter
+        BL      checktwitter
+        BLNE    antitwitter
+      ]
+
 doneborder
         BL      forcedrag_on            ; put back drag rectangle if nec.
-;
+
         Pull    "R1"
+
 endredrawoutlp
         SetRectPtrs
-;
+
         LDR     R1,[rectlinks,R1]
         CMP     R1,#nullptr
         BNE     redrawoutlp
-;
+
         Pull    "userblk,handle"
 ;
 ; mark border valid
@@ -4591,6 +6787,17 @@ endredrawoutlp
         MOV     R1,R0
         BL      intrect
 ;
+; subtract outer rectangles of all child windows
+; (note that this will often not do anything, since child windows are normally redrawn first)
+; NB: If we're doing a braindead panic redraw, DON'T clip out the children - we could run out of rectangles!
+;
+      [ ChildWindows
+        LDR     R14,BPR_indication
+        CMP     R14,#BPR_continuelevel
+        MOVLO   R1,#0
+        BLLO    subtract_children                       ; remove child windows from the list
+      ]
+;
 ; set ecf origin to window's work area origin
 ;
         LDR     R14,[handle,#w_scx]
@@ -4601,7 +6808,13 @@ endredrawoutlp
 ;
 ; set up return data by exiting via Get_Rectangle
 ;
+ [ Twitter
+        BL      checktwitter
+        MOV     r14, #getrect_redrawing:OR:getrect_firstrect
+        ORRNE   r14, r14, #getrect_twitter
+ |
         MOV     R14,#getrect_redrawing:OR:getrect_firstrect
+ ]
         STR     R14,getrectflags
 ;
         Pull    LR
@@ -4610,15 +6823,19 @@ endredrawoutlp
 ;
 ; definitions of the various bits and pieces (icons)
 ;
+
 sysicon         *       if_text:OR:if_filled:OR:if_border:OR:if_hcentred
 sysicon2        *       if_sprite:OR:if_filled:OR:if_border:OR:if_hcentred
 
-
-backicon        DCD     &0D85
+              [ ChildWindows
+sizeicon        DCD     &0D83
+              |
+backicon        DCD     &0D85                   ; moved to the start
 quiticon        DCD     &0D84
 sizeicon        DCD     &0D83
 toggleicon1     DCD     &0D81
 toggleicon2     DCD     &0D82
+              ]
 uparrowicon     DCD     &0D8B
 downarrowicon   DCD     &0D8A
 leftarrowicon   DCD     &0D88
@@ -4627,6 +6844,51 @@ blankicon       DCD     &0D
                 ALIGN
 
         LTORG
+
+;..............................................................................
+
+; In    cx0,cy0,cx1,cy1 = box to fill in
+;       [clipx0..y1] = current graphics window
+; Out   solidrectangle drawn if box is visible
+
+      [ ChildWindows
+
+scroll_fillin   ROUT
+
+        Push    "R0,R1,cx0,cy0,cx1,cy1,x0,y0,x1,y1,LR"
+
+        CMP     cx0,cx1
+        CMPLT   cy0,cy1
+        BGE     %FT90
+
+        Push    "cx0,cy0,cx1,cy1"
+        Pull    "x0,y0,x1,y1"
+
+        ADR     R14,clipx0              ; used by drawicon
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+
+        CMP     x0,cx1
+        CMPLT   y0,cy1
+        CMPLT   cx0,x1
+        CMPLT   cy0,y1
+        BGE     %FT90
+
+        BL      hollowrectangle
+
+        LDR     R14,dx
+        ADD     x0,x0,R14
+        SUB     x1,x1,R14
+
+        LDR     R14,dy
+        ADD     y0,y0,R14
+        SUB     y1,y1,R14
+
+        CMP     x0,x1
+        CMPLT   y0,y1
+        BLLT    solidrectangle
+90
+        Pull    "R0,R1,cx0,cy0,cx1,cy1,x0,y0,x1,y1,PC",,^
+      ]
 
 
 ;;----------------------------------------------------------------------------
@@ -5056,24 +7318,43 @@ SWIWimp_UpdateWindow
 ;-----------------------------------------------------------------------------
 
 int_update_window
+ [ Twitter
+        Push    "lr"
+        BL      checktwitter
+        Pull    "lr"
+        MOV     r0, #getrect_firstrect:OR:getrect_updating
+        ORRNE   r0, r0, #getrect_twitter
+ |
         MOV     R0,#getrect_firstrect:OR:getrect_updating
+ ]
 
 int_update_window2
         STR     R0,getrectflags
 
 int_update_window3
         Push    "LR"
+
+        Debug   opn,"int_update_window",handle,#getrectflags
+
+      [ ChildWindows
+        BL      int_flush_opens
+      ]
         Rel     R14,handle
         STR     R14,redrawhandle
         LDR     R14,[handle,#w_taskhandle]
         Task    R14,,"UpdateW"          ; page in the window owner
+      [ Twitter
+        BL      checktwitter
+        SUBNE   y0, y0, #2
+        ADDNE   y1, y1, #2
+      ]
         BL      int_visibleinner_x0y0x1y1
         Pull    "PC"
 
 int_visibleinner_x0y0x1y1
         Push    "x0,y0,x1,y1,LR"
 ;
-        BL      visibleinnerportion
+        BL      visibleinnerportion     ; this subtracts the child windows
         MOV     R0,#windowrects         ; only the VALID bits
         MOV     R1,#invalidrects
         BL      subrects
@@ -5106,7 +7387,11 @@ int_visibleinner_x0y0x1y1
 
 SWIWimp_GetRectangle
         MyEntry "Get_Rectangle"
-;
+
+      [ ChildWindows
+        BL      int_flush_opens         ; it's barmy if there are any, but we want the correct error message
+      ]
+
         LDR     handle,[userblk]
         LDR     R1,redrawhandle
         TEQ     handle,R1
@@ -5157,13 +7442,31 @@ int_get_rectangle
 ;
 ; draw user icons for previous rectangle (if redrawing)
 ;
+;
+ [ Twitter
+        LDR     r14, getrectflags
+        TST     r14, #getrect_firstrect
+        BNE     %FT10
+        TST     R14, #getrect_noicons
+        BLEQ    drawusericons           ; draw icons if wanted (for previous)
+        Pull    "PC",VS
+        LDREQ   r14, getrectflags
+        TST     r14, #getrect_twitter
+        BLNE    antitwitter
+        LDRNE   r14, getrectflags
+        TST     r14, #getrect_noicons
+        BLEQ    forcecaret
+        Pull    "PC",VS
+10
+ |
         LDR     R14,getrectflags
         TST     R14,#getrect_firstrect:OR:getrect_noicons
         BLEQ    drawusericons           ; draw icons if wanted (for previous)
         Pull    "PC",VS
         BLEQ    forcecaret              ; put caret back
         Pull    "PC",VS
-;
+ ]
+
         LDR     R14,getrectflags
         TST     R14,#getrect_firstrect
         BIC     R14,R14,#getrect_firstrect
@@ -5241,7 +7544,9 @@ getrectend
         ]
         LDR     R14,[handle,#w_scy]
         SUB     y1,y1,R14               ; y1 = position of menu origin
+ [ :LNOT: NCMenus
         BL      redrawmenu              ; draw dotted lines if nec.
+ ]
 noclrwbg
         Pull    "x0,y0,x1,y1"           ; need these for returning to caller!
 ;
@@ -5259,6 +7564,30 @@ noclrwbg
         MOV     R0,#-1                  ; return TRUE
         Pull    "PC"
 
+ [ Twitter
+
+checktwitter
+; In:   handle = window handle
+; Out:  NE => twitter, EQ => don't twitter
+;
+        ENTRY
+        LDR     lr, [handle, #w_flags]
+        TST     lr, #wf_autoredraw
+        LDRNE   lr, modeflags
+        TSTNE   lr, #1:SHL:8
+        EXIT
+
+antitwitter ENTRY "r0-r3"
+        ADR     r0, clipx0
+        LDMIA   r0,{r0-r3}
+        SUB     r1,r1,#2
+        SUB     r2,r2,r0
+        SUB     r3,r3,r1
+        ADD     r3,r3,#2
+        SWI     &a38c0
+        CLRV
+        EXIT
+ ]
 
         END
 

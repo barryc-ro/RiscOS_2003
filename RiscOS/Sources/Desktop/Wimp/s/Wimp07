@@ -24,6 +24,15 @@ msf_broadcast   *       1:SHL:31
 
 MSToWimpMagicHandle     *       &706d6957       ; Reads "Wimp" in *memoryi, is not word aligned and has top bit (msf_broadcast) clear
 
+        MACRO
+$lab    CheckMsgQ
+$lab
+      [ NKmessages1
+        LDR     R0,lastpointer
+        SUBS    R0,R0,R2
+        STREQ   R0,lastpointer
+      ]
+        MEND
 
 ;;----------------------------------------------------------------------------
 ;; Return Message to task (called by Wimp_Poll)
@@ -165,6 +174,7 @@ postposting
 ;
         Debug   ms,"Freeing block at:",R2
         Push    "R0"
+        CheckMsgQ
         MOV     R0,#ModHandReason_Free
         BL     XROS_Module
         Pull    "R0"
@@ -237,6 +247,57 @@ int_sendmessage_fromwimp
         Pull    "PC"
 
 
+; NK's optimise
+; if there is already a message_slot_size on the message queue
+; for this task, then just update it rather than add another.
+
+      [ NKmessages2
+
+check_mem_message                                            
+        TEQ     R0,#User_Message
+        MOVNE   PC,LR
+                
+        Push    "R7,LR"
+        LDR     R7,=Message_SlotSize
+        LDR     LR,[R1,#16]
+        TEQ     LR,R7
+        Pull    "R7,PC",NE
+
+; check queue
+        Push    "R0-R3"
+        LDR     R0,headpointer
+        LDR     R2,taskhandle
+        CMP     R2,#0
+        LDRGT   R14,[wsptr,R2]          ; NB task must be alive!
+        LDRGT   R14,[R14,#task_flagword]
+        MOVGT   R14,R14,LSR #flag_versionbit
+        ORRGT   R2,R2,R14,LSL #flag_versionbit
+05
+        CMP     R0,#0
+        BLE     %FT99
+        LDR     R3,[R0,#msb_reasoncode]
+        TEQ     R3,#User_Message
+        LDREQ   R3,[R0,#msb_sender]
+        TEQEQ   R3,R2
+; its the same task, is it the right message?
+        LDREQ   R3,[R0,#msb_size+16]
+        TEQEQ   R3,R7
+        LDRNE   R0,[R0,#msb_link]
+        BNE     %BT05
+
+        LDR     R2,[R1,#24]             ; new next slot
+        LDR     R1,[R1,#20]             ; new current
+                     
+        STR     R1,[R0,#msb_size+20]
+        STR     R2,[R0,#msb_size+24]
+        Pull    "R0-R3,R7,PC"
+
+99
+        CMP     PC,#0
+        Pull    "R0-R3,R7,PC"
+      ]
+
+
 int_sendmessage
         Push    "R3-R7,handle,LR"
 ;
@@ -244,6 +305,11 @@ int_sendmessage
 ;
 ; validate receiving task / window handle
 ;
+      [ NKmessages2
+        BL      check_mem_message
+        Pull    "R3-R7,handle,PC",EQ
+      ]  
+
         MOV     R6,#msh_wastask         ; assume not a window handle first
 ;
         CMP     R2,#0                   ; 0 ==> broadcast to all tasks
@@ -362,6 +428,7 @@ gottaskhandle
         Push    "R0-R2"
         LDR     R14,[R5,#msb_link]              ; #nullptr in version 1.43 !!!
         STR     R14,[R4,#msb_link]
+        CheckMsgQ
         MOV     R0,#ModHandReason_Free
         MOV     R2,R5
         BL     XROS_Module
@@ -397,17 +464,28 @@ notusermess
         BLVC    claimblock              ; R2 --> allocated block
         ADDVS   sp,sp,#4*4
         BVS     %FT99
-;
+
+; use lastpointer to determine where we should put the message
+
+      [ NKmessages1
+        LDR     R4,lastpointer
+        CMP     R4,#0
+        ADRLE   R4,headpointer-msb_link
+      |  
         ADR     R4,headpointer-msb_link
 01
         LDR     R14,[R4,#msb_link]
         CMP     R14,#0
         MOVGT   R4,R14
         BGT     %BT01
+      ]
+
         STR     R2,[R4,#msb_link]       ; add to end of list (FIFO)
-;
         STR     R6,[R2,#msb_handle]     ; hope this is still intact!
-;
+      [ NKmessages1
+        STR     R2,lastpointer
+      ]
+        
         Pull    "R4-R7"
 ;
 ; R4=reasoncode, R5=block, R6=receiver, R7=size
@@ -499,6 +577,7 @@ validtask
         ADD     R5,R5,#4                ; (message is ignored later)
         SUBS    R3,R3,#1
         BNE     %BT01
+        Debug   opn,"**** validtask fails handle",R2
         MyXError  WimpBadTaskHandle
         Pull    "R3,PC"
         MakeErrorBlock WimpBadTaskHandle
@@ -522,6 +601,10 @@ validtask_alive
         LDREQ   R14,[R6,#task_flagword]        ; (compare version numbers)
         MOVEQ   R14,R14,LSR #flag_versionbit
         TEQEQ   R14, R2,LSR #flag_versionbit
+      [ debug  
+        Pull    "PC",EQ
+        Debug   err,"**** validtask_alive fails handle",R2
+      ]
         MyXError  WimpBadTaskHandle,NE
         Pull    "PC"
 
@@ -1082,6 +1165,9 @@ callbackpoll
         ADD     lr_svc,R4,#task_registers       ; lr_svc --> register block
         LDMIA   lr_svc,{R0-R14}^                ; restore USR regs
         NOP
+      [ SAnaffsilicon
+        NOP
+      ]
         LDR     lr_svc,[lr_svc,#15*4]
         MOVS    PC,lr_svc                       ; exit to caller, restoring flags
 
@@ -1597,7 +1683,6 @@ errspritetable
                 DCD     0,0
 
 
-noappname       DCB     "switcher",0
 noprogapp       DCB     "Application",0
 errorptoken     DCB     "ErrorP",0
 quitlabel       DCB     "Quit",0
@@ -1787,10 +1872,14 @@ starterrorbox_reenter
 starterrorbox_draw
 
         Push    "R4-R7"
-        [ NewErrorSystem
+      [ NewErrorSystem
 ; make sure we have default pointer
         MOV     R0,#SpriteReason_SetPointerShape
+      [ debug
+        ADRL    R2,ptr_default2         ; ADRL doesn't reach if debugging enabled!
+      |
         ADRL    R2,ptr_default
+      ]
         MOV     R3,#1
         MOV     R4,#0
         MOV     R5,#0
@@ -1800,7 +1889,7 @@ starterrorbox_draw
         MOV     R0,#&6A                 ; set/read pointer shape no
         MOV     R1,#1
         SWI     XOS_Byte                ; R1 := actual shape number
-        ]
+      ]
 
       [ chwidth
         BL      set16x32chars
@@ -1898,7 +1987,11 @@ starterrorbox_draw
 
 oklabel         DCB     "OK",0,0
 contlabel       DCB     "Continue",0
-
+noappname       DCB     "switcher",0
+              [ debug
+ptr_default2    DCB     "ptr_default",0
+              ]
+                ALIGN
 
 oldappsprite
         LDR     R14,[handle,#w_icons]

@@ -751,13 +751,19 @@ maketoollist ENTRY "R1-R11"
         ASSERT  ?tool_scalingblk = 4*4
 ;
         ADRL    R14,tool_plotparams
-        STMIA   R14,{R0-R3}             ; setup a prameter block
+        STMIA   R14,{R0-R3}             ; setup a parameter block
 ;
 ;        TEQ     R3,#0                  ; with fastborders
         MOVNE   R0,#0
         STRNE   R0,pixtable_at
         STRNE   R0,pixtable_size        ; flag as no active pixtable ('cos we stole it!)
-
+        
+      [ ChildWindows
+        ADR     R14,factors
+        LDMIA   R14,{R3,R4,R5,R6}
+        ADRL    R14,tool_scalingblk
+        STMIA   R14,{R3,R4,R5,R6}        ; take a copy of the scaling block (even if the tools don't always need it)
+      |
       [ fastborders
         ADRNE   R14,factors
         LDMNEIA R14,{R3,R4,R5,R6}
@@ -766,6 +772,7 @@ maketoollist ENTRY "R1-R11"
         ADR     R14,factors
         LDMIA   R14,{R3,R4,R5,R6}
         STMIA   R2,{R3,R4,R5,R6}        ; take a copy of the scaling block
+      ]
       ]
 ;
      [ true
@@ -1356,6 +1363,9 @@ plot_windowglyph ENTRY "R0-R9"
       ]
         EXIT    EQ                      ; if not defined then return - do via VDU 5
 ;
+; Allow toolsprites to be transparent (to show the colour through, if required)
+; TODO: Spot which toolsprites have a mask, and skip this bit for those that don't
+;
         BL      solidrectangle
         BL      hollowrectangle        ; suitable rectangles
 ;
@@ -1363,13 +1373,198 @@ plot_windowglyph ENTRY "R0-R9"
         MOV     R4,y0                   ; x,y co-ordinates to plot at
 ;
         ADRL    R0,tool_plotparams
-        LDMIA   R0,{R0,R5,R6,R7}        ; parmeters to plot using
+        LDMIA   R0,{R0,R5,R6,R7}        ; parameters to plot using
         Debug   tools2,"SpriteOp =",R0,R1,R2,R3,R4,R5
         BL      Tool_SpriteOp
 
 plot_plotted
         CMP     PC,#0                   ; ensure returns NE!
         EXIT                            ; return indicating it was plotted
+
+
+;;-----------------------------------------------------------------------------
+;; Plot a scaled window gadget - for up and down arrows when scrollbar gets small
+;; This routine frigs the tool_plotparams, and then restores them
+;; in   R2 = icon handle
+;;      R0 = height of original object
+;;      handle = window handle
+;;      x0,y0,x1,y1 => region to plot the glyph into
+;; out  EQ/NE if not plotted / plotted
+;;-----------------------------------------------------------------------------
+
+      [ ChildWindows
+
+plot_windowglyph_vscaled  ENTRY "R0,R1,cx0,cy0,cx1,cy1,y0,y1"
+
+        ADD     R0,R0,#2                        ; urg - stored heights are all 1 pixel too small (assume toolsprite at 2x2 os/pix)
+
+        ; frig scale factors so we can plot the thing scaled
+
+        ADRL    R1,tool_scalingblk
+        LDMIA   R1,{cx0,cy0,cx1,cy1}
+        
+        SUB     R14,y1,y0
+        MUL     cy0,R14,cy0
+        MUL     cy1,R0,cy1
+        
+        Push    "cx0,cy0,cx1,cy1"
+        MOV     R1,SP                           ; R1 -> new scaling block (on stack)
+        
+        LDR     R2,tool_plotparams + 0          ; sprite reason code
+        LDR     R3,tool_plotparams + 8          ; pointer to factors
+        Push    "R2,R3"
+        
+        BIC     R2,R2,#&FF
+        ORR     R2,R2,#SpriteReason_PutSpriteScaled
+        STR     R2,tool_plotparams + 0
+        STR     R1,tool_plotparams + 8          ; must have to scale it for this call
+        
+        ASSERT  R2 = cx0
+        LDR     R2,[SP,#8*4]                    ; restore R2 from stacked cx0 on entry
+        MOV     R1,R2                           ; for plot_windowglyph_clipped (later)
+        BL      plot_windowglyph
+        
+        Pull    "R2,R3"
+        STR     R2,tool_plotparams + 0          ; sprite reason code
+        STR     R3,tool_plotparams + 8          ; pointer to factors
+        
+        ADD     SP,SP,#4*4                      ; correct stack
+        
+        ; now we must explicitly plot the top and bottom row, to avoid dropouts
+        ; this involves messing with the clipping region (urg)
+        
+        Push    "x0,y0,x1,y1"
+        Pull    "cx0,cy0,cx1,cy1"               ; copy x0,y0,x1,y1 to cx0,cy0,cx1,cy1 (for clip window)
+        
+        LDR     R14,dy
+        Push    "y1,R14"
+        
+        ADD     cy1,cy0,R14
+        ADD     y1,y0,R0
+        BL      plot_windowglyph_clipped        ; plot bottom pixel row
+        
+        Pull    "y1,R14"
+
+        MOV     cy1,y1
+        SUB     cy0,cy1,R14
+        SUB     y0,y1,R0
+        BL      plot_windowglyph_clipped        ; plot top pixel row
+
+        EXIT                                    ; flags on exit are as from plot_windowglyph
+      ]
+
+
+;;-----------------------------------------------------------------------------
+;; Plot a scaled window gadget - for up and down arrows when scrollbar gets small
+;; This routine frigs the tool_plotparams, and then restores them
+;; in   R2 = icon handle
+;;      R0 = height of original object
+;;      handle = window handle
+;;      x0,y0,x1,y1 => region to plot the glyph into
+;; out  EQ/NE if not plotted / plotted
+;;-----------------------------------------------------------------------------
+
+      [ ChildWindows
+
+plot_windowglyph_hscaled  ENTRY "R0,R1,cx0,cy0,cx1,cy1,x0,x1"
+
+        ADD     R0,R0,#2                        ; urg - stored widths are all 1 pixel too small (assume toolsprite at 2x2 os/pix)
+
+        ADRL    R1,tool_scalingblk
+        LDMIA   R1,{cx0,cy0,cx1,cy1}
+
+        SUB     R14,x1,x0
+        MUL     cx0,R14,cx0
+        MUL     cx1,R0,cx1
+        
+        Push    "cx0,cy0,cx1,cy1"
+        MOV     R1,SP                           ; R1 -> new factors on stack
+        
+        LDR     R2,tool_plotparams + 0          ; sprite reason code
+        LDR     R3,tool_plotparams + 8          ; pointer to factors
+        Push    "R2,R3"
+        
+        BIC     R2,R2,#&FF
+        ORR     R2,R2,#SpriteReason_PutSpriteScaled
+        STR     R2,tool_plotparams + 0
+        STR     R1,tool_plotparams + 8          ; must have to scale it for this call
+        
+        ASSERT  R2 = cx0
+        LDR     R2,[SP,#8*4]                    ; restore R2 from stacked cx0 on entry
+        MOV     R1,R2                           ; for plot_windowglyph_clipped (later)
+        BL      plot_windowglyph
+        
+        Pull    "R2,R3"
+        STR     R2,tool_plotparams + 0          ; sprite reason code
+        STR     R3,tool_plotparams + 8          ; pointer to factors
+        
+        ADD     SP,SP,#4*4                      ; correct stack
+
+        ; now we must explicitly plot the top and bottom row, to avoid dropouts
+        ; this involves messing with the clipping region (urg)
+        
+        Push    "x0,y0,x1,y1"
+        Pull    "cx0,cy0,cx1,cy1"               ; copy x0,y0,x1,y1 to cx0,cy0,cx1,cy1 (for clip window)
+        
+        LDR     R14,dx
+        Push    "x1,R14"
+
+        ADD     cx1,cx0,R14
+        ADD     x1,x0,R0
+        BL      plot_windowglyph_clipped        ; plot left-hand pixel row
+        
+        Pull    "x1,R14"
+        
+        MOV     cx1,x1
+        SUB     cx0,cx1,R14
+        SUB     x0,x1,R0
+        BL      plot_windowglyph_clipped        ; plot right-hand pixel row
+
+        EXIT                                    ; flags on exit are as from plot_windowglyph
+      ]
+
+
+;;-----------------------------------------------------------------------------
+;; Plot a clipped window gadget - for getting the end pixels correct
+;; in   R1 = icon handle
+;;      x0,y0 = coordinate to plot at (bottom-left)
+;;      cx0,cy0,cx1,cy1 = desired clip rectangle (will be further clipped)
+;;      handle = window handle
+;; out  flags preserved
+;;-----------------------------------------------------------------------------
+
+      [ ChildWindows
+
+plot_windowglyph_clipped  ENTRY "R0,R1,cx0,cy0,cx1,cy1,x0,y0,x1,y1"
+
+        ADR     R14,clipx0
+        LDMIA   R14,{x0,y0,x1,y1}
+        
+        Push    "x0,y0,x1,y1"
+        
+        max     x0,cx0
+        max     y0,cy0
+        min     x1,cx1
+        min     y1,cy1
+        
+        CMP     x0,x1
+        CMPLT   y0,y1
+        ADDGE   SP,SP,#4*4
+        EXITS   GE                              ; forget it if this is a null clip window
+
+        BL      graphicswindow                  ; set to x0,y0,x1,y1
+
+        ADD     R14,SP,#10*4
+        LDMIA   R14,{x0,y0,x1,y1}               ; recover original x0,y0,x1,y1
+        
+        MOVVC   R2,R1
+        BLVC    plot_windowglyph
+        
+        Pull    "x0,y0,x1,y1"
+        BL      graphicswindow                  ; restore graphics window
+        
+        EXITS
+      ]
 
 
 ;;-----------------------------------------------------------------------------
@@ -2542,7 +2737,7 @@ trace_nl ROUT
 
 Tool_SpriteOp
         Push    "R1,lr"
-        TEQ     R0,#34
+        TEQ     R0,#SpriteReason_PutSpriteUserCoords
         BEQ     %FT05                    ; no trans table needed if plotting
         LDR     R1,tool_list
         TEQ     R1,#0

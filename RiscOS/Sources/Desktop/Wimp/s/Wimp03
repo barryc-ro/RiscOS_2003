@@ -144,7 +144,7 @@ lookfornewtask
 
 ;;-----------------------------------------------------------------------------
 ;; Wimp_RegisterFilter - install/deinstall a filter routine
-;;                                                         
+;;
 ;; in   R0 = filter reason
 ;;              =0 => pre-poll filter (prior to returning to task)
 ;;              =1 => post-poll filter (on return back to Wimp)
@@ -163,18 +163,18 @@ lookfornewtask
         ASSERT  prefilterWP =prefilter -4
 
 SWIWimp_RegisterFilter
-        
+
         MyEntry "RegisterFilter"
 
         CMP     R0,#WimpFilter_MAX      ; filter number valid?
         BGE     err_badR0               ; if not then return an error
-           
+
         TEQ     R1,#0                   ; de-register a filter
         ADREQ   R1,filtertable
         LDREQ   R2,[R1,R0,LSL #2]       ; get the default owner
         ADDEQ   R1,R1,R2                ; and resolve to an address, rather than offset
-        
-        ADRL    R14,prefilter   
+
+        ADRL    R14,prefilter
         ADD     R14,R14,R0,LSL #3       ; -> vector to store into
         STR     R1,[R14]
         STR     R2,[R14,#-4]            ; setup the handler correctly
@@ -190,15 +190,15 @@ filtertable
         & postfilter_default -filtertable
         & copyfilter_default -filtertable
         & rectanglefilter_default -filtertable
-        & -1                 
+        & -1
 
 prefilter_default
 postfilter_default
 copyfilter_default
-rectanglefilter_default 
+rectanglefilter_default
 
         MOVS    PC,LR
-                     
+
 ;;-----------------------------------------------------------------------------
 ;; Reset the filters back to their default state, called on init and svc_reset,
 ;; once done issue a svc_RegisterFilters.
@@ -208,20 +208,20 @@ defaultfilters ENTRY "R0-R2"
 
         ADR     R0,filtertable          ; -> list of default owners
         ADRL    R1,prefilter            ; -> list of vectors to install
-        MOV     R2,R0                   
+        MOV     R2,R0
 
 10      LDR     R14,[R0],#4             ; get offset to routine
-        CMP     R14,#-1                      
+        CMP     R14,#-1
         ADDNE   R14,R14,R2
         STRNE   R14,[R1],#8             ; if not end of the table then store away
         BNE     %BT10
-                    
+
         ADR     R0,svc_callback
         MOV     R1,WsPtr
         SWI     XOS_AddCallBack         ; add the callback routine
 
-        EXITS             
-            
+        EXITS
+
 ;..............................................................................
 
 ; callback routine used to warn the outside world that they should register
@@ -231,7 +231,7 @@ svc_callback ROUT
 
         Push    "R1,LR"
         MOV     R1,#Service_WimpRegisterFilters
-        SWI     XOS_ServiceCall        
+        SWI     XOS_ServiceCall
         Pull    "R1,PC",,^              ; broadcast to the world
 
 
@@ -279,7 +279,7 @@ SWIWimp_Poll
 ;
 
 ; attempt to call a pre-poll filter routine, it may modify the flags in R0
-                             
+
         CallFilter prefilter
 ;
         LDR     R1,taskhandle
@@ -317,7 +317,7 @@ SWIWimp_Poll
         TST     R14,#3                  ; word-aligned
         BNE     err_badR3
         CMP     R14,#&8000              ; and not in application space
-        
+
         [ Medusa
         BLT     %FT05
         MedusaOS
@@ -325,7 +325,7 @@ SWIWimp_Poll
         LDREQ   R0,orig_applicationspacesize
         MOVNE   R0,#&1000000
         SUBS    R14,R0,R14
-        Pull    "R0" 
+        Pull    "R0"
 05
         |
         RSBGES  R14,R14,#&1000000	; APPSPACE
@@ -548,16 +548,16 @@ repollwimp
         BGT     %FT11
 
 ; Skip backwindow and iconbarwindow
-	
-	[ true
-	B	%FT22
-	|
+
+      [ true
+        B       %FT22
+      |
         LDR     R14,backwindowhandle    ; if back window, open at full size
         TEQ     R0,R14
         LDRNE   R14,iconbarhandle
         TEQNE   R0,R14
         BEQ     %FT22                   ; ignore these (already done first)
-        ]
+      ]
 11
         Rel     R2,handle               ; must send the handle, so that
         MOV     R0,#Open_Window_Request ; the message is lost if window deleted
@@ -574,12 +574,19 @@ nomodechange
 
 check_redraw
       ]
-
+;
+; flush pending opens - make sure this is done BEFORE redraw stuff
+;
+      [ ChildWindows
+        BL      int_flush_opens         ; may cause a braindead panic redraw
+      ]
 ;
 ; look at invalid list to see if a redraw is necessary
 ;
         BL      checkredrawhandle
+      [ :LNOT: ChildWindows             ; this is pointless - can't get an error from checkredrawhandle!
         BVS     ExitPoll                ; <<<< wot?
+      ]
 ;
 ; Improved handling of rectangle area full:
 ; Redraw whole screen intelligently first, then, if that fails, draw
@@ -607,26 +614,89 @@ check_redraw
       ]
 ;
         LDR     R1,activewinds+lh_forwards
+
 pollredrawlp
         LDR     R2,[R1,#ll_forwards]
         CMP     R2,#nullptr
         BEQ     clearrects
-        SUB     handle,R1,#w_active_link
-        Push    "R2"
 
+        SUB     handle,R1,#w_active_link
+
+        Push    "R2"
         BL      invalidouterportion
         Pull    "R1"
-;
+
         LDR     R2,rlinks+windowrects
         CMP     R2,#nullptr
         BEQ     pollredrawlp
 
-process_redrawable_window
+;
+; Right - windowrects is the intersection of this window's outer portion with the invalid list
+; We need to check whether any of the window's children should be redrawn first
+;
 
+process_redrawable_window ROUT
+
+        Debug   child,"process_redrawable_window",handle
+
+      [ ChildWindows
+        LDR     R2,[handle,#w_children + lh_forwards]           ; start from the top
+
+01      LDR     R14,[R2,#ll_forwards]
+        CMP     R14,#nullptr
+        BEQ     %FT04
+
+        Push    "R2"
+
+        LDR     R14,[R2,#w_flags - w_active_link]
+        TST     R14,#wf_inborder
+        ADDNE   R14,handle,#w_x0                ; clip to outer box if it can go in the border
+        ADDEQ   R14,handle,#w_wax0              ; clip to work area otherwise
+        LDMIA   R14,{x0,y0,x1,y1}
+
+        ADD     R14,R2,#w_x0 - w_active_link
+        LDMIA   R14,{cx0,cy0,cx1,cy1}
+
+        max     cx0,x0                          ; intersect child's outer box with parent's work area or outline
+        max     cy0,y0
+        min     cx1,x1
+        min     cy1,y1
+
+        Debug   child,"process_redrawable: child rectangle",cx0,cy0,cx1,cy1
+        MOV     R0,#windowrects
+        MOV     R1,#torects
+        BL      intrect                         ; see if this intersects with the invalid list
+
+        Pull    "R2"
+
+        LDR     R14,rlinks+torects
+        CMP     R14,#nullptr
+        BNE     %FT03
+
+02      LDR     R2,[R2,#ll_forwards]
+        B       %BT01
+
+; Right - redraw the child first, rather than the parent
+
+03      MOV     R0,#windowrects
+        BL      assign_set                      ; calls SetRectPtrs internally
+        SUB     handle,R2,#w_active_link
+      [ debug
+        LDR     R14,rlinks + windowrects
+        Debug   child,"Detected redraw for child window,rects",handle,R14
+      ]
+        B       process_redrawable_window       ; in case of nested child windows
+04
+
+process_redrawable_window_actually ROUT
+
+        Debug   child,"Actually redraw window",handle
+      ]
 ;
 ; check for auto-redraw bit in window flags
 ;
         LDR     R14,[handle,#w_flags]
+        Debug   child,"window flags are",R14
         TST     R14,#wf_autoredraw
         BEQ     tryreturnit
 ;
@@ -634,6 +704,12 @@ process_redrawable_window
 redrlp  BVS     ExitPoll                        ; <<<< wot?
         TEQ     R0,#0
         BEQ     repollwimp
+ [ Twitter
+        BL      checktwitter
+        LDRNE   r14, getrectflags
+        ORRNE   r14, r14, #getrect_twitter
+        STRNE   r14, getrectflags
+ ]
         BL      int_get_rectangle               ; will draw the user icons
         B       redrlp
 ;
@@ -644,7 +720,7 @@ tryreturnit
         Task    R14,,"RedrawRq"         ; can't be a menu (auto-redraw)
         TST     R14,#redraw_bit
       [ redrawlast
-        BNE     check_null      
+        BNE     check_null
       |
         BNE     lookatpointer           ; CAN'T CARRY ON (doesn't work!)
       ]
@@ -654,6 +730,10 @@ tryreturnit
         Rel     R14,handle
         STR     R14,[userblk]
         STR     R14,redrawhandle
+      [ debug
+        LDR     R14,rlinks + windowrects
+        Debug   child,"Returning Redraw_Window_Request for window,rects",#redrawhandle,R14
+      ]
         MOV     R0,#Redraw_Window_Request
         B       ExitPoll
 
@@ -734,7 +814,7 @@ continue_braindead_panic_redraw
         TEQ     handle,#BPR_notatall
         BEQ     repollwimp
 
-        Debug   bpr,"Continuing braindead panic readraw on handle",handle
+        Debug   bpr,"Continuing braindead panic redraw on handle",handle
 
 ; Window gone? - start from the start again
 
@@ -744,11 +824,40 @@ continue_braindead_panic_redraw
 ; Window closed? - start from the start again
 
         LDR     R14,[handle,#w_flags]
+        Debug   bpr,"handle, flags are",handle,R14
         TST     R14,#ws_open
         BEQ     start_braindead_panic_redraw
 
-; Move to next window in stack
+; Move BPR_indication to next window in stack (must deal with child window stacks as well)
 
+      [ ChildWindows
+        Push    "handle"
+
+        LDR     R0,[handle,#w_children + lh_backwards]          ; go for backmost child window first
+        LDR     R14,[R0,#ll_backwards]
+        CMP     R14,#nullptr
+        BNE     %FT02
+
+01      LDR     R0,[handle,#w_active_link + ll_backwards]       ; then go for next sibling
+        Debug   bpr,"Next sibling",handle,R0
+        LDR     R14,[R0,#ll_backwards]
+        CMP     R14,#nullptr
+        BNE     %FT02
+
+        LDR     handle,[handle,#w_parent]                       ; else go for parent's next sibling, etc.
+        Debug   bpr,"Move up to parent",handle
+        CMP     handle,#nullptr
+        BNE     %BT01
+
+02      MOVEQ   R0,#BPR_notatall
+        SUBNE   R0,R0,#w_active_link
+        Rel     R0,R0,NE
+        STR     R0,BPR_indication
+
+        Pull    "handle"
+
+        Debug   bpr,"Braindead redraw: this,next",handle,R0
+      |
         LDR     R0,[handle,#w_active_link+ll_backwards]
         LDR     R14,[R0,#ll_backwards]
         CMP     R14,#nullptr
@@ -756,19 +865,48 @@ continue_braindead_panic_redraw
         SUBNE   R0,R0,#w_active_link
         Rel     R0,R0,NE
         STR     R0,BPR_indication
+      ]
 
 ; Process this window (exactly)
 
         BL      initrectptrs
         ADD     R0,handle,#w_x0
         LDMIA   R0,{cx0,cy0,cx1,cy1}
+
+; If this is a child window, clip to parent's work area/outline
+
+      [ ChildWindows
+        MOV     R1,handle
+        B       %FT12
+
+11      TST     R0,#wf_inborder
+        ADDNE   R14,R1,#w_x0            ; clip to outer box if allowed to overlap border
+        ADDEQ   R14,R1,#w_wax0          ; clip to parent's work area otherwise
+        LDMIA   R14,{x0,y0,x1,y1}
+        max     cx0,x0
+        max     cy0,y0
+        min     cx1,x1
+        min     cy1,y1
+
+12      LDR     R0,[R1,#w_flags]
+        LDR     R1,[R1,#w_parent]
+        CMP     R1,#nullptr
+        BNE     %BT11
+      ]
+
+; make one-rectangle list of the window's outer box (clipped to its parent's work area)
+
         MOV     R0,#windowrects
         MOV     R1,R0
         BL      addrect
         LDR     R14,rlinks+windowrects
         CMP     R14,#nullptr
         BEQ     continue_braindead_panic_redraw
+      [ ChildWindows
+        B       process_redrawable_window_actually      ; DON'T consider the children this time
+      |
         B       process_redrawable_window
+      ]
 
 
 ;;----------------------------------------------------------------------------
@@ -780,9 +918,9 @@ lookatpointer
         BL      scanpollwords           ; scan all tasks with pollwords
         BNE     ExitPoll
 ;
-; Has the ticker gone off to see if we need to look at the 
+; Has the ticker gone off to see if we need to look at the
 ; mouse co-ordinates, have they changed yet?!
-; 
+;
       [ Version >= 317 :LAND: mousecache
         LDRB    R0,recacheposn
         TEQ     R0,#0                   ; do we recache the information?
@@ -972,8 +1110,8 @@ notdragging
         TST     R14,#mf_waitdrag
         BNE     %FT92
 
-        Push    "r0"   
-                
+        Push    "r0"
+
         ADRL    r0,old_icon
         LDR     R14,[r0]
         TEQ     R3,R14
@@ -985,10 +1123,10 @@ notdragging
 
         Pull    "r0"
 
-        BEQ     %FT92           
+        BEQ     %FT92
 
-        Push    "R0-R7,handle" 
-              
+        Push    "R0-R7,handle"
+
         Abs     R14,R3
         LDR     R14,[R14,#w_taskhandle]
         CMP     R14,#-1                 ; is the task -1, ie. owned by a menu
@@ -1009,12 +1147,12 @@ notdragging
         Debug   bo,"New window,icon",r3,r4
 
         LDR     r14,iconbarhandle
-        CMP     r14,r3  
-        Debug   bo,"iconbar handle , handle",r14,r3 
+        CMP     r14,r3
+        Debug   bo,"iconbar handle , handle",r14,r3
         TEQ     r14,r3
         BNE     %FT01
 
-        Push    "R1-R4,R7"                 
+        Push    "R1-R4,R7"
         BL      findicon
         LDR     R14,[R2,#icb_taskhandle]
         Task    R14,,"Icon bar pointer shape check"
@@ -1023,7 +1161,7 @@ notdragging
         B       ptr_iconbar_icon
 
 01
-        Abs     R14,r3 
+        Abs     R14,r3
         LDR     r3,[r14,#w_taskhandle]
         Push    "R14"
         Task    r3
@@ -1033,7 +1171,7 @@ ptr_iconbar_icon
         LDR     R14,[R14,#w_icons]
         ADD     R14,R14,R4,ASL #i_shift ; Point at the icon.
         LDR     r3,[r14,#i_flags]
-        TST     r3,#if_text 
+        TST     r3,#if_text
         TSTNE   r3,#if_indirected       ; Is it indirected text ?
         BEQ     %FT90
 
@@ -1062,11 +1200,11 @@ ptr_iconbar_icon
         STRB    R4,[r2]                 ; Terminate the sprite name.
 
         CMP     R14,#-1
-        BNE     %FT02 
+        BNE     %FT02
 
-        Debug   bo,"Sprite name copied"        
+        Debug   bo,"Sprite name copied"
 
-        BL      getnumber 
+        BL      getnumber
         MOV     R4,R0                   ; Returns 0 if not found.
 
         LDRB    R14,[R3],#1
@@ -1079,7 +1217,7 @@ ptr_iconbar_icon
          ADRL    r2,pointer_sprite
          DebugS  bo,"Sprite name is :",r2
         ]
-02                                    
+02
         MOV     R0,#SpriteReason_SetPointerShape
         ADRL    R2,pointer_sprite
         MOV     R3,#1
@@ -1100,7 +1238,7 @@ ptr_iconbar_icon
         MOVNE   R3,#1
         BLNE    doubleptr_off
 91
-        Pull    "r0-r7,handle"       
+        Pull    "r0-r7,handle"
 92
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1176,7 +1314,7 @@ ptr_iconbar_icon
         BEQ     cantchange
         Debug   ptr,"pointer new,old",R3,r14
 
-     
+
 ;
 ; if old window not null, return 'leaving window', and set ptrwindow to null
 ; otherwise set ptrwindow to new window, and return 'entering window'
@@ -1188,12 +1326,12 @@ ptr_iconbar_icon
 leaving
         MOV     R8,R14                  ; old handle
         LDR     R9,ptrtask              ; old task
-       
+
         LDR     R14,[wsptr,R9]          ; Check if old task is dead
         TST     R14,#task_unused        ; If so, just return 'entering window'
-        BEQ     %FT01   
+        BEQ     %FT01
         CMP     R3,#nullptr             ; Unless new window is null !!
-        BNE     entering                ; 
+        BNE     entering                ;
         STR     R3,ptrwindow
         Pull    "r0,r3"
         B       cantchange
@@ -1201,7 +1339,7 @@ leaving
         MOV     R3,#nullptr             ; set ptrwindow to null
         MOV     R0,#Pointer_Leaving_Window
         MOV     R14,#ptrleaving_bit
-        B       ptrboth 
+        B       ptrboth
 
 entering
         Abs     handle,R3
@@ -1286,7 +1424,7 @@ buttonattributes
         DCD     2_101010100010  ;10 report 1 or 2 clicks (:SHL:8 if 1 click)
         DCD     2_100000100010  ;11 as (8), but select+notify on single click
         DCD     2_110010100010  ;12
-        DCD     2_100010000000  ;13 
+        DCD     2_100010000000  ;13
         DCD     2_100000100100  ;14 writeable, but also report as for (6)
         DCD     2_000000000100  ;15 writeable icon (don't report)
 
@@ -1305,7 +1443,7 @@ cantchange
 ;
         BL      scanmenus               ; preserves task if it returns here
         BVS     ExitPoll
-;    
+;
 ; window handle can come back -1 if we clicked on a greyed-out menu item
 ;
         CMP     R3,#nullptr             ; should only happen for grey menu items
@@ -1348,17 +1486,17 @@ issystemarea
         LDR     R6,[R6,R14,ASL #2]              ; R6 = internal flag word
         LDR     R7,mouseflags                   ; R7 = mouse flags
         LDR     R8,oldbuttons                   ; R8 = old button state
-                
-; R0,R1 => x,y mouse co-ordinates                
+
+; R0,R1 => x,y mouse co-ordinates
 ; R2 => button state
 ; R4 => icon handle
 ; R6 => button attributes
 ; R7 => mouse flag
-; R8 => old button state 
+; R8 => old button state
 ; handle => internal window handle
 
         Push    "R0-R2,handle"
-;                
+;
         BL      modifytool                      ; attempt to handle window tools changing (when possible)
 ;
         TST     R2,#button_left+button_right
@@ -1367,7 +1505,7 @@ issystemarea
         ASSERT  nullptr = windowicon_workarea
 ;
         LDR     R0,border_iconselected          ; may have changed!
-        CMP     R0,#windowicon_workarea        
+        CMP     R0,#windowicon_workarea
         BLE     %FT01                           ; if -VE then ignore its not worth the hassel
 ;
         MOV     R1,#0
@@ -1402,7 +1540,7 @@ dontpratabout
         TST     R7,#mf_wait2clicks              ; reset pointer shape if nec.
         BLNE    doubleptr_off
         BIC     R7,R7,#mf_pendingexceptdrag     ; cancel pending (except drag)
-        STR     R7,mouseflags                       
+        STR     R7,mouseflags
 ;
 sameicon
         TST     R7,#mf_waitdrag
@@ -1670,24 +1808,24 @@ notiniconbar
         BLT     %FT10                   ; if its the background then ignore it
 ;
         Push    "R0-R3"
-                  
+
 ; R3 = window handle / handle => window defn ( <= 0 if none )
-; R4 = icon handle                
-        
+; R4 = icon handle
+
         LDR     R14,[handle,#w_icons]
         ADD     R14,R14,R4,LSL #i_shift ; R14 -> icon defn
 ;
         LDR     R1,[R14,#i_flags]
         LDR     R3,[R14,#i_data+4]      ; get flags, -> validation string
-        BL      getborder               ; decode to setup the border information           
-;       
+        BL      getborder               ; decode to setup the border information
+;
         TEQ     R0,#border_action
         TEQNE   R0,#border_defaultaction
-;  
+;
         STREQ   handle,border_windowselected
         STREQ   R4,border_iconselected
 ;
-       
+
         LDREQB  R0,autorepeating
         CMPEQ   R0,#0
         MOVNE   R0,#0
@@ -1695,7 +1833,7 @@ notiniconbar
 
         MOVEQ   R0,R4                   ; R1 => icon handle
         MOVEQ   R1,#is_inverted
-        MOVEQ   R2,#0   
+        MOVEQ   R2,#0
         BLEQ    int_set_icon_state      ; and then select the icon
 ;
         Pull    "R0-R3"
@@ -1725,6 +1863,47 @@ returnclick
 ;----------------------------------------------------------------------------
 
 trykeys
+ [ KeyboardMenus
+        MOV     r6, #-1                 ; so we can tell later on if we read a key
+        LDR     r4, menuSP
+        CMP     r4, #0
+        BLT     %FT00                   ; no menu open so don't grab special keys
+
+        ADR     r5, menudata            ; if it's a dbox then don't grab keys
+        LDR     r5, [r5, r4]
+        TST     r5, #3
+        BNE     %FT00
+
+        ADR     r14, menuhandles        ; if menu has caret then don't grab keys
+        LDR     r14, [r14, r4]
+        LDR     r0, menucaretwindow
+        TEQ     r0, r14
+        BEQ     %FT00
+
+        MOV     r0, #4                  ; allow us to read cursor keys
+        MOV     r1, #1
+        SWI     XOS_Byte
+        MOV     r3, r1
+        MOV     r0, #&81                ; INKEY(0)
+        MOV     r1, #0
+        MOV     r2, #0
+        SWI     XOS_Byte
+        MOV     r6, r1
+        MOV     r7, r2
+        MOV     r0, #4                  ; restore cursor key state
+        MOV     r1, r3
+        SWI     XOS_Byte
+        CMP     r7, #&FF                ; was there a key?
+        BEQ     nothing
+
+        TEQ     r6, #13                 ; check for return and cursor keys
+        TEQNE   r6, #136
+        TEQNE   r6, #137
+        TEQNE   r6, #138
+        TEQNE   r6, #139
+        BEQ     handlemenukey
+ ]
+00
         LDR     handle,caretdata+0
         CMP     handle,#0
         BLE     %FT01                   ; still read character (may be hot!)
@@ -1732,20 +1911,26 @@ trykeys
         BL      checkhandle             ; check it hasn't been deleted!
         MOVVS   handle,#nullptr
         STRVS   handle,caretdata+0      ; if deleted, turn it off
-        BVS     trykeys
+        BVS     %BT00
 ;
         LDR     R14,[handle,#w_taskhandle]
-         CMP    R14,#0
-         LDRLT  R14,menutaskhandle
-         LDR    R14,[wsptr,R14]
-         LDR    R14,[R14,#task_flagword]
+        CMP     R14,#0
+        LDRLT   R14,menutaskhandle
+
+        LDR     R14,[wsptr,R14]
+        LDR     R14,[R14,#task_flagword]
         TST     R14,#keypress_bit
         BNE     nothing                 ; temporarily disabled
 
 01
+ [ KeyboardMenus
+        CMP     r6, #0
+        BLLT    inkey0                  ; if we don't have a key yet then get one (preserves flags)
+        MOVLTS  r6, r1
+ |
         BL      inkey0                  ; may branch elsewhere
         MOVS    R6,R1                   ; actual key value
-;
+ ]
         BNE     %FT01
         BL      inkey0                  ; may branch elsewhere!
         MOVS    R6,R1
@@ -1755,10 +1940,21 @@ trykeys
         CMP     R14,#0
         LDRGT   R14,[handle,#w_taskhandle]
         LDRLT   R14,menutaskhandle
-        Task    R14,,"KeyPressed"       ; page in correct task      
+        Task    R14,,"KeyPressed"       ; page in correct task
 
         TEQ     R6,#&1B                 ; escape?
         BNE     %FT02
+
+ [ KeyboardMenus
+        CMP     r4, #0                  ; if no menu open then skip
+        BLT     %FT02
+        TST     r5, #3                  ; check for dialogue
+        SUBNE   r0, r4, #4              ; if dialogue open then just remove it
+        MOVEQ   r0, #-4                 ; otherwise remove whole menu tree
+        CMP     r0, #0
+        BLLT    menusdeleted            ; send Message_MenusDeleted if whole menu going (preserves r0)
+        BL      closemenus
+ |
         LDR     R0,menuSP
         CMP     R0,#0
         BLT     %FT02
@@ -1766,6 +1962,7 @@ trykeys
         BL      menusdeleted            ; send Message_MenusDeleted
         MOVVC   R0,#-4
         BLVC    closemenus
+ ]
         BVC     nothing                 ; absorb escape if used to close menus
         B       ExitPoll                ; report error if any
 
@@ -1811,6 +2008,123 @@ inkey0
         BEQ     nothing
         MOVS    PC,LR                   ; must preserve flags
 
+ [ KeyboardMenus
+; In:   r4 = menuSP
+;       r5 -> menu data
+;       r6 = key pressed
+;
+handlemenukey
+        LDR     R14, menutaskhandle
+        Task    R14,,"KeyPressed"       ; page in correct task
+
+        LDR     r14, mousexpos
+        STR     r14, lastxpos
+        LDR     r14, mouseypos
+        STR     r14, lastypos
+
+        ADR     r14, menuselections
+        LDR     r1, [r14, r4]           ; r1 = previous selection index
+
+        TEQ     r6, #13
+        BNE     trymenucursorkeys
+        CMP     r1, #0                  ; handle return
+        BLT     nothing                 ; do nothing if no selection
+        STR     r4, whichmenu
+        MOV     r2, #4                  ; fake SELECT mouse button
+        B       gomenuselect
+
+trymenucursorkeys
+        TEQ     r6, #137                ; check for right (sub-menu)
+        BNE     trymenuleft
+        CMP     r1, #0                  ; handle right
+        BLT     nothing
+        ADD     r7, r1, r1, LSL #1      ; r7 = selected item * 3 (also used later)
+        ADD     r6, r5, r7, LSL #3      ; r6 -> selected menu item
+        LDR     r1, [r6, #mi_submenu]   ; r1 -> sub-menu data block
+        CMP     r1, #0                  ; check for sub-menu/dbox
+        BLE     nothing
+        ADR     r14, menuhandles        ; get menu window handle
+        LDR     handle, [r14, r4]
+        BL      checkhandle
+        BVS     nothing
+        LDR     r2, reversedmenu
+        CMP     r2, #"\"
+        LDREQ   r2, [handle, #w_wax0]   ; get menu x
+        LDRNE   r2, [handle, #w_wax1]
+        LDR     r14, [handle, #w_icons]
+        ADD     r14, r14, #i_bby1
+        ADD     r7, r7, #1              ; r7 = middle icon
+        LDR     r3, [r14, r7, ASL #i_shift]
+        LDR     r14, [handle, #w_way1]
+        ADD     r3, r3, r14             ; get menu y
+        LDR     r14, [handle, #w_scy]
+        SUB     r3, r3, r14             ; adjust for scrolling
+ [ NCMenus
+        ADD     r3, r3, #24             ; adjust for NCMenus border
+ ]
+        LDR     r14, [r6, #mi_mflags]
+        TST     r14, #mif_warning
+        BLNE    sendmenuwarning         ; preserves flags
+        BLEQ    int_create_menu
+        B       nothing
+
+trymenuleft
+        TEQ     r6, #136
+        BLNE    trymenuupdown           ; preserves flags
+        BNE     nothing
+        SUBS    r0, r4, #4              ; handle left
+        BLGE    closemenus
+        B       nothing
+
+trymenuupdown
+; In:   r1 = current selected menu item
+;       r4 = menuSP
+;       r5 -> menu data
+;       r6 = key pressed
+; Out:  Could corrupt almost anything
+;       Flags preserved
+;
+        Push    "lr"
+        MOV     r7, #0                  ; determine how many items in menu
+00
+        ADD     r7, r7, #1
+        LDR     r0, [r5], #mi_size
+        TST     r0, #mif_lastone
+        BEQ     %BT00
+
+        CMP     r1, #-1
+        SUBEQ   r1, r7, #1
+        MOV     r0, r1                  ; start with current menu item
+trynextupdown
+        TEQ     r6, #138                ; check for down
+        BNE     trymenuupkey
+        ADD     r0, r0, #1              ; handle down key
+        CMP     r0, r7
+        MOVGE   r0, #0                  ; wrap if necessary
+        B       %FT10
+
+trymenuupkey
+        TEQ     r6, #139                ; check for up
+        BNE     %FT20
+        SUBS    r0, r0, #1              ; handle up key
+        SUBLT   r0, r7, #1              ; wrap if necessary
+10
+        TEQ     r0, r1                  ; if all menu items grey then don't loop forever
+        BEQ     %FT20
+
+        ADR     r14, menuhandles
+        LDR     handle, [r14, r4]       ; get menu window handle
+        BL      checkhandle
+        BVS     %FT20
+        Push    "r6,r7"
+        BL      menuhighlight
+        Pull    "r6,r7"
+        BVS     %FT20
+        TEQ     r14, #0
+        BEQ     trynextupdown           ; if item greyed out then try next
+20
+        Pull    "pc",,^
+ ]
 
 ;----------------------------------------------------------------------------
 ; Return to next task with null event
@@ -1910,7 +2224,7 @@ DeletePollTask  ENTRY "R0,R1"
         Debug   poll,"Delete poll: handle, posn, new, end",handle,R0,LR,R1
 
         EXITS
-                      
+
       ]
 
 
@@ -1922,7 +2236,7 @@ DeletePollTask  ENTRY "R0,R1"
 ; Out   NE => R0=reason code, correct task paged in
 ;       [userblk,#0] = poll word address
 ;       [userblk,#4] = poll word contents, as read (once) by Wimp
-       
+
       [ Version >= 311
 
 scanpollwords   ENTRY "R1-R4"
@@ -2115,6 +2429,20 @@ setwimpicon
         Pull    "R2,R3,x0,y0,x1,y1,PC",,^
 
 check_v_arrows
+      [ ChildWindows
+        LDR     R14,up_height           ; if scrollbar is small, only the arrows are shown (scaled down)
+        LDR     R5,down_height
+        ADD     R5,R14,R5
+        SUB     R14,y1,y0
+        CMP     R5,R14
+        BLE     %FT10
+
+        ADD     R14,y0,R14,LSR #1
+        CMP     R1,R14
+        ADDLT   R4,R4,#2                ; down arrow
+        B       %BT03
+10
+      ]
         LDR     R14,up_height
         SUB     R14,y1,R14
         CMP     R1,R14
@@ -2126,6 +2454,20 @@ check_v_arrows
         B       %BT03
 
 check_h_arrows
+      [ ChildWindows
+        LDR     R14,left_width          ; if scrollbar is small, only the arrows are shown (scaled down)
+        LDR     R5,right_width
+        ADD     R5,R14,R5
+        SUB     R14,x1,x0
+        CMP     R5,R14
+        BLE     %FT11
+
+        ADD     R14,x0,R14,LSR #1
+        CMP     R0,R14
+        ADDGT   R4,R4,#2                ; right arrow
+        B       %BT03
+11
+      ]
         LDR     R14,left_width
         ADD     R14,x0,R14
         CMP     R0,R14
@@ -2216,15 +2558,15 @@ wicon_toggle
         ORREQ   R14,R14,#ws_onscreenonce ; keep on-screen this time
         STR     R14,[handle,#w_flags]
         BNE     makesmall
-;                                     
+;
         ADD     R14,handle,#w_wax0
         LDMIA   R14,{cx0,cy0,cx1,cy1}
-        ADD     R14,handle,#w_bwax0     ; remember old position    
+        ADD     R14,handle,#w_bwax0     ; remember old position
         STMIA   R14!,{cx0,cy0,cx1,cy1}
         LDR     x0,[handle,#w_scx]
         LDR     y0,[handle,#w_scy]
         LDR     x1,[handle,#w_bhandle]
-        
+
         STMIA   R14,{x0,y0,x1}
 ;
         ADD     R14,handle,#w_wex0      ; add max size to get other coords
@@ -2232,7 +2574,7 @@ wicon_toggle
         SUB     x1,x1,x0
         SUB     y1,y1,y0
         ADD     cx1,cx0,x1
-        SUB     cy0,cy1,y1             
+        SUB     cy0,cy1,y1
 
 ; Now check to see if <shift> is depressed, either will do.  If it
 ; is then attempt to toggle the window to a sensible size, not obscuring
@@ -2240,36 +2582,42 @@ wicon_toggle
 
         Push    "R0-R2,R4"
 
+      [ ChildWindows
+        LDR     R14,[handle,#w_parent]
+        CMP     R14,#nullptr
+        BNE     %FT01                   ; this stuff only applies to top-level windows
+      ]
+
         LDR     R4,hscroll_height
         ADD     R4,R4,#168              ; area not to be obscured
-              
+
         CMP     cy0,R4                  ; does the bottom of the window obscure the icon bar?
-        BGE     %FT01                   ; if not then don't bother faffing around  
-        
+        BGE     %FT01                   ; if not then don't bother faffing around
+
         MOV     R0,#121
         MOV     R1,#&80
         SWI     XOS_Byte                ; scan for shift being depressed
-                
+
       [ Version >= 317 :LAND: togglebits
         Push    "R1"
         MOV     R0,#ReadCMOS
-        MOV     R1,#FileSwitchCMOS  
+        MOV     R1,#FileSwitchCMOS
         SWI     XOS_Byte                ; check for special <shift> toggle action
         TST     R2,#WimpShiftToggleCMOSBit
         Pull    "R1"
         EORNE   R1,R1,#255              ; if active then invert the action
       ]
 
-        TEQ     R1,#&FF                                              
-        BNE     %FT01                   ; if it isn't then ignore the munging of the bits             
-                      
+        TEQ     R1,#&FF
+        BNE     %FT01                   ; if it isn't then ignore the munging of the bits
+
         MOV     cy0,R4
         ADD     cy1,cy0,y1              ; setup the new co-ordinates for bottom & top Y's
-        
+
         LDR     R14,scry1
         CMP     cy1,R14                 ; if y1 > screen top then truncate
-        MOVGT   cy1,R14                   
-        
+        MOVGT   cy1,R14
+
       [ Version >= 317 :LAND: togglebits
         LDR     R14,[handle,#w_flags]   ; set toggled in silly way bit
         ORR     R14,R14,#ws_toggled2
@@ -2283,7 +2631,7 @@ wicon_toggle
 ;
       [ Version >= 317 :LAND: togglebits
         SUB     cx0,cx1,cx0
-        SUB     cy0,cy1,cy0             ; work out the area really shown        
+        SUB     cy0,cy1,cy0             ; work out the area really shown
 ;
         ASSERT  w_toggleheight = w_togglewidth +4
         ADD     R14,handle,#w_togglewidth
@@ -2292,8 +2640,8 @@ wicon_toggle
 ;
         BL      calc_w_status           ; ensure bhandle up-to-date
 
-        LDR     R2,mousebuttons         ; bhandle depends on adjust button   
-        
+        LDR     R2,mousebuttons         ; bhandle depends on adjust button
+
 openwindow_checkbuttons
         TST     R2,#button_right        ; if adjust used, open at same level,
         MOVEQ   R14,#nullptr            ; otherwise open window at front
@@ -2306,7 +2654,7 @@ openwindow_checkbuttons
 makesmall
         ADD     R14,handle,#w_bwax0
         LDMIA   R14,{cx0,cy0,cx1,cy1,x0,y0,x1}  ; Load previous x0,y0,x1,y1,scx,scy,bhandle
-        
+
         ; SMC: 18th January 1995
         ; Correct fix for MED-03674, original fix (amg: 28th September 1994) was too simple
         ; and caused MED-04376 which the following also fixes.
@@ -2315,8 +2663,15 @@ makesmall
         BEQ     %FT20                           ; then open it there.
 
         Push    "r2,r3"
+      [ ChildWindows
+        LDR     r14, [handle, #w_parent]            ; depending on whether this window is at the top-level,
+        CMP     r14, #nullptr
+        LDREQ   r2, activewinds+lh_forwards         ; scan the list of topmost windows
+        LDRNE   r2, [r14, #w_children+lh_forwards]  ; or the list of siblings
+      |
         LDR     r2, activewinds+lh_forwards     ; Otherwise, scan down the list of windows.
-        BIC     r3, x1, #3                      ; Align bhandle for comparisons.
+      ]
+        BIC     r3, x1, #3                      ; Align bhandle for comparisons (should really use the Abs macro)
 10
         LDR     r2, [r2, #ll_forwards]
         CMP     r2, #nullptr                    ; If we hit the end,
@@ -2331,8 +2686,8 @@ makesmall
         Pull    "r2,r3"
 20
 
-        ADD     R14,userblk,#u_wax0      
-        STMIA   R14,{cx0,cy0,cx1,cy1,x0,y0,x1}   
+        ADD     R14,userblk,#u_wax0
+        STMIA   R14,{cx0,cy0,cx1,cy1,x0,y0,x1}
         B       openwindow
 
 wicon_back
@@ -2346,7 +2701,7 @@ wicon_quit
         Push    "r0-r4"
 
         [ StickyMenus
-        LDR     R0,[handle,#w_taskhandle]       
+        LDR     R0,[handle,#w_taskhandle]
         CMP     R0,#-1
         Pull    "r0-r4",EQ
         BEQ     not_alt                 ; can't iconise menu
@@ -2355,17 +2710,17 @@ wicon_quit
         TST     R2,#button_right        ; If adjust, ignore it.
         Pull    "r0-r4",NE
         BNE     not_alt
-        
-        MOV     R0,#&79                 ; Scan keyboard for shift key 
+
+        MOV     R0,#&79                 ; Scan keyboard for shift key
         MOV     R1,#&80
         SWI     OS_Byte
 
-        CMP     R1,#&FF 
-        
+        CMP     R1,#&FF
+
         Pull    "r0-r4",NE
-        BNE     not_alt                          
-        
-                                        ; Shift-quit, send message_Iconize. 
+        BNE     not_alt
+
+                                        ; Shift-quit, send message_Iconize.
         MOV     R14,#ms_data+8+20       ; size of block (Window,Task,20 byte from title ).
         STR     R14,[sp,#-(ms_data+8+20)]!
         MOV     R0,#User_Message
@@ -2391,7 +2746,7 @@ wicon_quit
         BGT     %BT01
 
 02      LDRB    R3,[R14]                    ; Go back to last '.'
-        CMP     R14,R2                      
+        CMP     R14,R2
         CMPNE   R3,#"."
         SUBNE   R14,R14,#1
         BNE     %BT02
@@ -2406,7 +2761,7 @@ wicon_quit
         STRB    R3,[R1,R4]
         ADD     R4,R4,#1
         CMP     R4,#27+ms_data
-        BLT     %BT03     
+        BLT     %BT03
 
 04      MOV     R3,#0                      ; Store zero terminator.
         STRB    R3,[R1,R4]
@@ -2417,13 +2772,13 @@ wicon_quit
         STR     R14,[R1,#ms_action]
         BL      int_sendmessage_fromwimp
         ADD     sp,sp,#(ms_data+8+20)     ; correct stack
- 
+
        Pull     "r0-r4"
        B        trykeys
- 
-not_alt 
+
+not_alt
         [ StickyMenus
-;        LDR     R0,[handle,#w_taskhandle]       
+;        LDR     R0,[handle,#w_taskhandle]
 ;        CMP     R0,#-1
 ;        BNE     %FT05
         LDR     R14,menuSP
@@ -2439,7 +2794,7 @@ not_alt
         MOVVC   R0,#-4
         BLVC    closemenus
         B       nothing                         ; swallow it.
-02                     
+02
         LDR     R14,menuSP
         ADD     R14,R14,#4
         ADR     R0,menuhandles
@@ -2455,7 +2810,7 @@ not_alt
         SUB     R0,R14,#4
         BL      closemenus              ; close down to one above
         B       nothing
-05                   
+05
         ]
         STR     R3,[userblk]
         MOV     R0,#Close_Window_Request
@@ -2598,7 +2953,7 @@ Exit_OpenWindow
 ;
         BL      int_open_window         ; menus are opened automatically
         B       repollwimp
-                                                            
+
 userscrollpage
         MOV     R2,R0                   ; R2 = cx0, so it's in R0 instead
 
@@ -2770,7 +3125,7 @@ newmouseposn
       [ Version >= 317 :LAND: mousecache
 
 ; if recacheposn is zero then no need to read the mouse values as they
-; will not have been updated, instead read from our workspace and 
+; will not have been updated, instead read from our workspace and
 ; wait for the value to go non-zero.
 
         ASSERT  mouseypos = mousexpos +4
@@ -2780,18 +3135,18 @@ newmouseposn
         LDRB    R0,recacheposn
         TEQ     R0,#0                   ; do we have a cached posn for the mouse?
         ADREQ   R0,mousexpos            ; if they are then pick them up from our workspace
-        LDMEQIA R0,{R0,R1,R2,R3}      
-        BEQ     %FT10              
+        LDMEQIA R0,{R0,R1,R2,R3}
+        BEQ     %FT10
 
         STRB    R3,recacheposn
       ]
 
-        SWI     XOS_Mouse  
+        SWI     XOS_Mouse
         LDR     R14,dx_1                ; R14 <- dx-1
         BIC     R0,R0,R14
         LDR     R14,dy_1                ; R14 <- dy-1
         BIC     R1,R1,R14
-        
+
       [ Version >= 317 :LAND: mousecache
         ADR     R14,mousexpos
         STMIA   R14,{R0,R1,R2,R3}
@@ -2821,36 +3176,65 @@ bodgetime
 ; Exit :   R3 = window handle (relative)
 ;          R4 = button index (or -1 if none)
 ;          handle --> window definition (if any)
+;          If clicked in work area, [mousexyrel] = relative coordinates
 ;-----------------------------------------------------------------------------
 
 int_get_pointer_info
-        Push    "LR"
-;
-; look for a suitable window
-;
+
         ADRL    R4,activewinds+lh_forwards-ll_forwards
+      [ ChildWindows
+        MOV     R3,#0                   ; ignore wf_inborder bit for top-level windows
+      ]
+
+; In:   R4 -> list head ( activewinds or [handle,#w_children] )
+;       R3 = wf_inborder if we're to search only windows which have this bit
+;       R3 = 0 if we're to search all windows in the list
+
+int_get_pointer_info_R4                 ; for ChildWindows
+
+      [ ChildWindows
+        Push    "userblk,LR"
+
+        MOV     userblk,R3              ; userblk = wf_inborder or 0
+      |
+        Push    "LR"
+      ]
+
 findwlp
         LDR     R4,[R4,#ll_forwards]
         LDR     R14,[R4,#ll_forwards]
         CMP     R14,#nullptr
         MOVEQ   R3,#nullptr
         MOVEQ   R4,#nullptr
+      [ ChildWindows
+        Pull    "userblk,PC",EQ
+      |
         Pull    "PC",EQ
+      ]
         SUB     handle,R4,#w_active_link
         Rel     R3,handle
-;
+
+      [ ChildWindows
+        LDR     R14,[handle,#w_flags]
+        AND     R14,R14,userblk
+        TEQ     R14,userblk                     ; ignore window if userblk = wf_inborder and bit not
+        BNE     findwlp
+      ]
+
         ADD     R14,handle,#w_x0
         LDMIA   R14,{x0,y0,x1,y1}
-;
+
         CMP     R0,x0
         CMPGE   R1,y0
         BLT     findwlp
         CMP     x1,R0
         CMPGT   y1,R1
         BLE     findwlp
-;
-; now see if any icons match up
-;
+
+        Debug   child,"Click within outer box of",handle
+
+; decide whether the click is inside or outside the work area
+
         Push    "R0-R3,R5-R9"
         ADD     R14,handle,#w_wax0
         LDMIA   R14,{cx0,cy0,cx1,cy1,x0,y0}
@@ -2865,7 +3249,30 @@ findwlp
         CMPGE   cx1,R0
         CMPGE   cy1,R1
         Pull    "cx0,cy0,cx1,cy1"
+      [ :LNOT: ChildWindows
         BLT     noficon2
+      ]
+
+; right - a click inside the work area
+; first check to see if it's inside any of the window's children
+
+      [ ChildWindows
+        Push    "cx0,cy0,cx1,cy1,x0,y0,x1,y1,handle,userblk"
+        MOVLT   R3,#wf_inborder                 ; click was in border area (so only scan children that overlap the border)
+        MOVGE   R3,#0                           ; click was in work area (scan all children)
+        MOV     userblk,R3
+        ADD     R4,handle,#w_children + lh_forwards - ll_forwards
+        BL      int_get_pointer_info_R4         ; scan child window stack for a hit
+        CMP     R3,#nullptr
+        ADDNE   SP,SP,#10*4
+        STRNE   R3,[SP,#3*4]
+        BNE     exitp4                          ; click found in one of the children
+        TEQ     userblk,#0
+        Pull    "cx0,cy0,cx1,cy1,x0,y0,x1,y1,handle,userblk"
+        BNE     noficon2                        ; click was in border area
+      ]
+;
+; now scan the icon list for a hit (starting at the frontmost, ie. the highest-numbered)
 ;
         SUB     x1,cx0,x0                       ; coords of top-left
         SUB     y1,cy1,y0
@@ -2908,7 +3315,11 @@ noficon
 endficon
         STR     R0,mousexrel            ; may be needed later
         STR     R1,mouseyrel
-;
+exitp4                                  ; for ChildWindows
+      [ ChildWindows
+        Pull    "R0-R3,R5-R9,userblk,PC" ; restore mouse coords etc.
+      |
         Pull    "R0-R3,R5-R9,PC"        ; restore mouse coords etc.
+      ]
 
         END
