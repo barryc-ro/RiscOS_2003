@@ -60,6 +60,10 @@ install: $(TARGET)
         $(CP) LocalRes:Messages $(INSTDIR).Messages $(CPFLAGS)
         @echo $(COMPONENT): module installed
 
+install_rom: $(TARGET)
+        $(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+        @echo $(COMPONENT): rom module installed
+
 clean:
         $(WIPE) o $(WFLAGS)
         $(WIPE) rm $(WFLAGS)
