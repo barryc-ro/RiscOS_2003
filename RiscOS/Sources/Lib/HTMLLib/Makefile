@@ -48,8 +48,8 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 # Include files
 #
-INCLUDES  = -Iencodings,tbox:,C:,TCPIPLibs:
-DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables
+INCLUDES  = -Itbox:,C:,TCPIPLibs:
+DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables -DUNIFONT
 
 #
 # Program specific options:
@@ -73,35 +73,7 @@ OBJS =\
  o.attributes\
  o.attrvenrs\
  o.object\
- o.ol\
- encodings.o.utf8\
- encodings.o.encoding\
- encodings.o.iso2022\
- encodings.o.iso8859-1\
- encodings.o.iso8859-2\
- encodings.o.iso8859-3\
- encodings.o.iso8859-4\
- encodings.o.iso8859-5\
- encodings.o.iso8859-7\
- encodings.o.iso8859-8\
- encodings.o.iso8859-9\
- encodings.o.iso8859-10\
- encodings.o.iso8859-13\
- encodings.o.sami\
- encodings.o.koi8r\
- encodings.o.welsh\
- encodings.o.microsoft\
- encodings.o.acorn\
- encodings.o.apple\
- encodings.o.shiftjis\
- encodings.o.bigfive\
- encodings.o.euc-jp\
- encodings.o.euc-kr\
- encodings.o.euc-cn\
- encodings.o.enc_utf8\
- encodings.o.enc_ascii\
- encodings.o.enc_utf16\
- encodings.o.enc_ucs4
+ o.ol
  
 OBJSZ =\
  z.display\
@@ -115,35 +87,7 @@ OBJSZ =\
  z.attributes\
  z.attrvenrs\
  z.object\
- z.ol\
- encodings.z.utf8\
- encodings.z.encoding\
- encodings.z.iso2022\
- encodings.z.iso8859-1\
- encodings.z.iso8859-2\
- encodings.z.iso8859-3\
- encodings.z.iso8859-4\
- encodings.z.iso8859-5\
- encodings.z.iso8859-7\
- encodings.z.iso8859-8\
- encodings.z.iso8859-9\
- encodings.z.iso8859-10\
- encodings.z.iso8859-13\
- encodings.z.sami\
- encodings.z.koi8r\
- encodings.z.welsh\
- encodings.z.microsoft\
- encodings.z.acorn\
- encodings.z.apple\
- encodings.z.shiftjis\
- encodings.z.bigfive\
- encodings.z.euc-jp\
- encodings.z.euc-kr\
- encodings.z.euc-cn\
- encodings.z.enc_utf8\
- encodings.z.enc_ascii\
- encodings.z.enc_utf16\
- encodings.z.enc_ucs4
+ z.ol
 
 
 #
@@ -180,8 +124,6 @@ install_rom: ${TARGET} ${TARGETZM}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} encodings.o ${WFLAGS}
-        ${WIPE} encodings.z ${WFLAGS}
         ${WIPE} o ${WFLAGS}
         ${WIPE} z ${WFLAGS}
         ${RM} ${TARGET}
@@ -196,9 +138,6 @@ export_hdrs: h.html2_ext h.api h.struct h.tags dirs
 	Copy h.struct                   HTMLLib:h.struct                   ~CFLNR~V
 	Copy h.tags                     HTMLLib:h.tags                     ~CFLNR~V
 	Copy h.tablestruc               HTMLLib:h.tablestruc               ~CFLNR~V
-	Copy encodings.h.iso10646       HTMLLib:h.iso10646                 ~CFLNR~V
-	Copy encodings.h.utf8           HTMLLib:h.utf8                     ~CFLNR~V
-	Every.Every2 "Resources.Encodings...* -x ..CVS ..CVS.*" Copy %0 HTMLLib:%0 ~CFLN~R~V
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
@@ -209,8 +148,6 @@ export_libs: ${TARGET} ${TARGETZ} dirs
 local_dirs:
 	${MKDIR} o
 	${MKDIR} z
-	${MKDIR} encodings.o
-	${MKDIR} encodings.z
 	${TOUCH} local_dirs
 	
 dirs:
@@ -218,8 +155,6 @@ dirs:
         ${MKDIR} ${LIBDIR}.HTMLLib
         ${MKDIR} ${LIBDIR}.HTMLLib.h
         ${MKDIR} ${LIBDIR}.HTMLLib.o
-        ${MKDIR} ${LIBDIR}.HTMLLib.Resources
-        ${MKDIR} ${LIBDIR}.HTMLLib.Resources.Encodings
 
 #
 # Final link
