@@ -100,13 +100,13 @@ VPATH = @ kernel clib rlib
 .c.o:;        ${CC} ${CFLAGS} -fah ${CLFLAGS} -o $@ $<
 .c.o_rl:;     ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.m_o_rl:;   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -o $@ $<
-.c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} -o $@ $<
-.c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} -o $@ $<
+.c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${OPTIONS} -o $@ $<
+.c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${OPTIONS} -o $@ $<
 .s.o:;        ${OBJASM} ${AFLAGS} ${ALFLAGS} $< $@
 .s.o_rl:;     ${OBJASM} ${AFLAGS} $< $@
 .s.m_o_rl:;   ${OBJASM} ${AFLAGS} $< $@
-.s.rm_o:;     ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} $< $@
-.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} $< $@
+.s.rm_o:;     ${OBJASM} ${AFLAGS} ${OPTIONS} $< $@
+.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} ${OPTIONS} $< $@
 
 #
 # Libraries
@@ -507,9 +507,10 @@ ${EXP_HDR}.SharedCLib: hdr.SharedCLib
 
 # The swis.h header is only copied if the file differs from an existing
 # exported header.  This prevents needless recompilations
+        #-${DIFF} $@ derived.swis
+        #If "<Sys$ReturnCode>" <> 0 Then ${CP} derived.swis $@ ${CPFLAGS}
 CLIB:h.swis: derived.swis
-        -${DIFF} $@ derived.swis
-        If "<Sys$ReturnCode>" <> 0 Then ${CP} derived.swis $@ ${CPFLAGS}
+	${CP} derived.swis $@ ${CPFLAGS}
 
 # Headers:
 CLIB:h.assert: clib.h.assert  ;   ${CP} clib.h.assert $@ ${CPFLAGS}
@@ -615,28 +616,28 @@ o.kernel: kernel.s.k_obj_r
         ${OBJASM} ${AFLAGS} ${ALFLAGS} -from kernel.s.k_obj_r -to $@
 
 rm_o.bsearch_a: c.bsearch
-        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -zkA -APCS 3/26bit ${OPTIONS} -o $@ c.bsearch
+        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -zkA ${OPTIONS} -o $@ c.bsearch
 
 rm_o.clib:  clib.s.cl_obj_r
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from clib.s.cl_obj_r -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from clib.s.cl_obj_r -to $@
 
 rm_o.cl_modbody: clib.s.cl_mod_r
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from clib.s.cl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from clib.s.cl_mod_r -to $@
 
 rm_o_rl.rl_modbody: rlib.s.rl_mod_r
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from rlib.s.rl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from rlib.s.rl_mod_r -to $@
 
 rm_o.k_modbody: kernel.s.k_mod_r
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from kernel.s.k_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from kernel.s.k_mod_r -to $@
 
 rm_o.memcpy: s.memcpy s.h_regs
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from s.memcpy -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from s.memcpy -to $@
 
 rm_o.initmodule: clib.s.initmod_r
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from clib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from clib.s.initmod_r -to $@
 
 rm_o_rl.initmodule: rlib.s.initmod_r
-        ${OBJASM} ${AFLAGS} -APCS 3/26bit ${OPTIONS} -from rlib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} ${OPTIONS} -from rlib.s.initmod_r -to $@
 
 #
 # Objects that require extra flags
@@ -651,10 +652,10 @@ o.string: c.string
         ${CC} ${CFLAGS} -fah ${CLFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 rm_o.armsys: c.armsys
-        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} ${VSFLAGS} -o $@ c.armsys
+        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} ${OPTIONS} ${VSFLAGS} -o $@ c.armsys
 
 rm_o.string: c.string
-        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -APCS 3/26bit ${OPTIONS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
+        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} ${OPTIONS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 #
 # Special case: use "rom_defs" for ROM library (o_rm), "defs" for the others
@@ -680,21 +681,21 @@ m_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.poll m_o_rl.poll ${AFLAGS}
 
-m_o_rl.bastxt: rlib.s.baxtxt
+m_o_rl.bastxt: rlib.s.bastxt
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.bastxt m_o_rl.bastxt ${AFLAGS}
 
 rm_o_rl.swi: rlib.s.swi
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS} -APCS 3/26bit ${OPTIONS}
+        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS} ${OPTIONS}
 
 rm_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS} -APCS 3/26bit ${OPTIONS}
+        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS} ${OPTIONS}
 
 rm_o_rl.bastxt: rlib.s.bastxt
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt rm_o_rl.bastxt ${AFLAGS} -APCS 3/26bit ${OPTIONS}
+        ${OBJASM} rlib.s.bastxt rm_o_rl.bastxt ${AFLAGS} ${OPTIONS}
 
 #
 # trace separated out to allow defining of TRACE
@@ -706,7 +707,7 @@ m_o_rl.trace: rlib.c.trace
    ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -DTRACE -o m_o_rl.trace rlib.c.trace
 
 rm_o_rl.trace: rlib.c.trace
-   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -APCS 3/26bit ${OPTIONS} -DTRACE -o rm_o_rl.trace rlib.c.trace
+   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} ${OPTIONS} -DTRACE -o rm_o_rl.trace rlib.c.trace
 
 #
 # Arthur objects

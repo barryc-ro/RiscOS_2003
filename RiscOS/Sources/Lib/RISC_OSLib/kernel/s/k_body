@@ -209,11 +209,11 @@ movne_sl_sla
         [ No32bitCode
         AND     a1, pc, #PSRIBit        ; 32-bit OK (in 26-bit cond)
         |
-        AND     a1, pc, #PSRIBit | PSRMode
+        MOV     a1, #0
         MRS     a1, CPSR
-        TST     a1, #PSR32Mode^PSRMode  ; Z set if in 26-bit mode
+        TST     a1, #2_11100            ; Z set if in 26-bit mode
         ANDEQ   a1, pc, #PSRIBit        ; 32-bit OK (in 26-bit cond)
-        ANDNE   a1, a1, PSR32IBit
+        ANDNE   a1, a1, #PSR32IBit
         ]
         Return  ,LinkNotStacked
 
@@ -268,15 +268,15 @@ movne_sl_sla
         [ {CONFIG}=26
         BICS    pc, lr, #PSRIBit        ; 32-bit OK - in {CONFIG}=26
         |
-        CLRPSR  #PSR32Ibit
-        MOV     pr, lr
+        CLRPSR  PSRIBit, ip
+        MOV     pc, lr
         ]
 
 |_kernel_irqs_off|
         [ {CONFIG}=26
         ORRS    pc, lr, #PSRIBit
         |
-        PHPSEI  a2, a3
+        SETPSR  PSRIBit, ip
         MOV     pc, lr
         ]
 
@@ -296,8 +296,8 @@ movne_sl_sla
         [ {CONFIG}=26
         TST     r14, #PSRSVCMode
         |
-        MRS     a1, CPSR
-        ANDS    a1, a1, #PSR32Privileged
+        MRS     ip, CPSR
+        TST     ip, #PSR32Privileged
         ]
         MOVNE   a1, #0
         LDREQ   a1, [a1, #O_moduleDataWord]
@@ -505,15 +505,14 @@ FatalError Keep
 ;StrongARM - there is dynamic code here, but this is sorted in _kernel_init, after
 ;all calls to CopyHandler
 CopyHandler
-        LDMIA   r5!, {r6, r7}
+        LDMIA   r5!, {r6, r7}                   ; first 2 instructions
         STMIA   r4!, {r6, r7}
-        SUB     r6, r5, r4
-        SUB     r6, r6, #8
-        MOV     r6, r6, ASR #2
-        BIC     r6, r6, #&ff000000
-        ORR     r6, r6, #&ea000000
-        STR     r6, [r4]
+        LDR     r6, =&E51FF004                  ; LDR PC,<nextword>
+        STR     r6, [r4], #4
+        STR     r5, [r4]                        ; address of main handler
         MOV     pc, r14
+
+        LTORG
 
 |Sys$RCLimit|
         DCB     "Sys$RCLimit", 0
@@ -701,6 +700,8 @@ ABEXString
         ErrorBlock BadReturnCode, "Return code too large", C50
         ErrorBlock NoMainProgram, "No main program", C51
 
+        LTORG
+
  ;*-------------------------------------------------------------------*
  ;* Abort Handlers                                                    *
  ;*-------------------------------------------------------------------*
@@ -826,7 +827,7 @@ Aborted Keep
         STMIB   r14, {r1-r14}^
   ]
 
-        LDMFD   r13!, {r1, r2, r3}
+        LDMFD   r13!, {r1, r2, r3}      ; abort PC, R0, R12
 
         MOV     r6, r14                 ; switch it to a non-banked register
         MOV     r4, #0
@@ -839,8 +840,8 @@ Aborted Keep
         ORRNE   r4, r4, #PSR32SVCMode
         MSRNE   CPSR_c, r4              ; switch to SVC32 (already in SVC26 if 26bit)
         TST     r5, #PSR32Privileged
-        LDRNE   r1, [r6, #lr*4]
-        STR     r1, [r6, #pc*4]
+        LDRNE   r1, [r6, #lr*4]         ; if aborted in a privileged mode, save
+        STR     r1, [r6, #pc*4]         ; PC as user R14
         STR     r2, [r6, #r0*4]
         STREQ   r3, [r6, #r12*4]
         BEQ     AbortFindHandler
@@ -960,10 +961,11 @@ Trap_CallingStandardKnown
         MRS     a1, CPSR
         TST     a1, #2_11100
         BEQ     %FT01                                   ; 26-bit mode
-        LDRB    a2, [v6, #O_ClientFlags]                ; look for caller type
-        TST     a2, #ClientFlag_32bit                   ; client in USR32?
-        MSREQ   CPSR_c, #PSR32IBit | PSRUSRMode         ; USR26, I set
-        MSRNE   CPSR_c, #PSR32IBit | PSR32USRMode       ; USR32, I set
+     [ {CONFIG}=26
+        MSR     CPSR_c, #PSR32IBit + PSRUSRMode         ; USR26, I set
+     |
+        MSR     CPSR_c, #PSR32IBit + PSR32USRMode       ; USR32, I set
+     ]
         MSR     CPSR_f, #PSRVBit                        ; set V for calling IntOn.
         B       %FT02
 01      LDR     a1, [v6, #O_registerDump+pc*4]
@@ -979,10 +981,11 @@ Trap_CallingStandardKnown
         MRS     a1, CPSR
         ORR     a1, a1, #PSR32IBit                      ; may not need this
         ORR     a1, a1, #PSRVBit
-        BIC     a1, a1, #PSR32Privileged
-        LDRB    a2, [v6, #O_ClientFlags]                ; look for caller type
-        TST     a2, #ClientFlag_32bit                   ; client in USR32?
-        BICEQ   a1, a1, #2_10000                        ; no - so we want USR26
+      [ {CONFIG}=26
+        BIC     a1, a1, #PSR32Privileged                ; into USR26 mode
+      |
+        BIC     a1, a1, #PSR32Mode                      ; into USR32 mode
+      ]
         MSR     CPSR_cf, a1                             ; switch to user mode
      ]
  ]
@@ -1044,12 +1047,13 @@ FatalErrorX
         BIC     r0, r0, #3
   ]
         SavePSR v4
-        MOV     v4, pc
         SWI     EnterSVC
         BLVC    open_messagefile        ; BL<cond> 32-bit OK
         RestPSR v4
         MOV     r0, r0
-        ADD     r2, v6, #O_fastEventStack
+        ; We just trample all over the start of our workspace.
+        ; Fine, as we've removed handlers and are about to go pop.
+        ADD     r2, v6, #O_FatalErrorBuffer
         MOV     r3, #256
         ADD     r4, fp, #4
         ADD     r5, v6, #O_pc_hex_buff
@@ -1060,7 +1064,7 @@ FatalErrorX
         MOV     r0, ip
         BL      |_kernel_copyerror|
         MOV     a4, r0
-        ADD     a2, v6, #O_fastEventStack
+        ADD     a2, v6, #O_FatalErrorBuffer
         BL      CopyError2
         SUB     a2, a2, #1
         ADR     a4, str1
@@ -1090,7 +1094,7 @@ FatalErrorX
         BL      HexOut
         MOV     a1, #0
         STRB    a1, [a2]
-        ADD     r0, v6, #O_fastEventStack
+        ADD     r0, v6, #O_FatalErrorBuffer
  ]
         B       FatalError
 
@@ -1137,7 +1141,7 @@ FindAndCallHandlers Keep
         ; v2 is the handler offset
         ; v6 is my static data base
 
-        ; set up an intial unwind block.  For our purposes, we don't care
+        ; set up an initial unwind block.  For our purposes, we don't care
         ; about the values of callee-save registers (ARM or FP).
         STMFD   sp!, {r0, r14}
         MOV     v3, fp
@@ -1149,7 +1153,9 @@ FindAndCallHandlers Keep
         ADD     v4, sp, #uwb_fp+4
         STMIA   v4, {v3, v4, v5, ip}
 FCH_NextFrame
+        [ {CONFIG}=26
         BIC     r1, r1, #PSRBits
+        ]
         LDMIB   v6, {v4, v5}
 FCH_NextLanguage Keep
         ; find to which language the current pc corresponds (between which
@@ -1180,9 +1186,11 @@ FCH_NextLanguage Keep
         CMP     v5, a1
         MOV     a1, v1
         LDR     a2, [sp, #uwb_size+4]
-        MOVEQ   lr, pc
-        MOVEQ   pc, r2
-        BEQ     FCH_ClientCalled
+        BNE     FCH_CallClient
+        MOV     lr, pc
+        MOV     pc, r2
+        B       FCH_ClientCalled
+FCH_CallClient
         CallClient r2
 FCH_ClientCalled
         CMP     v2, #lang_Event  ; event handlers are only allowed to pass escape
@@ -1219,7 +1227,11 @@ FCH_Unwind  Keep
         BGT     FCH_NextFrame
 
         ADD     sp, sp, #uwb_size+4+4
+        [ {CONFIG}=26
         LDMFD   sp!, {pc}^
+        |
+        LDMFD   sp!, {pc}
+        ]
 
         ErrorBlock UncaughtTrap, "Uncaught trap", C57
         ErrorBlock RecursiveTrap, "Trap while in trap handler", C58
@@ -1235,7 +1247,7 @@ RestoreOSHandlers Keep
         CMPNE   r1, r0
         LDR     lr, [v6, #O_lk_RestoreOSHandlers]
         BNE     SetWimpSlot
-        MOVS    pc, lr
+        Return  ,LinkNotStacked
 
 SetWimpSlot_Save_r4r5
         STMFD   sp!, {r4, r5}
@@ -1266,7 +1278,7 @@ SetWimpSlot  Keep
         MOVNE   r1, r5
         SWINE   ChangeEnv
         MOVNE   r0, r4
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 
 ; Our own exit handler, which restores our parent's environment then exits.
@@ -1301,9 +1313,19 @@ UpCallHandler
 ; The register state is undefined, except that r13 must be the SWI stack
 ; pointer.
         STMFD   sp!, {r0-r3, v1-v6, fp, sl, lr}
-        WritePSRc 0, v6
-        NOOP
         MOV     v6, r12
+        [ No32bitCode
+        TEQP    pc, #0
+        NOP
+        |
+        MRS     r0, CPSR                        ; note current mode
+        STR     r0, [sp, #-4]!
+        [ {CONFIG}=26
+        MSR     CPSR_c, #PSRUSRMode
+        |
+        MSR     CPSR_c, #PSR32USRMode
+        ]
+        ]
         LDR     sl, [v6, #O_rootStackChunk]
         LDR     sp, [sl, #SC_size]
         ADD     sp, sl, sp
@@ -1311,8 +1333,15 @@ UpCallHandler
         MOV     fp, #0
         BL      Finalise
         SWI     EnterSVC
-        LDMFD   sp!, {r0-r3, v1-v6, fp, sl, lr}
-        MOVS    pc, lr
+        [ No32bitCode
+        LDMFD   sp!, {r0-r3, v1-v6, fp, sl, pc}^
+        |
+        LDR     r0, [sp], #4
+        MSR     CPSR_c, r0                      ; back into original mode
+        TST     r0, #2_11100                    ; 26 or 32-bit exit?
+        LDMEQFD sp!, {r0-r3, v1-v6, fp, sl, pc}^
+        LDMFD   sp!, {r0-r3, v1-v6, fp, sl, pc}
+        ]
 
 InstallHandlers Keep
         ; r0 is zero for the initial call (previous values for the handlers
@@ -1381,7 +1410,7 @@ InstallHandlers Keep
         SWI     ChangeEnv
         STMEQIA r8!, {r1, r2}
 
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 
 InstallCallersHandlers Keep
@@ -1427,7 +1456,7 @@ InstallCallersHandlers Keep
         LDMIA   r8!, {r1, r2}
         SWI     ChangeEnv
 
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 
 
@@ -1458,7 +1487,11 @@ ErrorHandler Keep
         MOV     r12, r0
         ADD     r0, r0, #O_errorNumber
         LDMDA   r0, {r1, r2}            ; r1 is error pc, r2 error number
-        BIC     r1, r1, #&0c000003      ; Sanitize PC value
+        MOV     r14, #0
+        STR     r14, [r12, #O_registerDump+16*4]        ; zero PSR
+        MRS     r14, CPSR
+        TST     r14, #2_11100
+        BICEQ   r1, r1, #&fc000003      ; Sanitize PC value
         CMP     r2, #Error_BranchThroughZero
         MOVEQ   r1, #0
         STR     r1, [r12, #O_registerDump+pc*4]
@@ -1521,7 +1554,6 @@ EndFastEventHandlers
         ; If callback is possible (not already in a callback), set r12 to 1 to
         ; request it.
         LDRB    r12, [v6, #O_callbackInactive]
-        CMP     r12, #0
 
         ADD     v6, v6, #O_eventRegisters
         LDMIA   v6, {r0-r10}
@@ -1553,6 +1585,9 @@ CallBackHandler Keep
         MOV     r0, #0
         STRB    r0, [r12, #O_callbackInactive]
 
+        MRS     r0, CPSR
+        TST     r0, #2_11100
+
         MOV     v6, r12                 ; get SB into our standard place
         ; Copy the register set from our static callback buffer, onto the stack
         ; (If we appear to have a valid stack pointer).  Otherwise, we just
@@ -1562,6 +1597,10 @@ CallBackHandler Keep
         LDR     r1, [v6, #O_heapBase]
         LDR     r2, [v6, #O_heapLimit]
         LDR     r3, =IsAStackChunk
+
+        ; if in a 26-bit mode - mark PSR in register dump as invalid.
+        MOVEQ   r12, #-1
+        STREQ   r12, [r11]
 
  [ SharedLibrary
         ; Shared Library, with the possibility that the event occurred
@@ -1595,7 +1634,12 @@ CallBackHandler Keep
         BNE     Event_NotAPCSR
         LDR     v5, [v6, #O_registerDump+fp*4]
         LDR     r0, [v6, #O_registerDump+pc*4]
-        BIC     r14, r0, #PSRBits
+        MOV     r14, #0
+        MRS     r14, CPSR
+        TST     r14, #2_11100
+        BICEQ   r14, r0, #PSRBits               ; 26-bit: R0 is PC+PSR
+        MOVNE   r14, r0                         ; 32-bit: R0 is PC
+        LDRNE   r0, [v6, #O_registerDump+16*4]  ;         get PSR
         LDR     r14, [r14, #-4]
         LDR     r12, movne_sl_sla
         EORS    r12, r12, r14
@@ -1665,13 +1709,13 @@ Event_BadStack
 Event_StackOK
  ]
 
-        LDMDB   r11!, {r0-r7}
-        STMDB   r12!, {r0-r7}
-        LDMDB   r11!, {r0-r7}
+        LDMDA   r11!, {r0-r7, r14}
+        STMDB   r12!, {r0-r7, r14}
+        LDMDA   r11!, {r0-r7}
         STMDB   r12!, {r0-r7}
 
 Event_NoStackForHandler
-        WritePSRc PSRIBit+PSRSVCMode, r1 ; we want the testing for an escape and
+        WritePSRc PSRIBit+PSRSVCMode, r1; we want the testing for an escape and
         MOV     r1, #1                  ; allowing callbacks to be indivisible
         LDRB    r0, [v6, #O_hadEscape]  ; (otherwise an escape may be lost).
         STRB    r1, [v6, #O_callbackInactive]
@@ -1679,12 +1723,22 @@ Event_NoStackForHandler
         STRB    r1, [v6, #O_hadEscape]
         LDR     v1, [v6, #O_eventCode]
         CMP     r0, #0
-        MOVNE   r0, #&7e
-        SWINE   Byte
-        MOVNE   v1, #-1                 ; escape overrides everything else
-
-        WritePSRc PSRIBit, r0            ; to user mode, with interrupts off
+        BEQ     %FT01
+        MOV     r0, #&7e
+        SWI     Byte
+        MOV     v1, #-1                 ; escape overrides everything else
+01
+        [ No32bitCode
+        TEQP    pc, #PSRIBit            ; to user mode, with interrupts off
         NOOP
+        |
+        [ {CONFIG}=26
+        MSR     CPSR_c, #PSR32IBit + PSRUSRMode
+        |
+        MSR     CPSR_c, #PSR32IBit + PSR32USRMode
+        ]
+        ]
+
         CMP     r12, #0
         BGE     CallEventHandlers
 
@@ -1692,7 +1746,6 @@ Event_NoStackForHandler
         B       ReloadUserState
 
 CallEventHandlers
-        ; now find a handler
         MOV     sp, r12
         MOV     sl, r10
         MOV     fp, v5
@@ -1711,8 +1764,16 @@ ReloadUserState
         ; from the callback buffer atomically. 3u ARMs unsupported now
         ; User r13, r14 must be reloaded from user mode.
         SWI     EnterSVC
-        WritePSRc PSRIBit+PSRSVCMode, r1
+        [ No32bitCode
+        TEQP    pc, #PSRIBit+PSRSVCMode
         NOOP
+        |
+        LDR     r1, [r0, #16*4]
+        CMP     r1, #-1
+        MSRNE   CPSR_c, #PSR32IBit+PSR32SVCMode
+        MSREQ   CPSR_c, #PSR32IBit+PSRSVCMode
+        MSRNE   SPSR_cxsf, r1
+        ]
         ADD     r14, r0, #pc*4
         LDMDB   r14, {r0-r14}^
         NOOP
@@ -1747,7 +1808,7 @@ FindHandler Keep
         LDRNE   r0, =|RTSK$$Data$$Limit|
         CMPNE   v5, r0
         ORRNE   r2, r2, #IsClientHandler
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 FH_NoHandlerFound
  [ SharedLibrary
@@ -1758,28 +1819,32 @@ FH_NoHandlerFound
         BNE     %B01
  ]
         MOV     r2, #0
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 ; char *_kernel_language(int pc);
 |_kernel_language|
-        STMFD   sp!, {v2, v4-v6, r14}
+        FunctionEntry "v2, v4-v6"
         LoadStaticBase v6, ip
         MOV     v2, #lang_name
+        [ {CONFIG}=26
         BIC     r1, a1, #PSRBits
+        ]
         BL      FindHandler
         BIC     a1, r2, #IsClientHandler
-        LDMFD   sp!, {v2, v4-v6, pc}^
+        Return  "v2, v4-v6"
 
 ; char *_kernel_procname(int pc);
 |_kernel_procname|
-        STMFD   sp!, {v2, v4-v6, r14}
+        FunctionEntry "v2, v4-v6"
         LoadStaticBase v6, ip
         MOV     v2, #lang_ProcName
+        [ {CONFIG}=26
         BIC     r1, a1, #PSRBits
+        ]
         BL      FindHandler
         CMP     r2, #0
         MOVEQ   a1, #0
-        LDMEQFD sp!, {v2, v4-v6, pc}^
+        Return  "v2, v4-v6",,EQ
 
         MOV     a1, r1
         TST     r2, #IsClientHandler
@@ -1787,11 +1852,11 @@ FH_NoHandlerFound
         MOVEQ   pc, r2
 
         CallClient r2
-        LDMFD   sp!, {v2, v4-v6, pc}^
+        Return  "v2, v4-v6"
 
 ; int _kernel_unwind(_kernel_unwindblock *inout, char **language);
 |_kernel_unwind|
-        STMFD   sp!, {a1, a2, v2, v4-v6, r14}
+        FunctionEntry "a1, a2, v2, v4-v6"
         LoadStaticBase v6, ip
         LDR     r1, [a1, #uwb_pc]
         BIC     r1, r1, #PSRBits
@@ -1807,7 +1872,7 @@ FH_NoHandlerFound
 
         LDMFD   sp!, {a1, a2}
         CallClient r2
-        LDMFD   sp!, {v2, v4-v6, pc}^
+        Return  "v2, v4-v6"
 
 call_default_unwind_handler
         LDMFD   sp!, {a1, a2, v2, v4-v6, r14}
@@ -1828,7 +1893,9 @@ default_unwind_handler Keep
         BNE     duh_corrupt
 
         LDR     a3, [a4, #frame_entrypc]
+        [ {CONFIG}=26
         BIC     a3, a3, #PSRBits
+        ]
         [ StrongARM
         STMFD   sp!, {a1-a2}
         MOV     a1, #0
@@ -1935,7 +2002,9 @@ UnwindEndFP
         ADD     ip, a1, #uwb_fp
         STMIA   ip, {a3, a4, v1, v3}
         MOV     v3, a2
+        [ {CONFIG}=26
         BIC     r1, v1, #PSRBits
+        ]
         MOV     v2, #lang_name
         BL      FindHandler
         BIC     r2, r2, #IsClientHandler
@@ -1945,12 +2014,17 @@ duh_exit
         MOV     a1, #0
         STRB    a1, [v6, #O_unwinding]
         MOV     a1, v5
-        LDMFD   sp!, {v1-v6, pc}^
+        Return  "v1-v6"
 
 duh_abort
         LDR     r12, [v6, #O_registerDump+r12*4]  ; abort handling trampled this.
-        LDR     r14, [v6, #O_registerDump+pc*4]
-        TEQP    r14, #PSRBits           ; Back to the mode and interrupt
+        MOV     r14, #0
+        MRS     r14, CPSR
+        TST     r14, #2_11100
+        LDRNE   r14, [v6, #O_registerDump+16*4]
+        MSRNE   CPSR_c, r14
+        LDREQ   r14, [v6, #O_registerDump+pc*4]
+        TEQEQP  r14, #0                 ; Back to the mode and interrupt
                                         ; status before we got the abort
         NOOP
 duh_corrupt
@@ -2281,7 +2355,7 @@ CopyUpDone
         MOV     r0, #Env_ErrorHandler
         ADR     r1, s_ErrHandler
         MOV     r2, v6
-        ADD     r3, v6, #O_errorBuffer
+        ADDEQ   r3, v6, #O_errorBuffer
         SWI     ChangeEnv
 
         MOV     r0, #Env_ExitHandler
@@ -2516,7 +2590,7 @@ CopyErrorString
         LDMFD   sp!, {r1, lr}           ; first (malloc will try again and get from
         STR     r0, [r1]                ; new area).
         MOV     r0, r3, ASR #2
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 alloc_no_extender
         ; if current slotsize = heap limit, try to extend the heap by the
@@ -2565,7 +2639,7 @@ alloc_return_block
         STRGE   r2, [r1]                ; return it above the previous heapTop
         ADDGE   r2, r2, r0, ASL #2      ; and update heapTop
         STRGE   r2, [ip]
-        MOVGES  pc, r14
+        Return  ,LinkNotStacked, GE
 
         ADD     r0, r0, r3, ASR #2      ; otherwise, return whatever is free
         SUB     r0, r0, r2, ASR #2
@@ -2573,7 +2647,7 @@ alloc_return_block
         BGT     alloc_return_block
 
         STR     r0, [r1]                ; (if none, returned block is NULL,
-        MOVS    pc, r14                 ; and don't update heapTop)
+        Return  ,LinkNotStacked         ; and don't update heapTop)
 
 
 |_kernel_malloc|
@@ -2662,15 +2736,23 @@ alloc_return_block
         ADR     v6, StkOvfPseudoEntry+12
         ]
         STMDA   a1, {v3-v6}             ; new return frame in old chunk...
+     [ SharedLibrary
         LoadStaticBase v6, lr
         LDRB    lr, [v6, #O_ClientFlags]; determine which exit routine to use
         TST     lr, #ClientFlag_APCS_A
         ADREQ   lr, StackOverflowExit   ; non APCS-A
         ADRNE   lr, StackOverflowExitA  ; APCS-A
+     |
+        ADR     lr, StackOverflowExit
+     ]
         MOV     a2, sp                  ; saved sp in old frame = NEW sp
                                         ; (otherwise exit call is fatal)
         STMDB   fp, {a1, a2, lr}        ; pervert old frame to return here...
+        [ {CONFIG}=26
         LDMDA   v1, {a1, a2, v1-v6, pc}^
+        |
+        LDMDA   v1, {a1, a2, v1-v6, pc}
+        ]
 
 |_kernel_stkovf_copy0args|
 ; Run out of stack.
@@ -2727,11 +2809,15 @@ DoneArgumentCopy
         MOV     v1, fp                  ; old chunk's frame pointer
         SUB     ip, v4, #SC_SLOffset    ; needed frame size, no margin
         LDMDA   v1!, {a1, a2, v2-v6}    ; 1st 7 of possible 14 saved regs
+      [ SharedLibrary
         LoadStaticBase v5, v4
         LDRB    v5, [v5, #O_ClientFlags]
         TST     v5, #ClientFlag_APCS_A
         ADREQ   v5, StackOverflowExit   ; return address... (non APCS-A)
         ADRNE   v5, StackOverflowExitA  ; return address... (APCS-A)
+      |
+        ADR     v5, StackOverflowExit
+      ]
         MOV     v4, sp                  ; SP in NEW chunk
         ORR     v3, fp, #ChunkChange    ; new FP in old chunk
         SUB     fp, sp, #4              ; FP in new chunk
@@ -2753,11 +2839,16 @@ DoneArgumentCopy
 ; Set the SP to be FP - requiredFrameSize and return by reloading regs
 ; from where they were saved in the old chunk on entry to STKOVF/N
         SUB     sp, fp, ip
+        [ {CONFIG}=26
         LDMDA   v1, {a1, a2, v1-v6, pc}^
+        |
+        LDMDA   v1, {a1, a2, v1-v6, pc}
+        ]
 
 StkOvfPseudoEntry
         STMFD   sp!, {fp, ip, lr, pc}   ; A register save mask
 
+      [ SharedLibrary
 StackOverflowExitA Keep
 ; We return here when returning from an APCS_A function - perform the register
 ; munging
@@ -2766,6 +2857,7 @@ StackOverflowExitA Keep
         MOV     sp, r12
         MOV     r14, #PSRZBit           ; ensure register munging on exit
         B       StackOverflowExitCommon
+      ]
 
 StackOverflowExit Keep
 ; We return here when returning from the procedure which caused the
@@ -2822,7 +2914,7 @@ DoneDeallocateChunks
         MOVNE   r12, sp
         MOVNE   r13, sl
         MOVNE   r10, fp
-        MOVS    pc, r14
+        Return  ,LinkNotStacked
 
 GetStackChunk Keep
 ; Naughty procedure with non-standard argument conventions.
@@ -2830,9 +2922,16 @@ GetStackChunk Keep
 ; On exit, V1, and V4 are preserved, V2 points to the newly inserted chunk
 ; and V3 is the chunk's size. In case of error, V is set.
 StkOvfGetChunk
+      [ {CONFIG}=26
         TST     r14, #PSRSVCMode        ; in SWI mode, stack overflow is fatal
         ORRNES  pc, r14, #PSRVBit       ; (could have been detected earlier,
                                         ; but deferral to now is simpler).
+      |
+        MRS     v2, CPSR
+        TST     v2, #PSR32Privileged
+        MSRNE   CPSR_f, #V_bit          ; maintain NE
+        MOVNE   pc, lr
+      ]
 ; Check that the current chunk really is a stack chunk...
         STMFD   sp!, {a3, a4, ip, lr}   ; save args not saved before
         LDR     v2, =IsAStackChunk      ; magic constant...
@@ -2902,10 +3001,15 @@ StkOvfInsertChunk
         STRNE   v2, [a2, #SC_prev]      ; next->prev = this
         STR     pc, [v2, #SC_mark]      ; Not a stack chunk (for safe non-atomic
                                         ; update of sp and sl).
-        LDMFD   sp!, {a3, a4, ip, pc}^  ; restore extra saved regs
+        Return  "a3, a4, ip"            ; restore extra saved regs
 StkOvfError
+        [ {CONFIG}=26
         LDMFD   sp!, {a3, a4, ip, lr}
         ORRS    pc, lr, #PSRVBit        ; return with V set
+        |
+        MSR     CPSR_f, #V_bit
+        LDMFD   sp!, {a3, a4, ip, pc}
+        ]
 
 StackOverflowFault Keep
         LoadStaticBase ip, a1
@@ -3117,7 +3221,6 @@ s_shifted0mod8
 
 |_kernel_srem|
         FunctionEntry
-        STMFD   sp!, {r14}
         BL      |_kernel_sdiv|
         MOV     a1, a2
         Return
@@ -3298,10 +3401,10 @@ open_messagefile
         |
 
 |_kernel_copyerror|
-        MOV     pc, lr
+        Return  ,LinkNotStacked
 
 |_kernel_getmessage|
-        MOV     pc, lr
+        Return  ,LinkNotStacked
 
         ]
 
