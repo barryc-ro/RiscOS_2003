@@ -11,6 +11,9 @@
 # 03-Apr-2000	ADH	Created from Browse Makefile.
 # 28-Apr-2000	ADH	Significant alterations and extensions to support
 #			ROM and RAM module builds, and applications.
+# 05-May-2000	SAR	Added the XCP macro in place of -${CP} and changed the
+#			WIPE macro to use 'x wipe' rather than -wipe as a short-
+#			term fix to make this component build in ROM builds.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -49,10 +52,11 @@ AS		= objasm
 CC		= cc
 CMHG		= cmhg
 CP		= copy
+XCP		= x copy
 LD		= link
 RM		= remove
 SQUEEZE		= squeeze
-WIPE		= -wipe
+WIPE		= x wipe
 AWK		= do awk
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
@@ -327,15 +331,15 @@ ramd: ${MODULE}D
 install_common: ${FILES}
 	@echo
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
-	-${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
-	-${CP} ${LDIR}.!Sprites23		${INSTDIR}.!Sprites23		${CPFLAGS}n
+	${XCP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
+	${XCP} ${LDIR}.!Sprites23		${INSTDIR}.!Sprites23		${CPFLAGS}n
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}~n
 	${AWK} -f ${ADDTOMESSAGES} ${VERSIONNUM} >> ${INSTDIR}.Messages
 	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}n
 	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
-	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
-	-${CP} ${LDIR}.Sprites23		${INSTDIR}.Sprites23		${CPFLAGS}n
-	-${CP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
+	${XCP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
+	${XCP} ${LDIR}.Sprites23		${INSTDIR}.Sprites23		${CPFLAGS}n
+	${XCP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
 	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 
 install: install_common
@@ -378,11 +382,11 @@ resources:
 	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
 	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
 	${CP} ${LDIR}.!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
-	-${CP} ${LDIR}.!Sprites22	${RESAPP}.!Sprites22	${CPFLAGS}
-	-${CP} ${LDIR}.!Sprites23	${RESAPP}.!Sprites23	${CPFLAGS}
+	${XCP} ${LDIR}.!Sprites22	${RESAPP}.!Sprites22	${CPFLAGS}
+	${XCP} ${LDIR}.!Sprites23	${RESAPP}.!Sprites23	${CPFLAGS}
 	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
-	-${CP} ${LDIR}.Sprites22	${RESDIR}.Sprites22	${CPFLAGS}
-	-${CP} ${LDIR}.Sprites23	${RESDIR}.Sprites23	${CPFLAGS}
+	${XCP} ${LDIR}.Sprites22	${RESDIR}.Sprites22	${CPFLAGS}
+	${XCP} ${LDIR}.Sprites23	${RESDIR}.Sprites23	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${AWK} -f ${ADDTOMESSAGES} ${VERSIONNUM} >> ${RESDIR}.Messages
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
