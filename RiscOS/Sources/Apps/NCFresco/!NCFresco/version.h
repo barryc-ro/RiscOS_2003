@@ -7,7 +7,7 @@
 #include "debug.h"
 #endif
 
-#ifdef STBWEB
+#if !defined(ANT_NCFRESCO) && defined( STBWEB )
 #include "VersionNum"
 #endif
 
@@ -20,14 +20,26 @@ extern char *program_title;
 #define PROGRAM_NAME		"NCFresco"
 #define PROGRAM_TITLE		"NCBrowser"
 
-#define VERSION_NUMBER		Module_MajorVersion
+#ifdef ANT_NCFRESCO
 
-#define BASE_VERSION_NUMBER	"1.63" /* Fresco version */
+# define VERSION_NUMBER		"1.33A"     /* A for ANT... hmmm */
+# define BASE_VERSION_NUMBER	"1.63"      /* Fresco version */
+# ifdef PRODUCTION
+#  define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER")"
+# else
+#  define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER" Development)"
+# endif
 
-#ifdef PRODUCTION
-#define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER")" Module_MinorVersion
 #else
-#define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER" Development)" Module_MinorVersion
+
+# define VERSION_NUMBER		Module_MajorVersion
+# define BASE_VERSION_NUMBER	"1.63" /* Fresco version */
+# ifdef PRODUCTION
+#  define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER")" Module_MinorVersion
+# else
+#  define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER" Development)" Module_MinorVersion
+# endif
+
 #endif
 
 #define ANTI_TWITTER		1	/* Define non-zero for thick lines etc. */

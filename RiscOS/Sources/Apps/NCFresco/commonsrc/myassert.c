@@ -10,13 +10,7 @@
 #include "myassert.h"
 #include "debug.h"
 
-#if defined(FRESCO) && defined(PRODUCTION)
-#define CATCHTYPE5 1
-#else
-#define CATCHTYPE5 0
-#endif
-
-extern BOOL sig_guarded(void);
+#include "guarded.h"
 
 extern void __ASSERT(int v, const char *expr, const char *file, int line)
 {

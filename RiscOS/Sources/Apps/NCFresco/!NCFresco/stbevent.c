@@ -43,7 +43,11 @@ static void global_event_handler(int event)
 
     case fevent_GLOBAL_SHOW_HELP:
 	sound_event(snd_HELP_SHOW);
+#if 0 /*def ANT_NCFRESCO*/
+	frontend_complain(fe_internal_toggle_panel("help", event & fevent_CLEAR_POPUPS));
+#else
 	frontend_complain(fe_show_file_in_frame(main_view, config_help_file, TARGET_HELP));
+#endif
 	break;
 
     case fevent_GLOBAL_SHOW_VERSION:
@@ -423,6 +427,11 @@ static void clipboard_event_handler(int event, fe_view v)
         case fevent_COPY_TEXT:
             fe_copy_text_to_clipboard(v);
             break;
+#ifdef ANT_NCFRESCO
+        case fevent_COPY_WHATEVER:
+            fe_copy_whatever_to_clipboard(v);
+            break;
+#endif
         case fevent_PASTE:
             fe_paste(v);
             break;
@@ -611,7 +620,7 @@ static void toolbar_event_handler(int event, fe_view v)
 	int bar;
 
 	event &= ~fevent_CLEAR_POPUPS;
-	
+
 	if (event == fevent_TOOLBAR_CYCLE)
 	    bar = -1;
 	else
@@ -771,7 +780,7 @@ BOOL fevent_possible(int event, fe_view v)
     BOOL possible = TRUE;
 
     event &= ~fevent_CLEAR_POPUPS;
-    
+
     switch (event & fevent_CLASS_MASK)
     {
     case fevent_CLASS_GLOBAL:
@@ -802,11 +811,11 @@ BOOL fevent_possible(int event, fe_view v)
 		case fevent_HISTORY_SHOW_RECENT_FRAMES:
 		case fevent_HISTORY_SHOW_SWITCHABLE_FRAMES:
 		    break;
-		    
+
 		case fevent_HISTORY_BACK:
 		    possible = fe_history_possible(v, history_PREV);
 		    break;
-		
+
 		case fevent_HISTORY_BACK_ALL:
 		    possible = fe_history_possible(v, history_FIRST);
 		    break;
@@ -820,7 +829,7 @@ BOOL fevent_possible(int event, fe_view v)
 		    break;
 		}
 		break;
-	    
+
 	    case fevent_SUB_CLASS_HOTLIST:
 		switch (event)
 		{
@@ -892,6 +901,10 @@ BOOL fevent_possible(int event, fe_view v)
 		break;
 
 	    case fevent_SUB_CLASS_SCROLL:
+#ifdef ANT_NCFRESCO
+                /* pdh: these buttons look really odd when shaded */
+                possible = TRUE;
+#else
 		switch (event)
 		{
 		case fevent_SCROLL_LEFT:
@@ -923,6 +936,7 @@ BOOL fevent_possible(int event, fe_view v)
 		    break;
 		}
 		break;
+#endif
 
 	    case fevent_SUB_CLASS_HIGHLIGHT:
 		break;
@@ -932,7 +946,7 @@ BOOL fevent_possible(int event, fe_view v)
 	    case fevent_SUB_CLASS_OPEN:
 		/* these are all toggle options so it's always true */
 		break;
-		
+
 	    case fevent_SUB_CLASS_STATUS:
 		break;
 	    case fevent_SUB_CLASS_TOOLBAR:

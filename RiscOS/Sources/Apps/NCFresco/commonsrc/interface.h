@@ -468,6 +468,7 @@ extern BOOL backend_doc_saver_draw(char *fname, void *doc);
 extern BOOL backend_doc_saver_headers(char *fname, void *doc);
 
 extern BOOL backend_image_saver_sprite(char *fname, void *imh);
+extern BOOL backend_image_saver_jpeg(char *fname, void *imh);
 
 /* Search a document for some string */
 extern be_item backend_find(be_doc doc, be_item start, char *text, int flags);
@@ -495,8 +496,12 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 extern void backend_remove_highlight(be_doc doc);
 extern be_item backend_read_highlight(be_doc doc, BOOL *had_caret);
 extern void backend_set_caret(be_doc doc, be_item ti, int offset);
-extern void backend_set_highlight(be_doc doc, be_item item);
 extern int backend_is_selected(be_doc doc, be_item ti);
+
+/* keyhl.c */
+extern void backend_set_highlight(be_doc doc, be_item item, BOOL persistent);
+extern BOOL backend_highlight_is_persistent( be_doc doc );
+
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);

@@ -30,6 +30,7 @@
 #define NOT_USED(a)	a=a
 
 extern char *strdup(const char *s);
+#define mm_strdup strdup
 extern char *strndup(const char *s, size_t maxlen);
 extern int strncasecomp(const char *a, const char *b, size_t n);
 extern int strcasecomp(const char *s1, const char *s2);
@@ -143,6 +144,7 @@ extern void ensure_rightwards(int *ptr, const int num, const int from, const int
 extern BOOL coords_intersection(const wimp_box *box1, const wimp_box *box2, wimp_box *out_box);
 extern BOOL coords_union(const wimp_box *box1, const wimp_box *box2, wimp_box *out_box);
 
+extern int make_month( const char *str );   /* returns 1-12, or 0 for unknown */
 extern unsigned long HTParseTime (const char *str);
 extern int find_closest_colour(int colour, const int *palette, int n_entries);
 

@@ -49,7 +49,7 @@ static void check_radio_1(rid_form_element *fe, void *handle)
     ii->flags |= rid_if_SCANNED;
 }
 
-/* This function is called for every RADIO item. 
+/* This function is called for every RADIO item.
  * It then scans the rest of the items for any in the same group to ensure only one selected
  * It marks those looked at to avoid overdoing it too much.
  */
@@ -70,7 +70,7 @@ static void check_radio(rid_form_element *fe, void *handle)
 	{
 	    ii->flags |= rid_if_CHECKED;
 	    ii->data.tick = 1;
-	}	
+	}
     }
 }
 
@@ -218,21 +218,21 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 
     tabindex = &attributes->value[HTML_INPUT_TABINDEX];
     in->base.tabindex = tabindex->type == value_integer ? tabindex->u.i : -2; /* have to use -2 as default as -1 means unselectable */
-    
+
 #if 1
     in->ww = attributes->value[HTML_INPUT_WIDTH];
     in->hh = attributes->value[HTML_INPUT_HEIGHT];
 #else
     width = &attributes->value[HTML_INPUT_WIDTH];
     in->ww = width;
-    
+
     height = &attributes->value[HTML_INPUT_HEIGHT];
     in->hh = height->type == value_integer ? height->u.i : -1;
 #endif
-    
+
     border = &attributes->value[HTML_INPUT_BORDER];
     in->bw = border->type == value_integer ? border->u.i : 2; /* default border of 2 pixels on all input items */
-    
+
     maxlength = &attributes->value[HTML_INPUT_MAXLENGTH];
     if (maxlength->type == value_integer)
 	in->max_len = maxlength->u.i;
@@ -310,12 +310,12 @@ extern void startselect (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 }
 
 extern void finishselect (SGMLCTX * context, ELEMENT * element)
-{    
+{
     HTMLCTX *me = htmlctxof(context);
     rid_option_item *oi;
     rid_select_item *sel;
 
-    generic_finish (context, element);	
+    generic_finish (context, element);
 
     if (me->form == NULL || (sel = me->form->last_select) == NULL)
 	return;

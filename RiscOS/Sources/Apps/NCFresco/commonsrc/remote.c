@@ -15,8 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
-#include "tcplibs.h"
+#if 0
+#include "../!NCFresco/tcplibs.h"
+#endif
 
 #ifdef STBWEB
 # include "alarm.h"
@@ -42,14 +45,17 @@ static int sock = -1;
  * gardens of bodges.
  */
 
+#if 0
 void RemoteControl__Poll( wimp_eventstr*, void* );
 
 #ifdef STBWEB
 static void RemoteControl__Poll1( int called_at, void *handle);
 #endif
+#endif
 
 BOOL RemoteControl_Open( void )
 {
+#if 0
     int i, rc;
     time_t t = time(NULL);
     struct sockaddr_in sa;
@@ -136,6 +142,8 @@ BOOL RemoteControl_Open( void )
     win_claim_idle_events( BOGUS_WINDOW_HANDLE );
     event_setmask( 0 );
 #endif
+
+#endif
     return TRUE;
 }
 
@@ -144,6 +152,7 @@ BOOL RemoteControl_Active( void )
     return sock != -1;
 }
 
+#if 0
 void RemoteControl_Send( const char *string )
 {
     if ( sock != -1 )
@@ -180,14 +189,17 @@ static void RemoteControl__Poll1( int called_at, void *handle)
     called_at = called_at;
 }
 #endif
+#endif
 
 void RemoteControl_Close( void )
 {
+#if 0
     if ( sock != -1 )
     {
         socketclose( sock );
         sock = -1;
     }
+#endif
 }
 
 #endif

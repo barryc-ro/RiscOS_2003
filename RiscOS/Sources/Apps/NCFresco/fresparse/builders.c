@@ -511,7 +511,7 @@ extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *tar
 
     if (enctype->type == value_string)
 	new->enc_type = stringdup(enctype->u.s);
-    
+
     rid_form_item_connect(me->rh, new);
     me->form = new;
 }
@@ -944,7 +944,7 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 	ta->wrap = rid_ta_wrap_HARD;
     else
 	ta->wrap = rid_ta_wrap_SOFT;
-    
+
     if (ta->rows == 0)
 	ta->rows = 1;
 
@@ -1360,7 +1360,7 @@ extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
     PRSDBG(("pseudo_html(%s)\n", fmt));
 
     buffer = mm_malloc(MAXSTRING + 32);	/* SJM: changed to malloc from auto */
-    
+
     va_start(arglist, fmt);
     vsprintf(buffer, fmt, arglist);
 
@@ -1379,7 +1379,7 @@ extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
     va_end(arglist);
 
     mm_free(buffer);
-    
+
     PRSDBG(("pseudo_html(): recursion finished\n"));
 }
 

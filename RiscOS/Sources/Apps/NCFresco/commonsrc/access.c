@@ -410,7 +410,7 @@ static void access_redial_alarm(int at, void *h)
 	    d->progress(d->h, status_REDIALLING, -1, -1, 0, -1, NULL);
 	access_reschedule(&access_redial_alarm, d, POLL_INTERVAL);
 	break;
-	
+
     case fe_interface_UP:
 	if (d->progress)
 	    d->progress(d->h, status_DNS, -1, -1, 0, -1, NULL);
@@ -418,7 +418,7 @@ static void access_redial_alarm(int at, void *h)
 	access_reschedule(d->redial.continue_fn, d, POLL_INTERVAL);
         d->redial.continue_fn = 0;
 	break;
-	
+
     case fe_interface_ERROR:
 	ACCDBG(("Redial failed\n"));
 #if 1
@@ -479,7 +479,7 @@ If failure and try suffix and try prefix are both clear
       fail
 
 Else if try suffix is set
-  If more suffices in list then 
+  If more suffices in list then
     Replace suffix with next suffix in list
   Else
     fail
@@ -509,10 +509,10 @@ static char *suffix_replace(char *name, const char *orig, const char *new)
     out = strdup(name);
     mm_free(name);
     out = strcatx(out, new);
-    
+
     return out;
 }
-	
+
 static BOOL access_try_fancy_resolve(access_handle d, const char *prefix)
 {
     ACCDBG(("access_try_fancy_resolve: d %p prefix %d/'%s' suffix %d/%d)\n", d, d->try_prefix, prefix, d->try_suffix, d->suffix_num));
@@ -553,7 +553,7 @@ static BOOL access_try_fancy_resolve(access_handle d, const char *prefix)
 	ACCDBG(("access_try_fancy_resolve: already added prefix\n"));
 	return FALSE;
     }
-	
+
     if (d->try_suffix)
     {
 	if (d->suffix_num < config_url_suffix[0])
@@ -589,7 +589,7 @@ static int access_can_handle_file_type(int ft, int size)
 	ACCDBG(("access_can_handle_file_type: standard type\n"));
 	return 0;
     }
-    
+
     if (frontend_plugin_handle_file_type(ft))
     {
 #ifdef STBWEB
@@ -603,13 +603,13 @@ static int access_can_handle_file_type(int ft, int size)
 	ACCDBG(("access_can_handle_file_type: OK plugin file type\n"));
 	return 0;
     }
-    
+
     if (frontend_can_handle_file_type(ft))
     {
 	ACCDBG(("access_can_handle_file_type: OK frontend file type\n"));
 	return 0;
     }
-    
+
     ACCDBG(("access_can_handle_file_type: bad file type\n"));
     return status_BAD_FILE_TYPE;
 }
@@ -638,7 +638,7 @@ static char *access_host_name_only(char *url)
 
 static void access_free_item(access_handle d)
 {
-    ACCDBG(("access; free item d=%p dest_host '%s' url '%s'\n", d, strsafe(d->dest_host), d->url));
+    ACCDBG(("acc%p: free_item dest_host '%s' url '%s'\n", d, strsafe(d->dest_host), d->url));
 
     FREE(d->dest_host);
     FREE(d->request_string);
@@ -807,9 +807,15 @@ static int access_progress_flush(void *handle, const char *cfile, const char *ur
 
 /* ------------------------------------------------------------ */
 
+static access_progress_fn lastfn;
+
 static void access_redirect_progress(void *h, int status, int size, int so_far, int fh, int ftype, char *url)
 {
     access_handle d = (access_handle) h;
+
+    lastfn = d->progress;	/* defeat armcc 4.71 bug */
+
+    ACCDBG(("acc%p: access_redirect_progress(status=%d) realacc=%p\n", d, status, d->h ));
 
     if (d->progress)
 	d->progress(d->h, status, size, so_far, fh, ftype, url);
@@ -821,8 +827,10 @@ static access_complete_flags access_redirect_complete(void *h, int status, char 
 
     access_handle d = (access_handle) h;
 
+    ACCDBG(("acc%p: access_redirect_complete(status=%d) realacc=%p\n", d, status, d->h ));
+
     ACCDBG(("access_redirect_complete: ah%p\n", d));
-    
+
     cache_it = d->complete(d->h, status, cfile, url); /* Pass up the real URL, not the one they requested */
     d->redirect = NULL;
 
@@ -835,6 +843,7 @@ static access_complete_flags access_redirect_complete(void *h, int status, char 
         auth_write_realms(config_auth_file, config_auth_file_crypt ? auth_passwd_UUCODE : auth_passwd_PLAIN);
 
     access_unlink(d);
+    ACCDBG(("acc%p: redirect_complete calls free_item\n",d));
     access_free_item(d);
 
     return cache_it;
@@ -1116,7 +1125,7 @@ static void access_reschedule(alarm_handler fn, access_handle d, int dt)
 {
     if (d->flags & access_PENDING_FREE)
     {
-	ACCDBG(("access_reschedule: ah%p pending free\n", d));
+	ACCDBG(("acc%p: reschedule calls free_item\n", d ));
 	access_free_item(d);
     }
     else
@@ -1163,6 +1172,7 @@ static void access_http_dns_alarm(int at, void *h)
 
 	access_done_flag = 1;
 
+	ACCDBG(("acc%p: dns_alarm calls free (DNS failed)\n",d));
 	access_unlink(d);
 	access_free_item(d);
 
@@ -1362,7 +1372,7 @@ static void access_http_ssl_callback(void *handle, BOOL verified)
     access_handle d = handle;
 
     d->data.http.ssl.fe = 0;
-    
+
     if (verified)
     {
 	/* If the user said OK then just continue from where we were */
@@ -1388,7 +1398,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     MemCheck_checking checking;
 
     /* Time to stop */
-    ACCDBGN(( "Transfer complete for %s status %d rc %d \n", d->url, si->out.status, si->out.rc));
+    ACCDBG(( "acc%p: Transfer complete for %s status %d rc %d \n", d, d->url, si->out.status, si->out.rc));
 
     MemCheck_RegisterMiscBlock(si->out.fname, 256);
     cfile = strdup(si->out.fname);
@@ -1411,7 +1421,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* lock the file before closing it */
     file_lock(cfile, TRUE);
 #endif
-    
+
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
 
@@ -1447,7 +1457,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
 	file_lock(cfile, FALSE);
     }
 #endif
-    
+
     if (si->out.status == status_COMPLETED_FILE && si->out.rc == 200 )
     {
 	if ( cache_it & access_KEEP )
@@ -1559,8 +1569,12 @@ static void access_http_fetch_alarm(int at, void *h)
 	d->ftype = httpft.out.ftype;
 	d->ft_is_set = 1;
 
+    	si.in.handle = d->transport_handle;
+	os_swix(HTTP_Status, (os_regset*) &si);		/* fh may have changed */
+
 	/* this fixes a problem where a file is typed as octet-stream or
-	 * something unknown rather than its real type but it has an extension */
+	 * something unknown rather than its real type but it has an extension
+	 */
 	if (d->ftype == 0xffd)
 	{
 	    char *slash = strrchr(d->url, '/');
@@ -1616,10 +1630,10 @@ static void access_http_fetch_alarm(int at, void *h)
 	{
 	    d->data.http.ssl.fe = frontend_ssl_raise(access_http_ssl_callback, &d->data.http.ssl.info, d);
 	    return;
-	}	
+	}
     }
 #endif
-    
+
     if ( (si.out.status >= status_COMPLETED_FILE)
          && (si.out.status != status_COMPLETED_PART) )
     {
@@ -1681,7 +1695,12 @@ static void access_http_fetch_alarm(int at, void *h)
 		 * an unknown scheme
 		 */
 		if (ep && ep->errnum == ANTWEB_ERROR_BASE + ERR_USED_HELPER)
-		    frontend_url_punt(NULL, new_url, d->data.http.post.body_file ? (fe_post_info *)&d->data.http.post : NULL);
+		{
+		    fe_post_info post;
+		    post.body_file = d->data.http.post.body_file;
+		    post.content_type = d->data.http.post.content_type;
+		    frontend_url_punt(NULL, new_url, &post);
+		}
 
 		mm_free(new_url);
 		done = FALSE;
@@ -2046,7 +2065,7 @@ static void access_ftp_dns_alarm(int at, void *h)
 	ep = ensure_line();
 	if (ep == NULL)
 	    ep = access_ftp_fetch_start(d);
-	
+
 	if (ep == NULL)
 	{
 	    if (d->progress)
@@ -2194,7 +2213,7 @@ static void access_ftp_fetch_alarm(int at, void *h)
 	    file_lock(cfile, FALSE);
 	}
 #endif
-    
+
 	if (status == status_COMPLETED_FILE || status == status_COMPLETED_DIR )
 	{
 	    if ( cache_it & access_KEEP )
@@ -2779,7 +2798,8 @@ static os_error *access_new_ftp(char *url, access_url_flags flags, char *ofile, 
 
 	aurl = url_unparse("ftp", netloc, path, 0, 0, 0);
 
-	ep = access_new_http(url, flags | access_PROXY, ofile, NULL, referer,
+	ep = access_new_http(url, flags | access_PROXY, ofile, NULL,
+	                     referer,
 			     progress, complete, h,
 			     result, config_proxy_ftp, aurl);
 	mm_free(aurl);
@@ -2963,6 +2983,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
     access_handle d;
     os_error *ep;
     int rtype;
+    fe_post_info post, *postp;
 
     file = strdup(ofile ? ofile : cache->scrapfile_name());
 
@@ -2972,7 +2993,16 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
     d = NULL;
     ep = NULL;
 
-    rtype = frontend_internal_url(path, query, (fe_post_info *)bfile, referer, file, &new_url, &flags);
+    if (bfile)
+    {
+	post.body_file = bfile->body_file;
+	post.content_type = bfile->content_type;
+	postp = &post;
+    }
+    else
+	postp = NULL;
+
+    rtype = frontend_internal_url(path, query, postp, referer, file, &new_url, &flags);
     switch (rtype)
     {
     case fe_internal_url_ERROR:
@@ -3053,7 +3083,18 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 	/* if this call returned a want ot use helper error then do the punt and convert to a no action */
 	if (ep->errnum == ANTWEB_ERROR_BASE + ERR_USED_HELPER)
 	{
-	    frontend_url_punt(NULL, d->url, (fe_post_info *)bfile);
+	    fe_post_info post, *postp;
+	    if (bfile)
+	    {
+		post.body_file = bfile->body_file;
+		post.content_type = bfile->content_type;
+		postp = &post;
+	    }
+	    else
+		postp = NULL;
+
+	    frontend_url_punt(NULL, d->url, postp);
+
 	    ep = makeerror(ERR_NO_ACTION);
 	}
 
@@ -3092,6 +3133,7 @@ static void write_buf(char *buffer, const char *path, const char *params, const 
 }
 #endif
 
+extern char timeoutbuf[20];
 os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post_info *bfile, char *referer,
 		     access_progress_fn progress, access_complete_fn complete,
 		     void *h, access_handle *result)
@@ -3109,6 +3151,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post
     usrtrc( "access_url: %s from %s flags 0x%x\n", url, referer ? referer : "<none>", flags);
 
     *result = 0;
+
+#if TIMEOUT
+    url = *timeoutbuf ? timeoutbuf : url;
+#endif
 
 #ifndef FILEONLY
     /* NO cacheing in fileonly version */
@@ -3186,7 +3232,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post
 	/* forcibly block all file: URLs from being referers */
 	if (referer && strncasecomp(referer, "file:", sizeof("file:")-1) == 0)
 	    referer = NULL;
-	
+
 	if (netloc && netloc[0] && !auth_check_allow_deny(netloc))
 	{
 	    ep = makeerror(ERR_ACCESS_DENIED);
@@ -3436,12 +3482,14 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post
 		config_proxy_http &&
 		!access_match_host(netloc, config_proxy_http_ignore))
 	    {
-		ep = access_new_http(url, flags | access_PROXY, ofile, bfile, referer, progress, complete, h, result, config_proxy_http, url);
+		ep = access_new_http(url, flags | access_PROXY, ofile, bfile,
+		                     referer, progress, complete, h, result, config_proxy_http, url);
 	    }
 	    else
 	    {
 		char *buffer = url_unparse(NULL, NULL, path ? path : "/", params, query, NULL);
-		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
+		ep = access_new_http(url, flags, ofile, bfile, 
+		                     referer, progress, complete, h, result, netloc, buffer);
 		mm_free(buffer);
 	    }
 #endif /* ndef FILEONLY */
@@ -3932,7 +3980,7 @@ os_error *access_abort(access_handle d)
 
     threaded = !alarm_anypending(d);
 
-    ACCDBG(("Access_abort called\n"));
+    ACCDBG(("acc%p: abort called, caller(1)=%s\n", d, caller(1)));
 
     if (d->redirect)
     {

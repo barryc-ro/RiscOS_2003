@@ -596,6 +596,8 @@ extern void rid_free_form(rid_form_item *p)
 
 	mm_free(p->id);
 
+	mm_free(p->enc_type);
+
 	mm_free(p);
 
 	p = next;
@@ -854,7 +856,7 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
 
     if (st->text_list == NULL)
 	rid_scaff_item_push(st, rid_flag_NO_BREAK);
-    
+
 #if 1
     st->text_last->next = t;
     st->text_last = t;
@@ -1130,7 +1132,7 @@ static rid_text_item *scanfwd_recurse_if_table(rid_text_item *item)
 static rid_text_item *scanfwd_recurse_first_in_caption(rid_table_item *table)
 {
     SCNDBG(("scanfwd_recurse_first_in_caption: %p\n", table));
-    
+
   	if (table == NULL)
 		return NULL;
 
@@ -1187,7 +1189,7 @@ static rid_text_item *scanfwd_recurse_after_table(rid_table_item *table)
         rid_text_item_table *rtit;
 
     SCNDBG(("scanfwd_recurse_after_table: %p\n", table));
-    
+
         if (table == NULL)
         	return NULL;
 
@@ -1223,7 +1225,7 @@ static rid_text_item *scanback_recurse_parent_prev(rid_text_item *item)
         rid_text_stream *stream;
 
     SCNDBG(("scanfwd_recurse_parent_prev: %p\n", item));
-    
+
 	if (item == NULL)
 		return NULL;
 
@@ -1253,7 +1255,7 @@ static rid_text_item *scanback_recurse_parent_prev(rid_text_item *item)
 static rid_text_item *scanback_recurse_tables_caption(rid_table_item *table)
 {
     SCNDBG(("scanfwd_recurse_tables_caption: %p\n", table));
-    
+
   	if (table == NULL)
   		return NULL;
 
@@ -1273,7 +1275,7 @@ static rid_text_item *scanback_recurse_cell_before(rid_table_item *table, int x,
         rid_table_cell *cell;
 
     SCNDBG(("scanfwd_recurse_cell_before: %p %d,%d\n", table, x, y));
-    
+
 	if (table == NULL)
 		return NULL;
 
@@ -1294,7 +1296,7 @@ static rid_text_item *scanback_recurse_cell_before(rid_table_item *table, int x,
 static rid_text_item *scanback_recurse_if_table(rid_text_item *item)
 {
     SCNDBG(("scanfwd_recurse_if_table: %p\n", item));
-    
+
 	if (item == NULL)
   		return NULL;
 
@@ -1381,7 +1383,7 @@ static rid_text_item *scanback(rid_text_item *item)
 static rid_text_item *scanfwd_recurse(rid_text_item *item)
 {
     SCNDBG(("scanfwd_recurse: %p\n", item));
-    
+
         if (item == NULL)
                 return NULL;
 

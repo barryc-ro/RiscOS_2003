@@ -236,7 +236,7 @@ static int oinput_image_renderable(rid_input_item *ii, void *im, antweb_doc *doc
     if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh.type == value_none && ii->ww.type == value_none)))
 	return TRUE;
 #endif
-    
+
     return FALSE;
 }
 
@@ -467,8 +467,10 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
     if (update == object_redraw_HIGHLIGHT)
     {
+#ifndef ANT_NCFRESCO
 	if (oinput_update_highlight(ti, doc, 0, NULL))
 	    highlight_render_outline(ti, doc, hpos, bline);
+#endif
 	return;
     }
 
@@ -555,7 +557,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 				     ii->flags & rid_if_NUMBERS);
 	}
 
-#ifdef STBWEB
+#if defined(STBWEB) && !defined(ANT_NCFRESCO)
 	if (ii->flags & rid_if_NUMBERS)
 	{
 	    int i, char_width = webfont_tty_width(1, TRUE);
@@ -704,7 +706,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    else
 		bg = (ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB);
 
-#ifdef STBWEB
+#if defined(STBWEB) && !defined(ANT_NCFRESCO)
 	    render_plinth_from_list(bg,
 				    selected && config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] ?
 					config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] :
@@ -1348,7 +1350,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		form. I don't understand what that has to do with
 		anything so removed it */
 
-		if (ii->base.parent) 
+		if (ii->base.parent)
 		{
 		    rid_input_item *first, *last;
 		    rid_form_element *ife;
@@ -1395,7 +1397,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    }
 
 		    LNKDBG(("oinput_key: ife %p action %d ii %p last %p\n", ife, action, ii, last));
-		    
+
 		    /* if we got to the end and either we were on the last text item or we didn't care then submit */
 		    if (ife == NULL && (action != key_action_NEWLINE_SUBMIT_LAST || ii == last))
 		    {

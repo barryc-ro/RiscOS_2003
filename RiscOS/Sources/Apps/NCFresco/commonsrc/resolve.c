@@ -13,7 +13,16 @@
 #include "util.h"
 #include "memwatch.h"
 
+#ifdef STBWEB_BUILD
 #include "tcplibs.h"
+#else
+#include "socket.h"
+#include "../include/inetlib.h"
+#include "../include/netdb.h"
+/*#include "in.h"*/
+#include "ioctl.h"
+#include "sock_errno.h"
+#endif
 #include "resolve.h"
 
 #if 0

@@ -76,7 +76,7 @@ struct antweb_selection_boundary
     char reserved[3];
     short x, y;
 };
- 
+
 struct antweb_selection_t				/* the currently selected item. Could be an anchor or a text item or a map */
 {
     int tag;
@@ -182,6 +182,8 @@ typedef struct _antweb_doc
     int encoding;		/* charset encoding - defined in interface.h */
 
     unsigned int fontusage[8];  /* 8x32=256-bit array of font usage */
+
+    BOOL bHighlightPersistent;  /* highlight is actually a selection */
 } antweb_doc;
 
 #define SETFONTUSED(doc,n) doc->fontusage[n>>5] |= (1 << (n&31))

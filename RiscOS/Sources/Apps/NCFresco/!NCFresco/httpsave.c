@@ -4,7 +4,7 @@
  * over http.
 
  * In quiet periods, or periodically, user config files.
- 
+
  */
 
 #include <stdio.h>
@@ -89,8 +89,8 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
     FILE *f;
     char *cfile_buf, *s;
     int cfile_size;
-    
-    h->temp_file = strdup(rs_tmpnam(NULL));
+
+    h->temp_file = mm_strdup(rs_tmpnam(NULL));
 
     /* read file in */
     f = mmfopen(cfile, "r");
@@ -105,7 +105,7 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
     fread(cfile_buf, cfile_size, 1, f);
 
     mmfclose(f);
-    
+
     /* process it into sections */
     s = strtok(cfile_buf, "=");
     if (s) do
@@ -134,8 +134,8 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
 		if (!h->callback_fetched(h, tag, h->temp_file, h->callback_handle))
 		    remove(h->temp_file);
 	    }
-	}	
-	
+	}
+
     }
     while ((s = strtok(NULL, "=")) != NULL);
 
@@ -157,14 +157,14 @@ static access_complete_flags hs_complete(void *hh, int status, char *cfile, char
     HTSDBG(("hs_complete(): handle %p status %d cfile '%s' url '%s'\n", hh, status, cfile, url));
 
     h->access_h = NULL;
-    
+
     if (h->fetch)
     {
 	if (h->callback_fetched)
 	{
 	    if (status == status_COMPLETED_FILE)
 		hs_fetch_complete(h, cfile);
-	    else 
+	    else
 		h->callback_fetched(h, -1, NULL, h->callback_handle);
 	}
     }
@@ -176,7 +176,7 @@ static access_complete_flags hs_complete(void *hh, int status, char *cfile, char
 		h->callback_sent(h, h->file_mask, h->callback_handle);
 	    else
 		h->callback_sent(h, 0, h->callback_handle);
-	}			     
+	}
     }
 
     hs_dispose(&h);
@@ -195,22 +195,22 @@ httpsave_t httpsave_open(httpsave_sent_fn fn, void *handle)
     httpsave_t h;
 
     HTSDBG(("httpsave_open(): fn %d handle %p\n", (int)fn, handle));
-    
+
     h = mm_calloc(sizeof(*h), 1);
 
     h->callback_sent = fn;
     h->callback_handle = handle;
 
-    h->temp_file = strdup(rs_tmpnam(NULL));
+    h->temp_file = mm_strdup(rs_tmpnam(NULL));
     h->temp_f = mmfopen(h->temp_file, "w");
 
     h->fetch = FALSE;
-    
+
     if (!h->temp_f)
     {
 	hs_dispose(&h);
     }
-    
+
     HTSDBG(("httpsave_open(): returns %p\n", h));
 
     return h;
@@ -236,14 +236,14 @@ BOOL httpsave_add_file(httpsave_t h, int tag, const char *file_name)
 
     if (h->file_mask && (1<<tag))
 	return FALSE;
-    
+
     if (h->fetch)
 	return FALSE;
 
     /* write out the tag name, preceeded by & if not the first */
     if (h->file_mask != 0)
 	fputc('&', h->temp_f);
-    
+
     if (fputs(tag_names[tag], h->temp_f) == EOF)
 	return FALSE;
 
@@ -251,12 +251,12 @@ BOOL httpsave_add_file(httpsave_t h, int tag, const char *file_name)
 
     if ((f = mmfopen(file_name, "r")) == NULL)
 	return FALSE;
-    
+
     /* write out the data, escaped */
     success = url_escape_file_to_file(f, h->temp_f);
 
     mmfclose(f);
-    
+
     if (success)
 	h->file_mask |= (1<<tag);
 
@@ -285,7 +285,7 @@ os_error *httpsave_close_and_send(httpsave_t h)
 
     if (e || !h->access_h)
 	hs_dispose(&h);
-    
+
     return e;
 }
 
@@ -310,10 +310,10 @@ httpsave_t httpsave_fetch(int file_mask, httpsave_fetched_fn fn, void *handle)
 
     if (file_mask == 0)
 	return NULL;
-    
+
     /* fill in structure */
     h = mm_calloc(sizeof(*h), 1);
-    
+
     h->file_mask = file_mask;
 
     h->callback_fetched = fn;
@@ -343,7 +343,7 @@ httpsave_t httpsave_fetch(int file_mask, httpsave_fetched_fn fn, void *handle)
 
     if (e || !h->access_h)
 	hs_dispose(&h);
-    
+
     HTSDBG(("httpsave_fetch(): returns %p e %s\n", h, e ? e->errmess : ""));
 
     return h;
@@ -373,7 +373,7 @@ void httpsave_set_url(const char *handler_url)
     HTSDBG(("httpsave_set_url(): url '%s'\n", handler_url));
 
     mm_free(httpsave_handler_url);
-    httpsave_handler_url = strdup(handler_url);
+    httpsave_handler_url = mm_strdup(handler_url);
 }
 
 /* ----------------------------------------------------------------------------- */

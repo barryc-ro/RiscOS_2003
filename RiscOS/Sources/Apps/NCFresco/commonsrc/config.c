@@ -136,7 +136,7 @@ config_item citems[] = {
       "display.control.initial",
       (void *)offsetof(struct config_str, display_control_initial),
       "Initial tool bar",
-      (void *) 8  },
+      (void *) 0  },
 #endif
 { config_BOOL,
       "display.fancy_ptr",
@@ -705,7 +705,7 @@ config_item citems[] = {
       "Colour for menu background highlighted",
       (void *) 0  },
 #endif
-    
+
 { config_COLOUR_LIST,
       "colour.border.bevel",
       (void *)offsetof(struct config_str, colour_list[render_colour_list_BEVEL]),
@@ -768,7 +768,7 @@ config_item citems[] = {
       "Colours for window border",
       (void *) NULL  },
 #endif
-    
+
 { config_COMMENT, NULL, NULL, "", NULL },
 
 { config_BOOL,
@@ -1134,12 +1134,13 @@ config_item citems[] = {
       "Key info",
       (void *)0 },
 #endif
+
 { config_STRING_LIST,
       "url.suffix",
       (void *)offsetof(struct config_str, url_suffix),
       "List of possible URL suffixes",
       (void*)0 },
-    
+
 { config_LAST, NULL, NULL, NULL, 0 }
 };
 
@@ -1176,7 +1177,6 @@ extern void config_init(void)
      * array without adding corresponding ones in the array in
      * !Fresco/configgui.c ...
      */
-
     {
         extern const int configgui_array_size;    /* in configgui.c */
 
@@ -1388,12 +1388,12 @@ static int *config_read_list(char *p, int list_type)
 	case config_COLOUR_LIST:
 	    list[++count] = config_read_colour(p, NULL, NULL);
 	    break;
-	    
+
 	case config_STRING_LIST:
 	    list[++count] = (int)config_read_string(p);
 	    break;
 	}
-	
+
 	CNFDBG(("config_read_list:val %08x\n", list[count]));
     }
     while ((p = strtok(NULL, " ,\t")) != NULL);
@@ -1664,7 +1664,7 @@ extern void config_write_file_by_name(const char *file_name)
     for(i=0; citems[i].type != config_LAST; i++)
     {
 	config_item *cp = &citems[i];
-	
+
 	if (cp->comment)
 	    fprintf(fh, "# %s\n", cp->comment);
 
@@ -1695,7 +1695,7 @@ extern void config_write_file_by_name(const char *file_name)
 	case config_COLOUR_LIST:
 	{
 	    int count, *xp;
-	    
+
 	    fprintf(fh, "%s:", cp->name);
 
 	    xp = *((int**) cp->ptr);
@@ -1717,9 +1717,9 @@ extern void config_write_file_by_name(const char *file_name)
 	case config_STRING_LIST:
 	{
 	    int count, *xp;
-	    
+
 	    fprintf(fh, "%s:", cp->name);
-		
+
 	    xp = *((int**) cp->ptr);
 	    if (xp)
 	    {

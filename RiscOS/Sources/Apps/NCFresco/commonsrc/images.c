@@ -959,7 +959,7 @@ static char *image_thread_end(image i)
 
     if (!i->tt)
 	return NULL;
-    
+
     /* thread doesn't seem to die in two calls when called from image_flush or the like */
     _kernel_osbyte(0xE5, 0, 0);
     _kernel_escape_seen();
@@ -1656,7 +1656,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
     /* Use the first ref we see */
     if (ref && i->ref == NULL)
 	i->ref = image_strdup(ref);
-    
+
     *result = i;
 
     if (cb)
@@ -1715,7 +1715,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 		i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
 
 		in_image_find++;
-    
+
 		ep = access_url( url,
 				 (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
 				 (flags & image_find_flag_URGENT ? access_MAX_PRIORITY : 0),
@@ -2191,7 +2191,7 @@ os_error *image_flush(image i, int flags)
 
 	    access_abort(i->ah);
 	    fetching_dec(i);
-		
+
 	    i->ah = NULL;
 	}
 	else
@@ -2671,7 +2671,7 @@ static os_error *image_default_image(image i, int scale_image, sprite_area **are
 
 	    ep = wimp_readpixtrans(area, &id, facs, pt);
 	}
-	
+
 	if (!ep)
 	{
 	    fixup_scale(facs, scale_image);
@@ -3446,7 +3446,7 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 	frontend_fatal_error(_swix(OS_File, _INR(0,5), 10, "<NCFresco$Dir>.^.jpeg", 0xC85, 0, i->data_area, (char *)i->data_area + i->data_size));
     }
 #endif
-    
+
     _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, flex_size(&i->data_area), flags);
 }
 
@@ -3596,7 +3596,7 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
     }
 
     /* get the sprite direct pointer */
-    if ((!translate || i->plotter == plotter_SPRITE) && 
+    if ((!translate || i->plotter == plotter_SPRITE) &&
 	(i->flags & (image_flag_ERROR|image_flag_DEFERRED)) == 0 &&
 	image_get_sprite_ptr(area, &id, &id))
     {
@@ -3724,7 +3724,7 @@ static int image_ave_col_n(image im, int n)
     count = image_alloc(sizeof(int)*256*2); /* moved buffers out of wimpslot */
     if (!count)
 	return 0;
-    
+
     flexmem_noshift();
 
     palette = count + 256;
@@ -4034,11 +4034,43 @@ static void image_sprite_save_as_draw(image i, int fh, wimp_box *bb, int *fileof
     *fileoff += sph->next;
 }
 
-static void image_jpeg_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
+#define file_save(f,s,e,t) _swix(OS_File,_INR(0,2)|_INR(4,5),10,f,t,s,e)
+
+os_error *image_save_as_jpeg( image i, const char *fname )
+{
+    TASSERT(i);
+    TASSERT(i->magic == IMAGE_MAGIC);
+
+    if ( i->plotter != plotter_OSJPEG )
+        return makeerror(ERR_NOT_IMPLEMENTED);
+
+    if ( (i->flags & (image_flag_FETCHED|image_flag_RENDERABLE))
+          != (image_flag_FETCHED|image_flag_RENDERABLE) )
+        return makeerror(ERR_PAGE_NOT_WHOLE);
+
+    IMGDBG(( "im%p: save_as_jpeg: 0x%08x +%x %s\n", i,
+             (int)i->data_area, i->data_size, fname ));
+
+    return file_save( fname, i->data_area, ((char*)i->data_area)+i->data_size,
+                      FILETYPE_JPEG );
+}
+
+int image_preferred_save_filetype( image i )
+{
+    TASSERT(i);
+    TASSERT(i->magic == IMAGE_MAGIC);
+
+    if ( i->plotter == plotter_OSJPEG )
+        return FILETYPE_JPEG;
+
+    return FILETYPE_SPRITE;
+}
+
+void image_jpeg_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
 {
 }
 
-static void image_drawfile_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
+void image_drawfile_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
 {
 }
 
@@ -4286,7 +4318,7 @@ static int image_animation_render_background(image i, image_rectangle_fn plot_bg
     {
 	save_area = image_alloc(save_size);
 	if (!save_area) e = makeerror(ERR_NO_MEMORY);
-    }							  
+    }
 
     flexmem_noshift();
 

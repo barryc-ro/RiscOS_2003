@@ -25,6 +25,7 @@
 #include "stbutils.h"
 #include "stbfe.h"
 #include "stbtb.h"
+#include "unwind.h"
 #include "frameutils.h"
 
 /* ------------------------------------------------------------------------------------------- */
@@ -44,7 +45,7 @@ char *fe_frame_specifier_create(fe_view v, char *buf, int len)
 
 fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
 {
-    char *ss = strdup(spec), *s;
+    char *ss = mm_strdup(spec), *s;
     fe_view v;
 
     s = strtok(ss, "_");
@@ -183,6 +184,7 @@ static BOOL check_recursion(fe_view v, const char *new_url)
 }
 
 
+
 /* ------------------------------------------------------------------------------------------- */
 
 /*
@@ -215,7 +217,15 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
     int oflags;
     BOOL is_internal;
 
-    DBG(("frontend_open_url '%s' in window '%s' parent v%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
+    /* pdh 13-02-98: bodge for NCWorks-esque help pages */
+    if ( !strcasecomp( url, "ncfrescointernal:cancel" ) )
+    {
+	STBDBG(("frontend_open_url: url is cancel, forcing _top\n"));
+    	target = TARGET_TOP;
+    }
+
+    DBG(("frontend_open_url '%s' in window '%s' parent vw%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
+
 
     if (target && parent)
     {
@@ -342,14 +352,14 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 
 	    /* need to ensure highlight is visible after jumping to fragment */
 	    fe_ensure_highlight_after_fetch(parent);
-	    
+
 	    return NULL;
         }
     }
 
     /* close the keyboard when opening any URL */
     fe_keyboard_close();
-    
+
     session_log(url, session_REQUESTED);
 
     /* open the fetch status */
@@ -358,7 +368,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 
     is_internal = strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
 	strncmp(url, "ncint:", sizeof("ncint:")-1) == 0;
-    
+
     /* move the highlight */
     if ((flags & fe_open_url_FROM_FRAME) == 0 &&
 	!parent->open_transient &&
@@ -406,7 +416,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
     /* Abort the current fetch before getting the new page */
     if ((flags & fe_open_url_FROM_FRAME) == 0)
 	fe_abort_fetch(parent, TRUE);
-    
+
     STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
     ep = backend_open_url(parent, &parent->fetching, url, bfile, flags & fe_open_url_NO_REFERER ? NULL : referer, oflags);
     STBDBG(("frontend_open_url: backend OUT fetching %p error %x\n", parent->fetching, ep ? ep->errnum : 0));
@@ -436,9 +446,20 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
 	fe_no_new_page(parent, NULL);
 /*   	fe_check_download_finished(parent); */
 	fe_dispose_view(parent);
+	parent = NULL;
 
 /* 	fe_ensure_highlight(main_view, 0); */
     }
+
+ /* pdh: don't do this, do <a href=ncfrescointernal:cancel target=__top> instead */
+ /* if ( parent && parent->parent )
+    {
+	if ( --parent->parent->threaded == 0 && parent->parent->delete_pending > 0 )
+	{
+	    fe_no_new_page(parent->parent, NULL);
+	    fe_dispose_view(parent->parent);
+	}
+    }*/
 
     return ep;
 }
@@ -527,7 +548,7 @@ static os_error *fe__reload(fe_view v, void *handle)
         {
 	    wimp_wstate state;
 
-            url = strdup(url);
+            url = mm_strdup(url);
 
 	    /* set scroll offsets so we reload to the same position
 	    wimp_get_wind_state(v->w, &state);
@@ -573,7 +594,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     view->magic = ANTWEB_VIEW_MAGIC;
 
     view->pending_user = -1;
-    
+
     if (config_defer_images)
 	view->flags |= be_openurl_flag_DEFER_IMAGES;
     if (config_display_antialias)
@@ -630,7 +651,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     if (ip->scrolling == fe_scrolling_YES)
         view->x_scroll_bar = view->y_scroll_bar = TRUE;
 
-    view->name = strdup(ip->name);
+    view->name = mm_strdup(ip->name);
     view->parent = parent;
 
     if (ip->dividers)
@@ -683,6 +704,8 @@ void fe_dispose_view(fe_view v)
     if (!v)
         return;
 
+    STBDBG(("vw%p: fe_dispose_view threaded=%d pending=%d\n", v, v->threaded, v->delete_pending ));
+
     if (v->threaded)
     {
 	v->delete_pending++;
@@ -695,7 +718,10 @@ void fe_dispose_view(fe_view v)
 	return;
     }
 
-    STBDBG(("fe_dispose_view: disposing\n"));
+#if DEBUG
+    STBDBG(("vw%p: fe_dispose_view: disposing, caller1=%s caller2=%s\n", v,
+            caller(1), caller(2) ));
+#endif
 
     v->delete_pending = -1;
 
@@ -754,7 +780,7 @@ void fe_dispose_view(fe_view v)
     }
 
     fe_frame_link_array_free(v);
-    
+
     mm_free(v->specialselect);
     mm_free(v->selected_id);
     mm_free(v->name);
@@ -767,7 +793,7 @@ void fe_dispose_view(fe_view v)
     mm_free(v->onblur);
     mm_free(v->submitonunload);
     mm_free(v->real_url);
-    
+
     v->magic = 0;
     mm_free(v);
 }

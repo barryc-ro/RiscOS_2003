@@ -404,7 +404,7 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 /* 		tii->data.usemap.selection = NULL; */
 #ifndef BUILDERS
 		if (was_selected)
-		    backend_set_highlight(doc, ti);
+		    backend_set_highlight(doc, ti, FALSE);
 #endif
 	    }
 
@@ -576,7 +576,7 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    else
 		alt = tii->src;
 	}
-	
+
 	oimage_render_text(ti, doc, fs, &bbox, alt);
     }
 
@@ -666,7 +666,12 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 						bb & wimp_BRIGHT ? "_blank" : ti->aref->target));
     }
     else
+    {
         antweb_default_caret(doc, FALSE);
+
+        /* pdh: right, selection for clipboarding comes here */
+        backend_set_highlight( doc, ti, TRUE );
+    }
 
 #endif /* BUILDERS */
 

@@ -68,7 +68,7 @@ BOOL ncreg_interface_is_down(void)
 {
     mydci4_diblist *dib;
     _kernel_oserror *e;
-    
+
     /* if no registry then assume interface is OK */
     if ((e = _swix(NCRegistry_EnumerateNetworkDrivers, _OUT(0), &dib)) != NULL)
     {
@@ -114,7 +114,7 @@ void ncreg_decode(void)
     int error;
 
     STBDBG(( "registry decode\n"));
-    
+
     _swix(NCRegistry_Write, _INR(0,2) | _OUT(0), "NCD_INFO", buf, 40*1024, &error);
 
     if (error == -2)
@@ -142,7 +142,7 @@ char *ncreg_enquiry(const char *tag)
 
 void ncreg_init(void)
 {
-    
+
 }
 
 /* ------------------------------------------------------------------------------------------- */
