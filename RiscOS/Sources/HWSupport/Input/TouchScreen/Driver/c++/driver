@@ -10,6 +10,7 @@ Pace.
 
 #include <stdbool.h>
 #include "touchscr.h"
+#include "display.h"
 
 #include "module.h"
 #include "Global/RISCOS.h"
@@ -21,44 +22,53 @@ extern "C" {
 #include "header.h"
 }
 
+extern "C" void ______main();
 
-// global variables
-static unsigned int x_calibration;
-static unsigned int y_calibration;
-static unsigned int pressure_calibration;
+int main(void)
+{
+  ______main();
+  return 0;
+}
+
 
 // local function prototypes
 static PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
                                          unsigned int last_pressure);
 
-static SCREEN_MEASUREMENT calibrate(SCREEN_MEASUREMENT p);
-
+static void inform_kernel(unsigned int x, unsigned int y);
 
 // local macros
 #define LEFT_MOUSE_BUTTON(states)       (states && 0x00000100)
 #define MIDDLE_MOUSE_BUTTON(states)     (states && 0x00000010)
 #define RIGHT_MOUSE_BUTTON(states)      (states && 0x00000001)
 
+#define BYTE_1(x)     ((x) & 0x000000ff)
+#define BYTE_2(x)    (((x) & 0x0000ff00) >> 8)
 
+
+// these are defined here, but mouse button values may be already be defined in a .h file.
 #define LEFT_MOUSE_BUTTON_KEYCODE    9
 #define MIDDLE_MOUSE_BUTTON_KEYCODE  10
 
+
+
+display     display_device;      // create a display object
+touchscreen tscreen;             // create a touchscreen object
+
 /*************************************************************************************
-   Driver currently runs off TickerV. Its operation is quite straight forward,
+   Driver currently runs off PointerV. Its operation is quite straight forward,
    simply determine if the screen is being touched with sufficient tscreen.pressure, if it is,
    then report to the OS where the screen is being touched.
 **************************************************************************************/
 int Driver(_kernel_swi_regs *r, void *pw)
 {
-     static touchscreen tscreen;       // create a touchscreen object
 
-
-     SCREEN_MEASUREMENT    touched_position;
-     SCREEN_MEASUREMENT    calibrated_position;
-     static PRESSURE_LEVEL last_pressure = ZERO;
-     PRESSURE_LEVEL        current_pressure;
-     PRESSURE_STATUS       status;
-     int button, button_states;
+     static TOUCH_SCREEN_POSITION    touched_position;         // will contain data returned by HAL
+     static DISPLAY_POSITION    display_position;         // will contain HAL data translated to pixels
+     static PRESSURE_LEVEL     last_pressure = ZERO;
+     static PRESSURE_LEVEL     current_pressure;
+     static PRESSURE_STATUS    status;
+     static unsigned int       button, button_states;
 
      (void)r;
      (void)pw;
@@ -67,18 +77,22 @@ int Driver(_kernel_swi_regs *r, void *pw)
      status = pressure_gradient(current_pressure, last_pressure);
      last_pressure = current_pressure;
 
+
      if(current_pressure != ZERO)
      {
-        // look to see where screen is being touched and calibrate
+        // look to see where screen is being touched, note that to keep this development code as
+        // simple as possible the touch screen is assumed to be fitted in such a way that we know
+        // which register contains the x-axis data, and which register contains the y-axis data.
         touched_position.x  = tscreen.x_position_measure.get_x_position();
         touched_position.y  = tscreen.y_position_measure.get_y_position();
-        calibrated_position = calibrate(touched_position);
 
-
-        // here need to convert position into pixels
+        // here we need to convert the measured x and y data to a screen position
+        display_position = display_device.translate_position(touched_position);
 
         // inform the os where the screen was pressed
-        tscreen.inform_kernel(calibrated_position.x, calibrated_position.y);
+        inform_kernel(display_position.x, display_position.y);
+
+
 
         if(status == INCREASING)
         {
@@ -134,14 +148,13 @@ int Driver(_kernel_swi_regs *r, void *pw)
            // report all mouse buttons to be in the up state
            _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
 
-
      }
 
      return 0;
 }
 
 
-// function to detect if the screen is being pressed harder or softer
+// function to detect if the screen is being pressed harder or softer that at last measurement
 PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
                                   unsigned int last_pressure)
 {
@@ -182,13 +195,21 @@ PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
 }
 
 
-// function to take the pressed point and calibrate the co-ordinates
-SCREEN_MEASUREMENT calibrate(SCREEN_MEASUREMENT p)
+// inform the os of the new mouse position
+void inform_kernel(unsigned int x, unsigned int y)
 {
-       SCREEN_MEASUREMENT calibrated_value;
-       return calibrated_value;
-}
+     unsigned char parameter_block[5];
 
+     parameter_block[0] = 5;
+     parameter_block[1] = BYTE_1(x);
+     parameter_block[2] = BYTE_2(x);
+     parameter_block[3] = BYTE_1(y);
+     parameter_block[4] = BYTE_2(y);
+
+     _swix(OS_Word, _INR(0,1), 21, parameter_block);
+
+
+}
 
 
 /*************************************************************************************
@@ -198,6 +219,8 @@ _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *
 {
   (void)cmd_tail;
   (void)podule_base;
+
+  ______main();
 
   return _swix(OS_Claim, _INR(0, 2), TickerV, tickerv_entry, pw);
 }
@@ -225,23 +248,56 @@ _kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
   (void)pw;
   (void)r;
 
+  _kernel_oserror* err_code = 0;
+
+  TOUCH_SCREEN_POSITION pos;
+
+  pos.x = tscreen.x_position_measure.get_x_position();
+  pos.y = tscreen.y_position_measure.get_y_position();
 
   switch(swi_no)
   {
-         case PaceTouchScreen_TSCalibratePosition - PaceTouchScreen_00:
-              x_calibration = r->r[1];
-              y_calibration = r->r[2];
-              break;
+         case TSDriver_Calibrate:  // values are being passed in from the calibration application
+              switch(r->r[0])
+              {
+                     case 0:       // the user is pressing the centre of the display
+                       display_device.set_centre(pos);
+                       break;
 
-         case PaceTouchScreen_TSCalibratePressure - PaceTouchScreen_00:
-              pressure_calibration = r->r[1];
+                     case 1:       // the user is pressing the bottom centre of the display
+                       display_device.set_bottom_centre(pos);
+                       break;
+
+                     case 2:       // the user is pressing the top centre of the display
+                       display_device.set_top_centre(pos);
+                       break;
+
+                     case 3:       // the user is pressing the left centre of the diaplay
+                       display_device.set_left_centre(pos);
+                       break;
+
+                     case 4:       // the user is pressing the right centre of the display
+                       display_device.set_right_centre(pos);
+                       break;
+
+                     case 5:       // r2 contains the light pressure threshold
+                       ;
+                       break;
+
+                     case 6:       // r2 contains the firm pressure threshold
+                       ;
+                       break;
+
+                     default:
+                       err_code = error_BAD_SWI;
+              }
               break;
 
          default:
-              return error_BAD_SWI;
+              err_code = error_BAD_SWI;
   }
 
-  return 0;
+  return err_code;
 }
 
 /*************************************************************************************
@@ -254,12 +310,12 @@ _kernel_oserror *command_handler(const char *arg_string, int argc, int cmd_no, v
   (void)argc;
   (void)pw;
 
-  switch(cmd_no)
-  {
-         case CMD_Touchscreen_calibrate:
-           break;
+  (void)cmd_no;  // will need to delete this line before switching
 
-  }
+//  switch(cmd_no)
+//  {
+
+//  }
 
   return 0;
 }

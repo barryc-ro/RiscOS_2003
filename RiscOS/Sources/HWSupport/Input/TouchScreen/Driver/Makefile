@@ -1,5 +1,3 @@
-# Makefile for Touchscreen driver
-#
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
@@ -17,15 +15,17 @@ EXP_HDR = <cexport$dir>
 # Generic options:
 #
 
-COMPONENT = TouchScreen
+COMPONENT = touchscreen
 CMHGNAME  = header
 
+#
+# Internet version compatibility
+#
+#COMPAT = -DCOMPAT_INET4
 
 DEFINES = ${COMPAT} ${OPTIONS}
 
 CFLAGS    = -ffca -c -zM -zps1 -wp ${DEFINES} ${INCLUDES}
-C++FLAGS    = -ffca -c -zM -zps1 -wp ${DEFINES} ${INCLUDES}
-CMHGFLAGS = -p ${DEPENDS}
 
 include Makefiles:StdTools
 
@@ -51,47 +51,22 @@ TARGET    = rm.${COMPONENT}
 CMHGOBJ   = o.$(CMHGNAME)
 ROMTARGET = aof.${COMPONENT}
 
-local_dirs:
-	$(MKDIR) i
-	$(MKDIR) inst
-	$(MKDIR) io
-	
-
 OBJS      =\
+ o.touchscr\
  o.driver\
  o.sensor\
- o.touchscr\
+ o.display\
  $(CMHGOBJ)
- 
- OBJSI =\
-  i.driver\
-  i.sensor\
-  i.touchscr
-  
- OBJSIO =\
-  io.driver\
-  io.sensor\
-  io.touchscr\
-  io.$(CMHGNAME)\
-  io.inst
- 
 
 #
 # Rule patterns
 #
-.SUFFIXES:  .o .s .c .c++ .h .i .cmhg .inst .io
-
-# INFERENCE RULES
+.SUFFIXES:  .o .s .c .c++ .h .cmhg
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.c++.o:;    ${C++} ${C++FLAGS} -o $@ $<
-.c++.i:;    ${C++} ${C++FLAGS} -C++ -E $< >> $@
-.c.i:;      ${CC} ${CFLAGS} -c -C -E $< >> $@
-.inst.io:;  ${C++} ${C++FLAGS} -C++ -W -o $@ $<
+.c++.o:;    ${C++} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
-.cmhg.io:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
-
 
 
 #
@@ -120,40 +95,25 @@ install_rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} i.*	${WFLAGS}
-        ${WIPE} io.*    ${WFLAGS}
-        ${RM} i
-        ${RM} io
         ${WIPE} o ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${RM} h.${CMHGNAME}
         @echo ${COMPONENT}: cleaned
-        
-  
-preprocess: $(OBJSI) local_dirs
-	@echo $(COMPONENT): preprocess build complete
-	
-
-instrument: $(OBJSIO) local_dirs 
-        ${LD} -c++ -o $@ -rmf ${OBJSIO} ${RAMLIBS}
-	@echo $(COMPONENT): instrument build complete
-	
-     
 
 #
 # Target 
 #
 ${TARGET}: ${OBJS} ${RAMLIBS} ${DIRS}
 	${MKDIR} rm
-        ${LD} -c++ -o $@ -rmf ${OBJS} ${RAMLIBS}
+        ${LD} -c++ -o $@ -rmf ${OBJS} ${RAMLIBS} 
         $(MODSQZ) $@
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} ${ROMLIBS}
+${ROMTARGET}: ${OBJS} ${ROMLIBS} ${DIRS}
 	${MKDIR} aof
         ${LD} -c++ -o $@ -aof ${OBJS} ${ROMLIBS}
 
@@ -166,7 +126,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-o.driver: VersionNum h.${CMHGNAME}
+o.touchscr o.module o.driver: VersionNum h.${CMHGNAME}
 
 ${DIRS}:
 	${MKDIR} o
