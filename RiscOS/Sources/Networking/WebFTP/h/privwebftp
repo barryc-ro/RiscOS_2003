@@ -7,16 +7,25 @@
 #ifndef included_privwebftp_h
 #define included_privwebftp_h
 
-
 #ifndef DEBUG
-#define DEBUG 0
+# define DEBUG 0
+# undef REMOTE_DEBUG
 #endif
 
+#ifdef REMOTE_DEBUG
+#include "debug/remote.h"
+#endif
+
+#ifdef REMOTE_DEBUG
+extern debug_session *db;
+#else
+extern void *db;
+#endif
 
 /*****************************************************************************/
 
 
-#define MAXSTACK            10                                                     
+#define MAXSTACK            10
 #define Internet_Event      19
 #define Socket_Async_Event  1
 #define Socket_Urgent_Event 2
@@ -46,6 +55,23 @@ typedef enum { VIA_STACK, VIA_R14 } RETURN_METHOD;
 
 typedef enum { TYPE_UNKNOWN, TYPE_FILE, TYPE_DIR, TYPE_LINK, TYPE_OTHER } FILE_TYPE;
 
+#ifdef REMOTE_DEBUG
+
+void _debug_printf(char *format, ...);
+
+#if     DEBUG && VERBOSEDEBUG
+#define dbg(x)          _debug_printf x
+#define dbg2(x)         _debug_printf x
+#elif   DEBUG
+#define dbg(x)          _debug_printf x
+#define dbg2(x)         /* beware the semicolon though! */
+#else
+#define dbg(x)          /* beware the semicolon though! */
+#define dbg2(x)         /* beware the semicolon though! */
+#endif
+
+#else
+
 #if     DEBUG && VERBOSEDEBUG
 #define dbg(x)          printf x
 #define dbg2(x)         printf x
@@ -57,7 +83,7 @@ typedef enum { TYPE_UNKNOWN, TYPE_FILE, TYPE_DIR, TYPE_LINK, TYPE_OTHER } FILE_T
 #define dbg2(x)         /* beware the semicolon though! */
 #endif
 
-
+#endif
 
 typedef enum
 {
@@ -75,6 +101,9 @@ typedef enum
     ERROR_NO_SESSION,
     ERROR_SESSION_ALREADY_CLOSED,
     ERROR_SESSION_INVALID
+#ifdef CSFS
+    ,ERROR_CSFS
+#endif
 } ERROR_CODE;
 
 #if DEBUG
@@ -94,39 +123,20 @@ static char *error_code_names [] =
     "ERROR_UNKNOWN_COMMAND",
     "ERROR_NO_SESSION",
     "ERROR_SESSION_ALREADY_CLOSED",
-    "ERROR_SESSION_INVALID" 
+    "ERROR_SESSION_INVALID"
 };
 
 #endif
 
-
-#if 0
-static void my_free(void *vp)
-{
-    dbg(("FREE: %p\n", vp));
-    free(vp);
-}
-
-static void *my_malloc(size_t bytes)
-{
-    void *vp = malloc(bytes);
-    dbg(("MALLOC: %d => %p\n", bytes, vp));
-    return vp;
-}
-
-static void *my_calloc(size_t bytes1, size_t bytes2)
-{
-    void *vp = calloc(bytes1, bytes2);
-    dbg(("CALLOC: %d %d => %p\n", bytes1, bytes2, vp));
-    return vp;
-}
-
-#define free(x)         my_free(x)
-#define malloc(x)       my_malloc(x)
-#define calloc(x,y)     my_calloc(x,y)
-
+#ifdef DEBUG_MALLOC
+void  db_free(void *pvoid);
+void *db_malloc(const char *file, const int line, size_t size);
+void  db_check(void);
+void *db_calloc(const char *file, const int line, size_t bytes1, size_t bytes2);
+#define free(x)         db_free(x)
+#define malloc(x)       db_malloc(__FILE__,__LINE__, x)
+#define calloc(x,y)     db_calloc(__FILE__,__LINE__, x,y)
 #endif
-
 
 #define CODE_0YZ        0       /* No data yet - return from poll */
 #define CODE_1YZ        1       /* Positive Preliminary reply - error */
@@ -164,6 +174,9 @@ typedef enum
     state_closed_existing_server,
     state_data_transfer,
     state_data_transfer1,
+ #ifdef FTP_PUT
+    state_data_transferPUT,
+ #endif
     state_directory_change,
     state_done_transfer,
     state_done_transfer1,
@@ -204,7 +217,9 @@ typedef enum
     state_subr_sent_quit,
     state_subr_wait_other_close,
     state_wait_other_close,
-
+    state_sent_generic_command,
+    state_sent_rename_from,
+    state_sent_rename_to,
     state_diagnostics,
     state_error,
     state_last_state
@@ -225,6 +240,9 @@ static char *state_code_names [state_last_state + 1] =
     "state_closed_existing_server  ",
     "state_data_transfer           ",
     "state_data_transfer1          ",
+ #ifdef FTP_PUT
+    "state_data_transferPUT        ",
+ #endif
     "state_directory_change        ",
     "state_done_transfer           ",
     "state_done_transfer1          ",
@@ -265,7 +283,9 @@ static char *state_code_names [state_last_state + 1] =
     "state_subr_sent_quit          ",
     "state_subr_wait_other_close   ",
     "state_wait_other_close        ",
-
+    "state_sent_generic_command    ",
+    "state_sent_rename_from        ",
+    "state_sent_rename_to          ",
     "state_diagnostics             ",
     "state_error                   ",
     "state_last_state              "
@@ -283,6 +303,9 @@ typedef struct ftp_server
 
     int                 contsock;       /* The command socket */
     struct sockaddr_in  contaddr;       /* For the command channel */
+    int                 datasock;       /* Socket for data communications */
+    struct sockaddr_in  dataaddr;       /* Address for data communications */
+
     char                *user_name;     /* for USER */
     char                *passwd;        /* for PASS */
     char                *acct;          /* for ACCT */
@@ -293,6 +316,7 @@ typedef struct ftp_server
     BOOL                absorb_error;   /* Error is recoverable for server */
     BOOL                dont_reuse;     /* Eg due to server connection error */
     BOOL                sent_quit;
+    BOOL		sent_pasv;	/* To eliminate redundant PASV commands */
     unsigned char       uses;           /* How useful */
 
     struct sess         *sess;          /* Session attached to or NULL */
@@ -315,9 +339,6 @@ typedef struct sess
 
     int                 *sock;          /* Current socket */
     struct sockaddr_in  *addr;          /* Current address */
-
-    int                 datasock;       /* Socket for data communications */
-    struct sockaddr_in  dataaddr;       /* Address for data communications */
 
     struct sockaddr_in  servaddr;       /* Address for server matching */
 
@@ -352,7 +373,7 @@ typedef struct sess
     char                resp1,          /* The 4 characters of the FTP */
                         resp2,          /* response code. resp4 is the */
                         resp3,          /* '-' IN multi-line response */
-                        resp4;          
+                        resp4;
 
     BOOL                file_failed;    /* Not a file - maybe a dir? */
     BOOL                created_server;
@@ -360,7 +381,17 @@ typedef struct sess
     void (* diverted_lines)  (struct sess *);
     int                 maxidle;
 
+    int                 ftp_cmd;        /* What function is to be done */
+    char 		*extra;		/* Extra parameter for rename */
+#ifdef CSFS
+    char                *error_msg;     /* error message to return to CSFS */
+#endif
+#ifdef FTP_PUT
+    int         	flags;          /* As provided on entry to swi */
+#endif
+
 } SESS, * PSESS;
+
 
 /*****************************************************************************/
 

@@ -58,7 +58,7 @@
  * 200995   Borris  Introduced FTP_TRANSFERRING_FILE and
  *                  FTP_TRANSFERRING_DIRECTORY ftp status codes to help with
  *                  progressive rendering.
- * 041095   Borris  Added maxidle field for session open arguments. 
+ * 041095   Borris  Added maxidle field for session open arguments.
  * 061095   Borris  This is version 0.11
  * 111095   Borris  Added code to do PWD at start for restoring position
  *                  on server re-use. Considered mandatory for reuse of
@@ -67,7 +67,7 @@
  *                  fred.tar.gz has .gz and not .tar.gz . Checked around
  *                  various servers. Looked carefully at OS/2 and NT
  *                  directory listings and put code in for them. ** Need to
- *                  look at presenting IP names rather than numbers ** 
+ *                  look at presenting IP names rather than numbers **
  *                  Replaced my status codes with Nicko's standard status.h
  *                  header file, and added a few more.
  *                  Version 0.12X
@@ -75,10 +75,18 @@
  * 	    	    tweaks to the way icontype: scheme is used.
  * 111295   Borris  Minor tweaks to make 0.14 (including callback threaded
  * 	    	    flag observations).
+ * 230197   Peter   Fix "closes socket 0" bug of, er, 9 Jul 96.
+ *
  */
 
-
 #include "all.h"
+#ifdef REMOTE_DEBUG
+#include <stdarg.h>
+#endif
+
+#ifndef CMHG_FINALISE
+#define CMHG_FINALISE 0
+#endif
 
 /*****************************************************************************/
 
@@ -109,7 +117,9 @@ char                    databuf[4096];
 
 void *                  private_word;
 
-
+#ifdef REMOTE_DEBUG
+debug_session *db=NULL;
+#endif
 /*****************************************************************************/
 
 /* Strings for printing status */
@@ -132,18 +142,18 @@ static struct { transfer_status status; char *msg; } status_table[] =
         status_NEW,			/*     New, untouched connection state variable */
         string_new
     },
-       
+
         /* Before we have a connection */
     {
         status_DNS,			/* HGF Waiting for the DNS lookup to complete */
         string_connecting
     },
-    
+
     {
         status_AWAITING_CONNECTION,		/*   F Queued waiting for service (e.g. sequential FTPs) */
         string_connecting
     },
-    
+
     {
         status_CONNECTING,			/* HGF Connect call made but not yet connected */
         string_connecting
@@ -159,17 +169,17 @@ static struct { transfer_status status; char *msg; } status_table[] =
         status_REUSE_CHECKING,              /*   F Seeing if can reuse an existing connection */
         string_authenticating
     },
-    
+
     {
         status_DIRECTORY_CHANGING,		/*   F Getting to the right place to fetch the data */
         string_cwd
     },
-    
+
     {
         status_NEGOTIATING,			/*   F Agreeing how we are going to get the data back */
         string_requesting
     },
-    
+
     {
         status_REQUESTING,			/* HGF Requested the item */
         string_requesting
@@ -192,24 +202,24 @@ static struct { transfer_status status; char *msg; } status_table[] =
         status_COMPLETED_FILE,	 /* HGF File fetched */
         string_okay_file
     },
-    
+
     {
         status_COMPLETED_DIR,		/*   F Directory fetched */
         string_okay_dir
     },
-    
+
     {
         status_FAIL_CONNECT,		/* HGF Failed to get through to the remote host */
         string_bad_connect
     },
-    
+
     {
         status_FAIL_REQUEST,		/* H F Request truned down by remote host */
         string_bad_request
     },
-    
+
     {
-        -1,                         /* end of table marker */
+        (transfer_status) -1,           /* end of table marker */
         string_bad_connect
     }
 };
@@ -243,12 +253,18 @@ extern void dump_sockaddr(struct sockaddr_in *addr, char *msg)
 static void dump_sess(PSESS sess)
 {
     int x;
-
+#if DEBUG
     if (sess->magic != MAGIC)
     {
-        printf("NB: Magic value %x is not correct magic value %x\n", sess->magic, MAGIC);
+      if (sess->magic == ~MAGIC)
+      {
+        dbg(("Magic value is ~MAGIC"));
+      } else {
+        dbg(("NB: Magic value %x is not correct magic value %x", 
+        	sess->magic, MAGIC));
+      }
     }
-
+#endif
     printf("Request for %s from %s\n",
         sess->origpath, MKHOSTNAME(sess->servaddr.sin_addr));
 
@@ -272,21 +288,23 @@ static void dump_sess(PSESS sess)
         sess, sess->prev, sess->next, sess->user_name));
 
     dump_sockaddr(sess->server == NULL ? NULL : &sess->server->contaddr, "Control sockaddr");
-    dump_sockaddr(&sess->dataaddr, "Data sockaddr");
+    dump_sockaddr(&sess->server->dataaddr, "Data sockaddr");
     dump_sockaddr(sess->addr, "Current connection sockaddr");
 
     printf("Account %s\nName %s\nLocal name %s\n",
-        sess->acct == NULL ? "*NULL*" : sess->acct, sess->origpath, sess->local_name);
+        sess->acct == NULL ? "*NULL*" : sess->acct, sess->origpath,
+        sess->local_name);
 
-    printf("File handle %d, control socket %d\ndata socket %d, active socket %d\n",
-        sess->ro_handle, sess->server->contsock, sess->datasock, *sess->sock);
+    printf("File handle %d, control socket %d\ndata socket %d,"
+        " active socket %d\n", sess->ro_handle, sess->server->contsock,
+        sess->server->datasock, *sess->sock);
 
-    printf("RC %s (%d), state  (%d), public status %s (%d)\n%d bytes so far, response %c%c%c%c\n",
+    printf("RC %s (%d), state %s (%d), public status (%d)\n%d bytes so far, response %c%c%c%c\n",
         error_code_names[sess->rc],
         sess->rc,
         state_code_names[sess->state],
         sess->state,
-/*        ftp_status_names[sess->ftp_status],*/
+/*        ftp_status_names[sess->ftp_status],*/
         sess->ftp_status,
         sess->bytes_so_far,
         sess->resp1,
@@ -325,10 +343,13 @@ static void dump_active_servers(void)
 
     while (serv != NULL)
     {
-        dbg(("Server %p, session %p, sock %d\n"
-               "last %d, maxidle %d, uses %d, absorb %d, dont-reuse %d, sent quit %d\n",
-                serv, serv->sess, serv->contsock,
-                serv->last_used, serv->maxidle, serv->uses, serv->absorb_error, serv->dont_reuse, serv->sent_quit));
+        dbg(("Server %p, session %p, sock %d, datasock %d\n"
+                "last %d, maxidle %d, uses %d, absorb %d, dont-reuse %d,"
+                " sent quit %d, sent pasv %d\n",
+                serv, serv->sess, serv->contsock, serv->datasock,
+                serv->last_used, serv->maxidle, serv->uses,
+                serv->absorb_error, serv->dont_reuse, serv->sent_quit,
+                serv->sent_pasv));
 
         printf("Address %s\n", MKHOSTNAME(serv->contaddr.sin_addr));
 
@@ -339,7 +360,7 @@ static void dump_active_servers(void)
         if (serv->sess != NULL)
         {
             printf("Retrieving %s\n", serv->sess->origpath);
-            
+
             if (pending_list != NULL)
             {
                 PSESS pend = pending_list;
@@ -351,7 +372,8 @@ static void dump_active_servers(void)
         }
         else
         {
-            const int secs = (serv->maxidle - (MONONOW - serv->last_used)) / 100;
+            const int secs = (int)((serv->maxidle -
+                (MONONOW - serv->last_used) ) / 100);
             const int secsmod = secs % 60;
             const int mins = secs / 60;
 
@@ -414,7 +436,7 @@ extern int my_socket(PSESS sess)
 {
     int rc, i = 1, j = 1;
 
-    dbg(("socket(%d, %d, %d)", AF_INET, SOCK_STREAM, 0));
+    dbg2(("socket(%d, %d, %d)", AF_INET, SOCK_STREAM, 0));
 
     /* Getting zero back seems to fail in strange fashions. */
     /* Never been quite trusting of this, but a better reason */
@@ -437,8 +459,7 @@ again:
         sess->rc = GROUP_SOCKET;
         rc = -1;
     }
-
-    dbg((" = %d, errno %d\n", rc, errno));
+    dbg2((" = %d, errno %d\n", rc, errno));
 
     return rc;
 }
@@ -544,7 +565,7 @@ static int my_send(PSESS sess, int sock, char *buf, int bytes)
     sess->send_left = bytes;
     memcpy(sess->send_buffer, buf, bytes);
 
-    dbg(("Queued data for blocking\n"));
+    dbg2(("Queued data for blocking\n"));
 
     return GROUP_BLOCK;
 }
@@ -559,7 +580,7 @@ static int push_send_buffer(PSESS sess)
 
     rc = send(*sess->sock, cp + offs, bytes, 0);
 
-    dbg(("delayed send gives %d %d\n", rc, errno));
+    dbg2(("delayed send gives %d %d\n", rc, errno));
 
     if (rc == -1)
     {
@@ -577,8 +598,8 @@ static int push_send_buffer(PSESS sess)
 
     if (rc != bytes)
     {
-        sess->send_offs += bytes;
-        sess->send_left -= bytes;
+        sess->send_offs += rc;
+        sess->send_left -= rc;
         return GROUP_BLOCK;
     }
     else
@@ -599,6 +620,7 @@ extern int my_socketclose(int *sock)
     dbg2(("socketclose(%d)", *sock));
 
     rc = socketclose(*sock);
+    dbg2(("socket return code %d\n",rc));
     *sock = -1;
 
     dbg2((" = %d, errno %d\n", rc, errno));
@@ -703,8 +725,10 @@ static void free_PSESS(PSESS sess)
 {
     if (sess == NULL || sess->magic != MAGIC)
     {
+      dbg(("free_PSESS, no magic, %p",sess));
         return;
     }
+    dbg(("free_PSESS %p",sess));
 
     if (sess->passwd != NULL)
     {
@@ -714,8 +738,8 @@ static void free_PSESS(PSESS sess)
 
     sess->magic = ~MAGIC;
 
-    if (sess->datasock != -1)
-        my_socketclose(&sess->datasock);
+    if (sess->server->datasock != -1 && sess->server->sent_pasv == 0)
+        my_socketclose(&sess->server->datasock);
 
     if (sess->user_name != NULL)
         free(sess->user_name);
@@ -739,9 +763,21 @@ static void free_PSESS(PSESS sess)
         free(sess->send_buffer);
 
     if (sess->ro_handle >= 0)
+    {
+        dbg(("(7) free session - close file"));
         ro_fclose(sess->ro_handle);
+    }
+
+    if (sess->extra != NULL)
+        free(sess->extra);
+
+#ifdef CSFS
+    if (sess->error_msg != NULL)
+        free(sess->error_msg);
+#endif
 
     free(sess);
+    dbg(("free_PSESS complete"));
 }
 
 /*****************************************************************/
@@ -756,6 +792,8 @@ static void tidy_up(PSESS sess)
 {
     int i;
 
+    dbg(("tidy_up %p",sess));
+    
     if (in_list(sess, &pending_list))
     {
         rem_from_list(&pending_list, sess);
@@ -779,10 +817,9 @@ static void tidy_up(PSESS sess)
         sess->ro_handle = -1;
     }
 
-    if (sess->datasock >= 0)
+    if (sess->server->datasock >= 0 && sess->server->sent_pasv == 0)
     {
-        (void) my_socketclose(&sess->datasock);
-        sess->datasock = -1;
+        (void) my_socketclose(&sess->server->datasock);
     }
 
     for (i = 0; i < NUMQS; i++)
@@ -993,7 +1030,7 @@ extern int get_a_line(PSESS sess, PQUEUE pq)
         databuf[ code - 1 ] = 0;
     }
 
-    dbg(("RECV: %s\n", databuf));
+    dbg(("(7) RECV: %s\n", databuf));
 
     if (sess->diverted_lines != NULL)
     {
@@ -1019,7 +1056,7 @@ static int do_multiline_response(PSESS sess)
     char dig1, dig2, dig3, dig4;
     BOOL invalid;
 
-    dbg(("Progress multiline response\n"));
+    dbg2(("(7) Progress multiline response\n"));
 
     while (1)
     {
@@ -1184,14 +1221,14 @@ static int next_status(PSESS sess)
         switch ( push_send_buffer(sess) )
         {
             case GROUP_BLOCK:
-                dbg(("delayed send still waiting\n"));
+                dbg2(("delayed send still waiting\n"));
                 return GROUP_BLOCK;
                 break;
             case GROUP_OKAY:
-                dbg(("delayed send finished\n"));
+                dbg2(("delayed send finished\n"));
                 break;
             default:
-                dbg(("delayed send failed\n"));
+                dbg2(("delayed send failed\n"));
                 return GROUP_SOCKET;
         }
     }
@@ -1210,7 +1247,7 @@ static void send_command(PSESS sess, char *cmd)
 {
     const int rc = my_send(sess, *sess->sock, cmd, strlen(cmd));
 
-    dbg(("SEND: %s", cmd));
+    dbg(("(7) SEND: %s", cmd));
 
     switch (rc)
     {
@@ -1319,6 +1356,35 @@ static void send_RETR(PSESS sess)
 }
 
 /*****************************************************************************/
+#ifdef FTP_PUT
+static void send_STOR(PSESS sess)
+{
+    send_two_part(sess, "STOR", sess->leaf);
+}
+#endif
+
+/*****************************************************************************/
+
+static void send_GENERIC_CMD(PSESS sess, char *cmd, char *arg1, char *arg2)
+{
+  if (arg1==NULL)
+    send_one_part(sess, cmd);
+  else
+  {
+    if (arg2==NULL)
+      send_two_part(sess, cmd, arg1);
+    else
+    {
+      if ((arg1[strlen(arg1)-1]=='/') || (arg2[0]=='/'))
+        sprintf(databuf, "%s %s%s\r\n", cmd, arg1, arg2);
+      else
+        sprintf(databuf, "%s %s/%s\r\n", cmd, arg1, arg2);
+      send_command(sess, databuf);
+    }
+  }
+}
+
+/*****************************************************************************/
 
 static void send_QUIT(PSESS sess)
 {
@@ -1373,12 +1439,20 @@ static void progress_transfer(PSESS sess)
     {
         more = FALSE;
 
-#if DEBUG
-        printf("\nSTATE %s (%2d) for >>>",
-            sess->state >= 0 && sess->state < state_last_state ? state_code_names[sess->state] : "Bad state",
-            sess->state);
-        MKHOSTNAME(sess->servaddr.sin_addr);
-        printf("<<<\n");
+#if 0
+        {
+            static last_state = 0;
+            if (sess->state!=last_state)
+            {
+              dbg(("(7) STATE %s (%2d)\n", sess->state >= 0 &&
+                sess->state < state_last_state
+                  ? state_code_names[sess->state]
+                  : "Bad state", sess->state));
+              last_state = sess->state;
+            }
+    /*         printf("%s",MKHOSTNAME(sess->servaddr.sin_addr)); */
+    /*         printf("<<<\n"); */
+        }
 #endif
 
         switch (sess->state)
@@ -1395,7 +1469,7 @@ static void progress_transfer(PSESS sess)
                            || strcmp(sess->passwd, server->passwd) != 0
                            || strcmp(sess->acct, server->acct ) != 0)
                         {
-                            dbg(("Rejecting found server due to name, passwd or account differences\n"));
+                            dbg(("(6) Rejecting found server due to name, passwd or account differences\n"));
                             server->dont_reuse = TRUE;
                             servers_to_quit += 1;
                             server = NULL;
@@ -1413,7 +1487,7 @@ static void progress_transfer(PSESS sess)
 
                     if (server == NULL)
                     {
-                        dbg(("Requesting a new server as none found is suitable\n"));
+                        dbg(("(6) Requesting a new server as none found is suitable\n"));
                         sess->state = state_no_existing_server;
                     }
 
@@ -1438,7 +1512,7 @@ static void progress_transfer(PSESS sess)
                         break;
                     case GROUP_OKAY:
                         sess->state = state_ready_to_go;
-                        sess->datasock = my_socket(sess);
+                        sess->server->datasock = my_socket(sess);
 
                         if (sess->state == state_error)
                             break;
@@ -1446,20 +1520,20 @@ static void progress_transfer(PSESS sess)
                         sess->sock = &sess->server->contsock;
                         sess->addr = &sess->server->contaddr;
 
-                        if (sess->ro_handle < 0)
+/*                         if (sess->ro_handle < 0)
                         {
                             sess->rc = GROUP_FILE;
                             sess->state = state_error;
                             break;
                         }
-
+ */
                         more = TRUE;
                         break;
                     default:
                         /* Might actually be able to continue but deem */
                         /* it simpler not to try. */
                         servers_to_quit += 1;
-                        dbg(("Quitting server as CWD failed\n"));
+                        dbg(("(6) Quitting server as CWD failed\n"));
                         disconnect_server(sess, FALSE);
                         sess->state = state_no_existing_server;
                         more = TRUE;
@@ -1488,13 +1562,14 @@ static void progress_transfer(PSESS sess)
 
                     sess->created_server = TRUE;
                     server->contsock  = -1;
+                    server->login_pwd = NULL;
                     server->user_name = strdup(sess->user_name);
                     server->passwd    = strdup(sess->passwd   );
                     server->acct      = strdup(sess->acct     );
 
                     if (server->user_name == NULL || server->passwd == NULL || server->acct == NULL)
                     {
-                        dbg(("Server failed to allocate some memory\n"));
+                        dbg(("(6) Server failed to allocate some memory\n"));
                         free_server(server);
                         sess->state = state_error;
                         sess->rc = GROUP_MEMORY;
@@ -1503,10 +1578,11 @@ static void progress_transfer(PSESS sess)
 
                     server->contaddr = sess->servaddr;
                     server->contsock = my_socket(sess);
+                    server->datasock = -1;
 
                     if (server->contsock < 0)
                     {
-                        dbg(("Server failed to allocate the control socket\n"));
+                        dbg(("(6) Server failed to allocate the control socket\n"));
                         free_server(server);
                         sess->state = state_error;
                         sess->rc = GROUP_SOCKET;
@@ -1528,7 +1604,8 @@ static void progress_transfer(PSESS sess)
             case state_initialise_new_server:
                 sess->ftp_status = status_CONNECTING;
                 sess->diverted_lines = NULL;
-                sess->datasock = my_socket(sess);
+                dbg2(("allocating new data sock\n"));
+                sess->server->datasock = my_socket(sess);
 
                 if (sess->state == state_error)
                     break;
@@ -1536,13 +1613,13 @@ static void progress_transfer(PSESS sess)
                 sess->sock = &sess->server->contsock;
                 sess->addr = &sess->server->contaddr;
 
-                if (sess->ro_handle < 0)
+/*                 if (sess->ro_handle < 0)
                 {
                     sess->rc = GROUP_FILE;
                     sess->state = state_error;
                     break;
                 }
-
+ */
                 sess->state = state_subr_connect;
                 stack_push(sess, state_opened_control_socket);
                 more = TRUE;
@@ -1637,10 +1714,10 @@ static void progress_transfer(PSESS sess)
                 if (sess->server->login_pwd != NULL)
                 {
                     sess->state = state_directory_change;
-                    more = TRUE;    
+                    more = TRUE;
                     break;
                 }
-                want_cmd_followup = FALSE;          
+                want_cmd_followup = FALSE;
                 sess->state = state_sent_pwd;
                 send_PWD(sess);
                 break;
@@ -1672,12 +1749,39 @@ static void progress_transfer(PSESS sess)
                         sess->rc = GROUP_SOCKET;
                         break;
                 }
-                break;                    
+                break;
 
             case state_directory_change:
                 if ( *sess->dir == 0 )
                 {
-                    sess->state = state_start_negotiating;
+                    switch (sess->ftp_cmd)
+                    {
+                      case FTP_CMD_GET : case FTP_CMD_PUT :
+                        sess->state = state_start_negotiating;
+                        break;
+                      case FTP_CMD_RENAME :
+                        sess->state = state_sent_rename_from;
+                        want_cmd_followup = FALSE;
+                        send_GENERIC_CMD(sess,"RNFR",sess->leaf,NULL);
+                        break;
+                      default :
+                        sess->ftp_status = status_SENDING_GENERIC_COMMAND;
+                        sess->state = state_sent_generic_command;
+                        want_cmd_followup = FALSE;
+                        switch (sess->ftp_cmd)
+                        {
+                          case FTP_CMD_DELETE :
+                            send_GENERIC_CMD(sess,"DELE",sess->leaf,NULL);
+                            break;
+                          case FTP_CMD_RMDIR :
+                            send_GENERIC_CMD(sess,"RMD",sess->leaf,NULL);
+                            break;
+                          case FTP_CMD_MKDIR :
+                            send_GENERIC_CMD(sess,"MKD",sess->leaf,NULL);
+                            break;
+                        }
+                        break;
+                    }
                     more = TRUE;
                     break;
                 }
@@ -1695,8 +1799,36 @@ static void progress_transfer(PSESS sess)
             case state_send_directory:
                 if ( *sess->dir == 0 )
                 {
-                    sess->state = state_start_negotiating;
+                    switch (sess->ftp_cmd)
+                    {
+                      case FTP_CMD_GET : case FTP_CMD_PUT :
+                        sess->state = state_start_negotiating;
+                        break;
+                      case FTP_CMD_RENAME :
+                        sess->state = state_sent_rename_from;
+                        want_cmd_followup = FALSE;
+                        send_GENERIC_CMD(sess,"RNFR",sess->leaf,NULL);
+                        break;
+                      default :
+                        sess->ftp_status = status_SENDING_GENERIC_COMMAND;
+                        sess->state = state_sent_generic_command;
+                        want_cmd_followup = FALSE;
+                        switch (sess->ftp_cmd)
+                        {
+                          case FTP_CMD_DELETE :
+                            send_GENERIC_CMD(sess,"DELE",sess->leaf,NULL);
+                            break;
+                          case FTP_CMD_RMDIR :
+                            send_GENERIC_CMD(sess,"RMD",sess->leaf,NULL);
+                            break;
+                          case FTP_CMD_MKDIR :
+                            send_GENERIC_CMD(sess,"MKD",sess->leaf,NULL);
+                            break;
+                        }
+                        break;
+                    }
                     more = TRUE;
+                    break;
                 }
                 else
                 {
@@ -1750,13 +1882,74 @@ static void progress_transfer(PSESS sess)
                 }
                 else
                 {
+#ifdef FTP_PUT
+                    switch (sess->ftp_cmd)
+                    {
+                      case FTP_CMD_PUT :
+                        sess->retrieve_action = send_STOR;
+                        break;
+		      case FTP_CMD_GET :
+                        sess->retrieve_action = send_RETR;
+                        break;
+                    }
+#else
                     sess->retrieve_action = send_RETR;
+#endif
                     sess->state = state_sent_type;
                     send_TYPE(sess, "I");
                 }
                 break;
 
+            case state_sent_generic_command :
+                switch ( next_status(sess) )
+                {
+                    case GROUP_BLOCK:
+                        break;
+                    case GROUP_OKAY:
+                        sess->state = state_done_transfer2;
+                        more = TRUE;
+                        break;
+                    default:
+                        sess->state = state_error;
+                        sess->rc = GROUP_SOCKET;
+                        break;
+                }
+                break;
 
+            case state_sent_rename_from :
+                switch ( next_status(sess) )
+                {
+                    case GROUP_BLOCK:
+                        break;
+                    case GROUP_POSITIVE_INTERMEDIATE:
+                        sess->state = state_sent_rename_to;
+                        want_cmd_followup = FALSE;
+
+                        send_GENERIC_CMD(sess,"RNTO",sess->server->login_pwd,sess->extra);
+                        more = TRUE;
+                        break;
+                    default:
+                        sess->state = state_error;
+                        sess->rc = GROUP_SOCKET;
+                        break;
+                }
+                break;
+
+            case state_sent_rename_to :
+                switch ( next_status(sess) )
+                {
+                    case GROUP_BLOCK:
+                        break;
+                    case GROUP_OKAY:
+                        sess->state = state_done_transfer2;
+                        more = TRUE;
+                        break;
+                    default:
+                        sess->state = state_error;
+                        sess->rc = GROUP_SOCKET;
+                        break;
+                }
+                break;
 
             /* Abort the file transfer operations and try for a directory */
 
@@ -1770,13 +1963,17 @@ static void progress_transfer(PSESS sess)
                     break;
                 }
 
-                my_socketclose(&sess->datasock);
-                if (sess->state == state_error)
-                    break;
+		/* Only re-create socket if it isn't an open PASV socket */
+		if(sess->server->sent_pasv==0)
+		{
+                    my_socketclose(&sess->server->datasock);
+                    if (sess->state == state_error)
+                        break;
 
-                sess->datasock = my_socket(sess);
-                if (sess->state == state_error)
-                    break;
+                    sess->server->datasock = my_socket(sess);
+                    if (sess->state == state_error)
+                        break;
+                }
 
                 sess->addr = &sess->server->contaddr;
                 sess->sock = &sess->server->contsock;
@@ -1794,7 +1991,14 @@ static void progress_transfer(PSESS sess)
 
             case state_is_it_a_directory:
                 sess->file_failed = TRUE;
+#ifdef CSFS
+                if (sess->flags & webftp_open_NotHTML)
+                  csfs_directory_header(sess);
+                else
+                  do_ftpdir_header(sess);
+#else
                 do_ftpdir_header(sess);
+#endif
                 if (sess->state == state_error)
                 {
                     dbg(("Error writing header\n"));
@@ -1810,6 +2014,16 @@ static void progress_transfer(PSESS sess)
 
             case state_sent_type:
 #if 1	    	/* production */
+                /* Check if PASV command has already been accepted */
+                if(sess->server->sent_pasv &&
+                   sess->server->datasock >= 0)
+                {
+                  dbg(("Reusing PASV connection\n"));
+                  sess->state=state_pasv_connect2;
+                  want_cmd_followup = FALSE;
+                  (*sess->retrieve_action) (sess);
+                  break;
+                }
                 sess->state = state_sent_pasv;
                 want_cmd_followup = FALSE;
                 send_PASV(sess);
@@ -1843,10 +2057,11 @@ static void progress_transfer(PSESS sess)
             /* Perform transfer - PASV mode - server listens */
 
             case state_pasv_supported:
-                sess->addr = &sess->dataaddr;
+                sess->addr = &sess->server->dataaddr;
                 switch ( decode_host_port(sess) )
                 {
                     case GROUP_OKAY:
+                        sess->server->sent_pasv = 1;
                         sess->state = state_pasv_connect1;
                         want_cmd_followup = FALSE;
                         (*sess->retrieve_action) (sess);
@@ -1861,7 +2076,7 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_pasv_connect1:
-                sess->sock = &sess->datasock;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_subr_connect;
                 stack_push(sess, state_pasv_connect2);
                 more = TRUE;
@@ -1875,7 +2090,8 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_pasv_connect3:
-                sess->sock = &sess->datasock;
+                sess->server->sent_pasv = 0;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_data_transfer;
                 more = TRUE;
                 break;
@@ -1883,8 +2099,8 @@ static void progress_transfer(PSESS sess)
             /* Perform transfer - not PASV mode - we listen */
 
             case state_pasv_not_supported:
-                sess->addr = &sess->dataaddr;
-                sess->sock = &sess->datasock;
+                sess->addr = &sess->server->dataaddr;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_subr_ready_for_accept;
                 stack_push(sess, state_no_pasv1);
                 more = TRUE;
@@ -1910,7 +2126,7 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_no_pasv3:
-                sess->sock = &sess->datasock;
+                sess->sock = &sess->server->datasock;
                 sess->state = state_subr_do_accept;
                 stack_push(sess, state_data_transfer);
                 more = TRUE;
@@ -1919,18 +2135,35 @@ static void progress_transfer(PSESS sess)
             /* Now perform the actual data transfer */
 
             case state_data_transfer:
+ #ifdef FTP_PUT
+                sess->state = (sess->ftp_cmd==FTP_CMD_PUT)
+                    ?state_data_transferPUT
+                    :state_data_transfer1;
+#else
                 sess->state = state_data_transfer1;
+#endif
                 if (sess->file_failed)
                 {
                     sess->ftp_status = status_GETTING_DIRECTORY;
                 }
                 else
                 {
-                    sess->ftp_status = status_GETTING_BODY;
-                    dbg(("\nSetting output filesize back to zero\n\n"));
                     sess->bytes_so_far = 0;
-                    if (reopen_file(sess) != GROUP_OKAY)
-                        break;
+#ifdef FTP_PUT
+                    if (sess->ftp_cmd==FTP_CMD_PUT)
+                    {
+                      sess->ftp_status = status_PUTTING_BODY;
+                    }
+                    else
+                    {
+#endif
+                      sess->ftp_status = status_GETTING_BODY;
+                      dbg(("\nSetting output filesize back to zero\n\n"));
+                      if (reopen_file(sess) != GROUP_OKAY)
+                          break;
+#ifdef FTP_PUT
+                    }
+#endif
                 }
                 more = TRUE;
                 break;
@@ -1946,8 +2179,7 @@ static void progress_transfer(PSESS sess)
 
                 if (rc == 0)
                 {
-                    rc = my_socketclose(&sess->datasock);
-                    sess->datasock = -1;
+                    rc = my_socketclose(&sess->server->datasock);
                     sess->diverted_lines = NULL;
 
                     if (rc == 0)
@@ -1968,6 +2200,7 @@ static void progress_transfer(PSESS sess)
                 {
                     if (errno != EWOULDBLOCK)
                     {
+                        dbg(("Error %i from recv\n",errno));
                         sess->diverted_lines = NULL;
                         sess->state = state_error;
                         sess->rc = GROUP_SOCKET;
@@ -2011,14 +2244,75 @@ static void progress_transfer(PSESS sess)
                 {
                     more = TRUE;
                 }
-
                 break;
 
+#ifdef FTP_PUT
+            case state_data_transferPUT:
+	        if (sess->send_buffer)    /* We have data queued */
+		{
+		    switch ( push_send_buffer(sess) )
+        	    {
+            	      case GROUP_BLOCK:
+                        dbg2(("delayed send still waiting\n"));
+                        break;
+            	      case GROUP_OKAY:
+                        dbg2(("delayed send finished\n"));
+                        break;
+            	      default:
+                        dbg2(("delayed send failed\n"));
+                        sess->state = state_error;
+                        sess->rc = GROUP_SOCKET;
+                    }
+                }
+
+	        if (sess->send_buffer)    /* We still have data queued */
+	          break;
+
+		if (sess->bytes_so_far<sess->total_bytes) /* Not finished */
+		{
+                  if (from_file(sess, databuf,sizeof(databuf), &rc)!=GROUP_OKAY)
+                    dbg(("Error receiving data from file\n"));
+
+  		  sess->bytes_so_far+=rc;
+                  dbg2(("bytes read so far %d\n",sess->bytes_so_far));
+
+   		  rc = my_send(sess, *sess->sock, databuf, rc);
+                  if (rc == -1)
+                  {
+                      if (errno != EWOULDBLOCK) /* Blocked data is queued */
+                      {
+                          sess->diverted_lines = NULL;
+                          sess->state = state_error;
+                          sess->rc = GROUP_SOCKET;
+                      }
+                      break;
+                  }
+                }
+                else
+		{
+		    dbg(("(7) transfer complete, closing socket\n"));
+                    rc = my_socketclose(&sess->server->datasock);
+                    sess->diverted_lines = NULL;
+
+                    if (rc == 0)
+                    {
+                        sess->sock = &sess->server->contsock;
+                        sess->state = state_done_transfer1;
+                        more = TRUE;
+                    }
+                    else
+                    {
+                        sess->state = state_error;
+                        sess->rc = GROUP_SOCKET;
+                    }
+                }
+                break;
+#endif
 
             case state_done_transfer:
                 sess->state = state_done_transfer1;
                 more = TRUE;
-                if (sess->file_failed)
+                if (sess->file_failed && !(sess->flags & webftp_open_NotHTML))
                     do_ftpdir_trailer(sess);
                 break;
 
@@ -2043,8 +2337,16 @@ static void progress_transfer(PSESS sess)
                 more = TRUE;
                 rem_from_list(&active_list, sess);
                 add_to_list(&done_list, sess);
-                sess->ftp_status = sess->file_failed ? status_COMPLETED_DIR : status_COMPLETED_FILE;
-                dbg(("Quitting server as finished with correctly\n"));
+                switch (sess->ftp_cmd)
+                {
+                  case FTP_CMD_GET : case FTP_CMD_PUT :
+                    sess->ftp_status = sess->file_failed ? status_COMPLETED_DIR : status_COMPLETED_FILE;
+                    break;
+                  default :
+                    sess->ftp_status = status_COMPLETED_GENERIC_COMMAND;
+                }
+
+                dbg(("(6) Quitting server as finished with correctly\n"));
                 disconnect_server(sess, TRUE);
                 break;
 
@@ -2216,7 +2518,7 @@ static void progress_transfer(PSESS sess)
                         }
                         break;
                     default:
-                        dbg(("pop prelim failure"));
+                        dbg2(("pop prelim failure"));
                         sess->state = state_error;
                         break;
                 }
@@ -2241,7 +2543,7 @@ static void progress_transfer(PSESS sess)
                         more = TRUE;
                         break;
                     default:
-                        dbg(("pop okay failure"));
+                        dbg2(("pop okay failure"));
                         sess->state = state_error;
                         break;
                 }
@@ -2255,7 +2557,7 @@ static void progress_transfer(PSESS sess)
                 break;
 
             case state_diagnostics:
-                dbg(("Quitting server as enter state_diagnostics\n"));
+                dbg(("(5) Quitting server as enter state_diagnostics\n"));
                 disconnect_server(sess, FALSE);
                 if (sess->Q[MULTIQ].used_bytes)
                 {
@@ -2274,7 +2576,7 @@ static void progress_transfer(PSESS sess)
             /* tidyup has quite a bit of careful work to do. */
 
             case state_error:
-                dbg(("Quitting server as entered state_error\n"));
+                dbg(("(5) Quitting server as entered state_error\n"));
                 disconnect_server(sess, FALSE);
                 tidy_up(sess);
                 more = FALSE;
@@ -2283,7 +2585,7 @@ static void progress_transfer(PSESS sess)
                 break;
 
             default:
-                dbg(("Unknown internal state %d\n", sess->state));
+                dbg(("(5) Unknown internal state %d\n", sess->state));
                 sess->state = state_error;
                 break;
         }
@@ -2392,25 +2694,25 @@ static void quit_servers(void)
         {
             if (serv->dont_reuse)
             {
-                dbg(("Server marked no no reuse - closing it\n"));
+                dbg2(("Server marked no no reuse - closing it\n"));
                 if (serv->sent_quit)
                 {
                     char buf[16];
                     int rc = recv(serv->contsock, buf, sizeof(buf), 0);
-                    dbg(("Response code to QUIT is %d\n", rc));
+                    dbg2(("Response code to QUIT is %d\n", rc));
                     if (rc == -1 && errno == EWOULDBLOCK)
                     {
                         ;
                     }
                     else if (rc != 0)
                     {
-                        dbg(("Closing control socket\n"));
+                        dbg2(("Closing control socket\n"));
                         (void) my_socketclose(&serv->contsock);
                     }
                 }
                 else
                 {
-                    dbg(("Sending QUIT to server\n"));
+                    dbg2(("Sending QUIT to server\n"));
                     if (send(serv->contsock, "QUIT\r\n", 6, 0) != 6)
                         (void) my_socketclose(&serv->contsock);
                     serv->sent_quit = 1;
@@ -2418,7 +2720,7 @@ static void quit_servers(void)
 
                 if (serv->contsock == -1)
                 {
-                    dbg(("Server control is closed - removing server\n"));
+                    dbg2(("Server control is closed - removing server\n"));
                     *servp = serv->next;
                     free_server(serv);
                     servers_to_quit -= 1;
@@ -2431,8 +2733,8 @@ static void quit_servers(void)
             {
                 if ((MONONOW - serv->last_used) > serv->maxidle)
                 {
-                    dbg(("Marking server for closure due to timeout\n"));
-                    serv->dont_reuse = 1;
+                    dbg2(("Marking server for closure due to timeout\n"));
+                    serv->dont_reuse = TRUE;
                 }
                 servp = &serv->next;
             }
@@ -2488,7 +2790,7 @@ extern RETURN_METHOD callback_handler(_kernel_swi_regs *regs, void *pw)
 
         if ( pending_list == NULL && active_list == NULL && done_list == NULL && server_list == NULL )
         {
-            dbg(("\n\n\nNo longer worth scheduling\n\n\n"));
+            dbg(("(6) No longer worth scheduling"));
             worth_scheduling = FALSE;
         }
 
@@ -2533,21 +2835,45 @@ static _kernel_oserror *allocate_SESS(ftp_open_args * args, PSESS *sessp)
     {
         GUARDED( make_error(GROUP_MEMORY) );
     }
+    /* move MAGIC assignment to straight after allocation */ 
+    sess->magic = MAGIC; 
+
+    dbg(("allocate_SESS %p",sess));
 
 #ifdef OLDCODE
     sess->contsock = -1;
-    sess->datasock = -1;
-    sess->ro_handle = -1;
-#endif
+    sess->datasock = -1;        /* ] ndt: moved back to the ifdef     */
+    #endif
+                                /* ] pdh: these were inside ifdef too */
+    sess->ro_handle = -1;       /* ]                                  */
 
     sess->resp1 = ' ';
     sess->resp2 = ' ';
     sess->resp3 = ' ';
     sess->resp4 = ' ';
-    sess->total_bytes = -1;         /* Don't know by default */
     sess->ftp_status = status_AWAITING_CONNECTION;
-
-    lname = args->in.local_name == NULL ? tmpnam(NULL) : args->in.local_name;
+    sess->flags      = args->in.flags;
+    sess->ftp_cmd    = (args->in.flags&webftp_open_ftpcmd)?args->in.ftp_cmd:0;
+    sess->extra      = NULL;
+    /*
+     * only check local name if doing a put or get
+     */
+    switch (sess->ftp_cmd)
+    {
+      case FTP_CMD_GET : case FTP_CMD_PUT :
+        lname = args->in.local_name == NULL?tmpnam(NULL):args->in.local_name;
+        sess->local_name = strdup(lname);
+        if (sess->local_name == NULL)
+          GUARDED( make_error(GROUP_MEMORY) );
+        break;
+      case FTP_CMD_RENAME :
+        sess->extra = strdup((args->in.flags&webftp_open_extra)?args->in.extra:NULL);
+        if (sess->extra == NULL)
+          GUARDED( make_error(GROUP_MEMORY) );
+        break;
+      default :
+        sess->local_name = NULL;
+    }
 
     cp = strrchr(args->in.path, DIRSEP);
 
@@ -2581,25 +2907,45 @@ static _kernel_oserror *allocate_SESS(ftp_open_args * args, PSESS *sessp)
     sess->user_name  = strdup(args->in.user_name);
     sess->passwd     = strdup(args->in.passwd);
     sess->acct       = strdup(args->in.acct);
-    sess->local_name = strdup(lname);
 
     if (sess->user_name  == NULL
     ||  sess->origpath   == NULL
     ||  sess->passwd     == NULL
     ||  sess->acct       == NULL
     ||  sess->origdir    == NULL
-    ||  sess->leaf       == NULL
-    ||  sess->local_name == NULL)
+    ||  sess->leaf       == NULL)
     {
         GUARDED( make_error(GROUP_MEMORY) );
     }
-
-    sess->ro_handle = ro_fopen(sess->local_name, RO_OPEN_WRITE);
-
-    if ( sess->ro_handle < 0 || reopen_file(sess) != GROUP_OKAY )
+#ifdef FTP_PUT
+    /* if we are doing a put, open file for read, otherwise write */
+    if (sess->local_name)
     {
+      switch (sess->ftp_cmd)
+      {
+        case FTP_CMD_PUT :
+          sess->ro_handle = ro_fopen(sess->local_name,RO_OPEN_READ);
+          ro_get_extent(sess->ro_handle, &sess->total_bytes);
+          break;
+        case FTP_CMD_GET :
+          sess->ro_handle = ro_fopen(sess->local_name,RO_OPEN_WRITE);
+          sess->total_bytes = -1;         /* Don't know by default */
+	  break;
+      }
+      if ( sess->ro_handle < 0)
         GUARDED( make_error(GROUP_FILE) );
     }
+#else
+    if (sess->local_name)
+    {
+      if (sess->ftp_cmd == FTP_CMD_GET)
+      {
+        sess->ro_handle = ro_fopen(sess->local_name, RO_OPEN_WRITE);
+        if ( sess->ro_handle < 0 || reopen_file(sess) != GROUP_OKAY )
+          GUARDED( make_error(GROUP_FILE) );
+      }
+    }
+#endif
 
     for (i = 0; i < NUMQS; i++)
     {
@@ -2609,9 +2955,11 @@ static _kernel_oserror *allocate_SESS(ftp_open_args * args, PSESS *sessp)
         }
     }
 
-    sess->magic = MAGIC;
     sess->maxidle = args->in.maxidle;
     memcpy(&sess->servaddr, args->in.addr, sizeof(struct sockaddr));
+#ifdef CSFS
+    sess->error_msg=NULL;
+#endif
     *sessp = sess;
 
     return NULL;
@@ -2650,8 +2998,6 @@ extern _kernel_oserror *do_swi_open(ftp_open_args * args)
     {
         GUARDED( make_error(GROUP_FILE) );
     }
-
-    dbg(("Path is %s\n", args->in.path));
 
     GUARDED( allocate_SESS(args, &sess) );
 
@@ -2732,7 +3078,7 @@ extern _kernel_oserror *do_swi_close(ftp_close_args * args)
     if ( (flags & webftp_close_DELETE_FILE) != 0 && sess->local_name != NULL )
         ro_unlink(sess->local_name);
     tidy_up(sess);
-    sess->magic = ~ MAGIC;      /* Which cannot be MAGIC */
+    /* removed assignment to ~MAGIC from here */
     worth_tidying_up = TRUE;
 
     return NULL;
@@ -2758,6 +3104,259 @@ extern _kernel_oserror *do_swi_closeidle(ftp_closeidle_args * args)
     return NULL;
 }
 
+#ifdef CSFS
+/*
+ * munge the filename
+ */
+_kernel_oserror *
+munge_filename(char *mount_path, char *input_filename, int file_type, char **output_file)
+{
+  int i;
+  char *input_path=NULL;
+  char *output_path=NULL;
+
+  input_path=input_filename;   /* make sure we don't trash input string */
+
+  if (input_path!=NULL)       /* is it a null string */
+    if (*input_path==0)
+      input_path=NULL;
+
+  /*
+   * need our own copy of string to play with
+   */
+  output_path = malloc((mount_path==NULL?0:strlen(mount_path))+
+                       (input_path==NULL?1:strlen(input_path))+6);
+
+  if (output_path==NULL)
+    return (make_error(GROUP_MEMORY));
+
+  if (mount_path)
+    strcpy(output_path,mount_path);
+  else
+    strcpy(output_path,"");
+
+  if (output_path[strlen(output_path)-1]!='/')
+    strcat(output_path,"/");
+
+  if (input_path)
+  {
+    i=strlen(output_path);
+    strcat(output_path,input_path);  /* take a copy */
+    while (output_path[i]!=0)        /* swap '.' with '/' */
+    {
+      if (output_path[i]=='.')
+        output_path[i]='/';
+      else if (output_path[i]=='/')
+        output_path[i]='.';
+      i++;
+    }
+  }
+
+  /*
+   * sort filetype out
+   */
+  if (file_type!=0 && file_type !=0xfff)  /* append the file type to filename */
+  {
+    char exten[6];
+    sprintf(exten,",%03x",file_type);
+    strcat(output_path,exten);
+  }
+  *output_file = output_path;
+
+  return (NULL);
+}
+
+/*
+ * implement the CSFS service swi
+ */
+extern _kernel_oserror *do_swi_csfs_service(_kernel_swi_regs *r)
+{
+  ftp_open_args open_args;
+  ftp_close_args close_args;
+  ftp_status_args status_args;
+  _kernel_oserror *err=NULL;
+  struct sockaddr_in sockaddr_in;
+  char *path=NULL;
+  char *new_path=NULL;
+  char *remote_filename=NULL;
+  char *mount_path=NULL;
+  int  file_type;
+  csfs_info *file_info;
+  settype_info *type_info;
+  int abort_command=0; /* used to stop command */
+  struct sess *session;
+  static progress_info file_progress;
+
+  memset(&sockaddr_in, 0, sizeof(sockaddr_in));
+
+  switch (r->r[0])
+  {
+    case CSFS_CLOSE :
+      close_args.in.session = (struct sess*)r->r[2];
+      ERR_GOTO(err,do_swi_close(&close_args));
+
+      break;
+    case CSFS_STATUS :
+      session = (struct sess*)r->r[2];
+      status_args.in.session = session;
+      ERR_GOTO(err,do_swi_status(&status_args));
+      if (status_args.out.status >= status_COMPLETED_FILE)
+      {
+        switch (status_args.out.status)
+        {
+          case status_COMPLETED_FILE : case status_COMPLETED_DIR :
+          case status_COMPLETED_GENERIC_COMMAND :
+            r->r[0] = 0;
+	    dbg(("(7) session->total bytes : %d",session->total_bytes));
+            dbg(("(5) finished things"));
+            break;
+          default :
+            dbg(("(5) generating CSFS transport error\n"));
+            err=make_error(ERROR_CSFS);
+            if (session->error_msg)
+            {
+              int space = 251-strlen(err->errmess); /* number of safe chars */
+              if (space>0)
+              {
+                strcat(err->errmess," ");
+                strncat(err->errmess,session->error_msg,space);
+              }
+            }
+	}
+      }
+      else
+       r->r[0] = -1;  /* still progressing */
+
+      r->r[3] = NULL;  /* assume the worst */
+      switch (session->ftp_cmd)
+      {
+        case FTP_CMD_GET : case FTP_CMD_PUT :
+          if (session->total_bytes == -1)
+          {
+            file_progress.total = 0;
+            file_progress.sofar = 0;
+          }
+          else
+          {
+            file_progress.total = session->total_bytes;
+            file_progress.sofar = session->bytes_so_far;
+          }
+          r->r[3] = (int)&file_progress;
+      }
+      break;
+    default :
+      mount_path = (char*)r->r[3];
+      remote_filename = (char*)r->r[4];
+      sockaddr_in.sin_family = AF_INET;
+      /*
+       * deal with port number being specified
+       */
+      if (r->r[1] & 1<<0)
+      {
+        host_info *host = (host_info*)r->r[2];
+        /* default to port 21 */
+        sockaddr_in.sin_port = htons((host->port==0)?21:host->port);
+        sockaddr_in.sin_addr.s_addr = (unsigned int)htonl(host->addr);
+      }
+      else
+      {
+        sockaddr_in.sin_port = htons(21);
+        sockaddr_in.sin_addr.s_addr = (unsigned int)htonl(r->r[2]);
+      }
+
+      open_args.in.addr = &sockaddr_in;
+      open_args.in.user_name = (char*)r->r[5];
+      open_args.in.passwd = (char*)r->r[6];
+      if (r->r[0]==CSFS_SETTYPE)
+      {
+        type_info = (settype_info*)r->r[8];
+        file_type = type_info->old;
+      }
+      else
+      {
+        file_info = (csfs_info*)r->r[8];
+        /*
+         * extract file type info from supplied data
+         */
+        if (file_info==NULL)
+          file_type = 0;
+        else
+          file_type = (file_info->load_addr)>>8&0xfff; /* load addr */
+      }
+      ERR_GOTO(err,munge_filename(mount_path,remote_filename,file_type,&path));
+
+      /*
+       * fill in the args
+       */
+      open_args.in.path = path;
+      open_args.in.acct = NULL;
+      open_args.in.local_name = (char*)r->r[7];
+      open_args.in.flags = webftp_open_NotHTML | webftp_open_ftpcmd |
+      			   webftp_open_extra;
+      open_args.in.maxidle = 1000; /* timeout after 10 seconds */
+      open_args.in.extra = NULL;
+
+      dbg(("(6) path       : %s",path));
+      dbg(("(6) local name : %s",open_args.in.local_name?open_args.in.local_name:"(NULL)"));
+      dbg(("(6) host       : 0x%08x",r->r[2]));
+      dbg(("(6) user       : %s",open_args.in.user_name));
+
+      switch (r->r[0])
+      {
+        case CSFS_GET :
+          open_args.in.ftp_cmd = FTP_CMD_GET;
+          break;
+        case CSFS_PUT :
+          open_args.in.ftp_cmd = FTP_CMD_PUT;
+          break;
+        case CSFS_DELETE :
+          open_args.in.ftp_cmd = FTP_CMD_DELETE;
+          break;
+        case CSFS_RMDIR :
+          open_args.in.ftp_cmd = FTP_CMD_RMDIR;
+          break;
+        case CSFS_MKDIR :
+          open_args.in.ftp_cmd = FTP_CMD_MKDIR;
+          break;
+	case CSFS_RENAME :
+          open_args.in.ftp_cmd = FTP_CMD_RENAME;
+          if (r->r[7])
+          {
+            ERR_GOTO(err,munge_filename(mount_path,(char*)r->r[7],file_type,&new_path));
+            open_args.in.extra = new_path;
+          }
+          else
+            abort_command = 1;
+          break;
+        case CSFS_SETTYPE :
+          open_args.in.ftp_cmd = FTP_CMD_RENAME;
+          ERR_GOTO(err,munge_filename(mount_path,remote_filename,type_info->new,&new_path));
+          open_args.in.extra = new_path;
+
+          break;
+        default :
+          abort_command = 1;
+      }
+      dbg2(("CSFS cmd %d\n",open_args.in.ftp_cmd));
+      if (abort_command)
+      {
+        ERR_GOTO(err,make_error(ERROR_CSFS));
+      }
+      else
+      {
+        ERR_GOTO(err,do_swi_open(&open_args));
+        r->r[0] = (int)open_args.out.session;
+      }
+  }
+exit_gracefully:
+  if (path)
+    free(path);
+  if (new_path)
+    free(new_path);
+
+  return (err);
+}
+#endif
 
 /***********************/
 /*                     */
@@ -2788,7 +3387,11 @@ extern _kernel_oserror *swi_handler(unsigned int swinum, _kernel_swi_regs *regs,
         case 3:
             GUARDED( do_swi_closeidle((ftp_closeidle_args *) regs) );
             break;
-
+#ifdef CSFS
+        case 4:
+            GUARDED( do_swi_csfs_service(regs) );
+            break;
+#endif
         default:
             GUARDED( make_error(ERROR_NO_SUCH_SWI) );
             break;
@@ -2816,9 +3419,11 @@ extern _kernel_oserror *cli_handler(char *arg_string, int arg_count, unsigned in
     {
         case 0:
             dump_state();
+#ifdef DEBUG_MALLOC
+            db_check();
+#endif          
             return NULL;
             break;
-
         default:
             return make_error(ERROR_UNKNOWN_COMMAND);
             break;
@@ -2841,8 +3446,36 @@ static void quit_list(PSESS *listp)
     }
 }
 
-static void quit(void)
+/*
+ * pick up on the CSFS starting service call and register ourselves
+ */
+#ifdef CSFS
+void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 {
+  _kernel_swi_regs reg;
+
+  reg.r[0] = 0;
+  reg.r[1] = (int)CSFS_ServiceName;
+  reg.r[2] = WebFTP_CSFSService;
+  reg.r[3] = WebFTP_CSFSFeatures;
+  /*
+   * ignore error
+   */
+  _kernel_swi(CSFS_Register,&reg,&reg);
+}
+#endif
+/*****************************************************************************/
+
+#if CMHG_FINALISE
+extern void module_finalise(int fatal, int podule, void *pw)
+#else
+extern void module_finalise(void)
+#endif
+{
+#ifdef CSFS
+    _kernel_swi_regs reg;
+#endif
+
     ENTER_MUTEX
 
         release_events();
@@ -2850,6 +3483,14 @@ static void quit(void)
 
     EXIT_MUTEX;
 
+#ifdef CSFS
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceName;
+    /*
+     * ignore error
+     */
+    _kernel_swi(CSFS_DeRegister,&reg,&reg);
+#endif
     quit_list(&pending_list);
     quit_list(&active_list);
 
@@ -2863,23 +3504,65 @@ static void quit(void)
     while (server_list != NULL)
     {
         PSERVER next = server_list->next;
-        dbg(("Quit WebFTP\n"));
         free_server(server_list);
         server_list = next;
     }
+#ifdef DEBUG_MALLOC
+    db_check();
+#endif
+
+#ifdef REMOTE_DEBUG
+    debug_printf(db,"(5) finalisation");
+    remote_debug_close(db);
+#endif
 }
 
 /*****************************************************************************/
+#ifdef REMOTE_DEBUG
+void
+_debug_printf(char *format, ...)
+{
+  char debug_line[256];
+  va_list list;
+
+  va_start (list, format);
+  vsprintf(debug_line,format, list);
+  va_end(list);
+
+  debug_printf(db,"%s",debug_line);
+}
+
+#endif
 
 extern _kernel_oserror *initialise(char *cmd_tail, int pbase, void *pw)
 {
     _kernel_oserror *ep = NULL;
-
+#ifdef CSFS
+    _kernel_swi_regs reg;
+#endif
     private_word = pw;
 
     GUARDED( claim_events() );
-    atexit(quit);
 
+#if !CMHG_FINALISE
+    /* pdh: pretty b****rf***ing important to do this!!! */
+    atexit( &module_finalise );
+#endif
+    
+#ifdef CSFS
+    reg.r[0] = 0;
+    reg.r[1] = (int)CSFS_ServiceName;
+    reg.r[2] = WebFTP_CSFSService;
+    reg.r[3] = WebFTP_CSFSFeatures;
+    /*
+     * ignore error
+     */
+    _kernel_swi(CSFS_Register,&reg,&reg);
+#endif
+
+#ifdef REMOTE_DEBUG
+    remote_debug_open("WebFTP",&db);
+#endif
     return NULL;
 
 bad:
