@@ -53,39 +53,43 @@ C_DEBUG_OFF	= -DNDEBUG
 # Local
 
 all:
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX= EXT=o
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX=_M EXT=z
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX= EXT=o
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX=_M EXT=z
 	@echo $(COMPONENT): build complete
 
 debug:
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_ON) LIBSUFFIX=_D EXT=od
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_ON) LIBSUFFIX=_M_D EXT=odz
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_ON) LIBSUFFIX=_D EXT=od
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_ON) LIBSUFFIX=_M_D EXT=odz
 	@echo $(COMPONENT): debug build complete
 
 preprocess:
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) EXT=i
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) EXT=i
 	@echo $(COMPONENT): preprocessing complete
 
 
 export: export_$(PHASE)
 
 export_hdrs:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
 	@echo $(COMPONENT): export complete (hdrs)
 
 export_libs:
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX= EXT=o
-	@amu -f MainMake $(MFLAGS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX=_M EXT=z
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX= EXT=o
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXTRA_C_FLAGS=$(C_DEBUG_OFF) LIBSUFFIX=_M EXT=z
 	@echo $(COMPONENT): export complete (libs)
 	
 clean:
-	@amu -f MainMake $(MFLAGS) EXT=o
-	@amu -f MainMake $(MFLAGS) EXT=z
-	@amu -f MainMake $(MFLAGS) EXT=od
-	@amu -f MainMake $(MFLAGS) EXT=odz
-	@amu -f MainMake $(MFLAGS) EXT=i
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXT=o
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXT=z
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXT=od
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXT=odz
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) EXT=i
 	@$(WIPE) l	$(WFLAGS)
 	@$(STRIPDEPND) MainMake
 	@echo $(COMPONENT): cleaned
+
+test:
+	@echo MFLAGS       ${MFLAGS}
+	@echo MAKECMDGOALS ${MAKECMDGOALS}
 
 # Dynamic dependencies:
