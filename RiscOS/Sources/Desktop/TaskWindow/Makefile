@@ -104,6 +104,7 @@ rm.TaskWindow: Hdr:FSNumbers
 rm.TaskWindow: Hdr:NewErrors
 rm.TaskWindow: Hdr:Variables
 rm.TaskWindow: Hdr:MsgTrans
+rm.TaskWindow: Hdr:FPEmulator
 rm.TaskWindow: Version
 rm.TaskWindow: "s.Messages"
 rm.TaskWindow: Hdr:NDRDebug
