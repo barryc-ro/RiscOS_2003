@@ -269,13 +269,13 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	int dist1 = -1, secdist1 = INT_MAX;
 	BOOL on_screen = FALSE;
 
-	LKDBG((stderr, "                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1));
+/* 	LKDBG((stderr, "                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1)); */
 
 	if (link->item.tag == doc_selection_tag_TEXT)
 	{
 	    if (start_aref != NULL && link->item.data.text->aref == start_aref)	/* mustn't be part of same link */
 	    {
-		LKDBG((stderr, "                        : same aref\n"));
+/* 		LKDBG((stderr, "                        : same aref\n")); */
 		continue;
 	    }
 	}
@@ -295,7 +295,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	/* if not visible then continue on to next immediately */
 	if (!on_screen)
 	{
-	    LKDBG((stderr, "                        : not on screen\n"));
+/* 	    LKDBG((stderr, "                        : not on screen\n")); */
 	    continue;
 	}
 	
@@ -688,7 +688,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
     /* check for highlighting needed */
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
-	BOOL item_changed = item != ti && (item == NULL || item->aref != ti->aref);
+	BOOL item_changed = item != ti && (item == NULL || item->aref == NULL || item->aref != ti->aref);
 
 	/* de highlight original only if the highlight has ended up changing */
         if (item_changed && item && (flags & be_link_ONLY_CURRENT) == 0)
@@ -700,10 +700,13 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
 	    LKDBG((stderr, "New link at %p\n", ti));
 
-	    if ((flags & be_link_VISIBLE) == 0 && stream_find_item_location(ti, &x, &y))
+	    if ((flags & be_link_VISIBLE) == 0 || (flags & be_link_MOVE_POINTER))
+		stream_find_item_location(ti, &x, &y);
+	    
+	    if ((flags & be_link_VISIBLE) == 0)
 	    {
 #if USE_MARGINS
-	        frontend_view_ensure_visable(doc->parent, x, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
+		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
 #else
 		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up, y - ti->max_down);
 #endif
@@ -727,6 +730,9 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		    antweb_place_caret(doc, NULL, -1);
 		    backend_update_link(doc, ti, 1);
 		}
+
+		if (flags & be_link_MOVE_POINTER)
+		    frontend_pointer_set_position(doc->parent, x + ti->width/2, y);
 	    }
         }
     }

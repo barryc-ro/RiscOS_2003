@@ -22,6 +22,7 @@
 
 #include "object.h"
 #include "version.h"
+#include "gbf.h"
 
 #ifdef STBWEB
 #define RFLAGS (render_plinth_NOFILL | render_plinth_THIN | render_plinth_IN)
@@ -90,7 +91,7 @@ void opbreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 void obreak_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {
 #ifndef BUILDERS
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     if (ti->tag == rid_tag_HLINE)

@@ -104,6 +104,7 @@ Music used:
 #include "htmlparser.h"
 #include "tables.h"
 #include "dump.h"
+#include "gbf.h"
 
 /*****************************************************************************/
 
@@ -1674,6 +1675,12 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     /* Link structures together */
 
+
+    /* DAF: 970319: moving unexpected characters to the */
+    /* last available stream might wish to alter the aref */
+    /* list order that we are creating here. @@@@ */
+
+
     rtit->table = tab;
     tab->parent = rtit;
     nb = &rtit->base;
@@ -1728,14 +1735,19 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     }
 
 
-    /* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
-    if ((nb->flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0)
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
     {
-	rid_text_item *ti;
-	if ( (ti = me->rh->curstream->text_last) != NULL )
-	    ti->flag |= rid_flag_LINE_BREAK;
+	/* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
+	if ((nb->flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0)
+	{
+	    rid_text_item *ti;
+	    if ( (ti = me->rh->curstream->text_last) != NULL )
+		ti->flag |= rid_flag_LINE_BREAK;
+	    /* DAF: 970319: don't put back with NEW_UNEXP_TABLE */
 /* 	text_item_ensure_break(me); */
+	}
     }
+
 #if 0
     text_item_push_word(me, rid_flag_NO_BREAK, FALSE); /* empty item stuck to the front */
     nb->flag |= rid_flag_NO_BREAK;		       /* table sticks to empty item afterwards */
@@ -1837,26 +1849,31 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     }
 #endif
 
-    rid_text_item_connect(me->rh->curstream, &rtit->base);
-
-    /* Switch over to the caption stream until we know better */
-
     tab->oldstream = me->rh->curstream;
     tab->oldtable = me->table;
-    /* NULL is the most dangerous choice, but won't matter */
-    /* if everything else is correct. */
-    me->rh->curstream = NULL;
     me->table = tab;
+
+    if (gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	PRSDBG(("Delaying connecting the table to the stream\n"));
+    }
+    else
+    {
+	rid_text_item_connect(me->rh->curstream, &rtit->base);
+
+	/* NULL is the most dangerous choice, but won't matter */
+	/* if everything else is correct. */
+	me->rh->curstream = TABLE_NULL;
+    }
 
     TABDBGN(("Started table %p, current stream now %p\n", tab, me->rh->curstream));
 
-#if 0 && DEBUG
-    dump_table(tab, NULL);
-#endif
-
     /* Patch in handler for <TABLE><H1> corrections */
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 /*****************************************************************************
@@ -1897,6 +1914,22 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 
     me->rh->curstream = table->oldstream;
     me->table = table->oldtable;
+
+    if (gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	rid_text_item *nb = &table->parent->base;
+
+	PRSDBG(("Delayed table text item connection now happening.\n"));
+
+	/* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
+	if ((nb->flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0)
+	{
+	    rid_text_item *ti;
+	    if ( (ti = me->rh->curstream->text_last) != NULL )
+		ti->flag |= rid_flag_LINE_BREAK;
+	}
+	rid_text_item_connect(me->rh->curstream, &table->parent->base);
+    }
 
     /* So formatter can handle floating tables easier */
     table->flags |= rid_tf_FINISHED;
@@ -2976,9 +3009,12 @@ extern void startth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
   apply background colours and bother doing the rid_getprop() call at
   all.
 
+  NEW_UNEXP_TABLE: Leave custream as is, so between cells we have a
+  defined place to put unexpected text.
+
  */
 
-extern void finishtd (SGMLCTX * context, ELEMENT * element)
+static void finish_thtd (SGMLCTX * context, ELEMENT * element)
 {
     HTMLCTX *me = htmlctxof(context);
     rid_table_cell *cell;
@@ -2986,7 +3022,7 @@ extern void finishtd (SGMLCTX * context, ELEMENT * element)
 
     generic_finish (context, element);
 
-/*     TASSERT(me->partype == rid_pt_CELL); */
+/*    TASSERT(me->partype == rid_pt_CELL);*/
     cell = (rid_table_cell *)(me->rh->curstream->parent);
 
     rid_getprop(cell->parent, cell->cell.x, cell->cell.y, rid_PROP_BGCOLOR, &i);
@@ -2999,9 +3035,12 @@ extern void finishtd (SGMLCTX * context, ELEMENT * element)
 
 extern void finishth (SGMLCTX * context, ELEMENT * element)
 {
-    generic_finish (context, element);
+    finish_thtd(context, element);
+}
 
-/*     sgml_install_deliver(context, &table_deliver); */
+extern void finishtd (SGMLCTX * context, ELEMENT * element)
+{
+    finish_thtd(context, element);
 }
 
 /*****************************************************************************/

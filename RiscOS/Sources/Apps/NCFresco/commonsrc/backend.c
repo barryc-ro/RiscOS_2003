@@ -704,6 +704,11 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 		f |= be_item_info_INPUT;
 		break;
 	    case rid_it_IMAGE:
+		/* Do set the ISMAP flag for an IMAGE unless the NOCURSOR flag is set */
+		if (imh && (ii->flags & rid_if_NOCURSOR) == 0)
+		    f |= be_item_info_ISMAP;
+		/* deliberate fall-through */
+
 	    case rid_it_SUBMIT:
 		f |= be_item_info_ACTION;
 		if (ii->base.parent->action)
@@ -716,10 +721,6 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 		    /* Don't set the link flag, use the fact that be_item_info_ACTION is set */
 		    if (link)
 			*link = ii->base.parent->action;
-
-		    /* Do set the ISMAP flag for an image SUBMIT unless the NOCURSOR flag is set */
-		    if (imh && (ii->flags & rid_if_NOCURSOR) == 0)
-			f |= be_item_info_ISMAP;
 		}
 		break;
 	    case rid_it_RESET:
@@ -2791,7 +2792,7 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
         /* Then get min|max widths for tables */
         rid_size_stream(rh, st, &fmt, 0, ti);
 
-	{ static int be_really_really_cautious_about_whether_want_this_feature; }
+	{ static int BE_REALLY_REALLY_CAUTIOUS_ABOUT_WHETHER_WANT_THIS_FEATURE; }
 
 #if 1
 #if DEBUG
@@ -5355,43 +5356,59 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 
 	while (ti)
 	{
+	    rid_aref_item *aref = ti->aref;
+	    char *this_id;
+
+	    /* first check for an anchor match */
+	    if (aref && aref != last_aref)
+	    {
+		switch (ti->tag)
+		{
+		case rid_tag_TEXT:
+		case rid_tag_IMAGE:
+		    if (aref->name && strcmp(aref->name, id) == 0)
+			return ti;
+		    break;
+
+		case rid_tag_INPUT:
+		case rid_tag_TEXTAREA:
+		case rid_tag_SELECT:
+		    if ((aref->flags & rid_aref_LABEL) && aref->name && strcmp(aref->name, id) == 0)
+			return ti;
+		    break;
+		}
+		last_aref = aref;
+	    }
+
+	    /* then get the id for this item */
+	    this_id = NULL;
 	    switch (ti->tag)
 	    {
-	    case rid_tag_TEXT:
-	    case rid_tag_IMAGE:
-		if (ti->aref && ti->aref != last_aref)
-		{
-		    if (ti->aref->name && strcmp(ti->aref->name, id) == 0)
-			return ti;
-		    last_aref = ti->aref;
-		}
-		break;
-
 	    case rid_tag_INPUT:
-		if (strcmp(((rid_text_item_input *)ti)->input->base.id, id) == 0)
-		    return ti;
+		this_id = ((rid_text_item_input *)ti)->input->base.id;
 		break;
 
 	    case rid_tag_TEXTAREA:
-		if (strcmp(((rid_text_item_textarea *)ti)->area->base.id, id) == 0)
-		    return ti;
+		this_id = ((rid_text_item_textarea *)ti)->area->base.id;
 		break;
 
 	    case rid_tag_SELECT:
-		if (strcmp(((rid_text_item_select *)ti)->select->base.id, id) == 0)
-		    return ti;
+		this_id = ((rid_text_item_select *)ti)->select->base.id;
 		break;
 
 	    case rid_tag_OBJECT:
-		if (strcmp(((rid_text_item_object *)ti)->object->id, id) == 0)
-		    return ti;
+		this_id = ((rid_text_item_object *)ti)->object->id;
 		break;
 
 	    case rid_tag_TABLE:
-		if (strcmp(((rid_text_item_table *)ti)->table->id, id) == 0)
-		    return ti;
+		this_id = ((rid_text_item_table *)ti)->table->id;
 		break;
 	    }
+
+	    /* and compare what is going in */
+	    if (this_id && strcmp(this_id, id) == 0)
+		return ti;
+
 	    ti = rid_scanfr(ti);
 	}
     }

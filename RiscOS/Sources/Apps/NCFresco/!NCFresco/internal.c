@@ -549,7 +549,7 @@ static os_error *fe_custom_write_file(FILE *f, const char *tag, const char *nvra
     val = nvram_op(nvram_tag, bit_start, vals_to_bits(n_vals), 0, FALSE);
     
     sprintf(tag_buf, "m%sT", tag);
-    fputs(msgs_lookup(tag_buf), f);
+    fprintf(f, msgs_lookup(tag_buf), val);
 
     for (i = 0; i < n_vals; i++)
     {
@@ -831,11 +831,16 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
     
     if (strcasecomp(panel_name, "related") == 0)
     {
-	v = get_source_view(query, FALSE);
+	v = get_source_view(query, TRUE);
+
+	STBDBG(("internal_url: related %s v%p\n", query, v));
 
 	if (config_document_handler_related && v && v->displaying)
 	{
 	    char *match;
+
+	    STBDBG(("internal_url: related %s\n", config_document_handler_related));
+
 	    if (backend_doc_info(v->displaying, NULL, NULL, NULL, &match) == NULL &&
 		match)
 	    {
@@ -848,9 +853,12 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 		url_escape_cat(s, match, total_len);
 
 		*new_url = s;
+		*flags |= access_NOCACHE;
 		generated = fe_internal_url_REDIRECT;
 
 		tb_status_button(fevent_OPEN_RELATED_STUFF, TRUE);
+
+		STBDBG(("internal_url: related %s\n", s));
 	    }
 	}
     }
@@ -979,23 +987,32 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 static int internal_url_loadurl(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *url = extract_value(query, "url=");
-    char *nocache = extract_value(query, "opt=");
-    char *remove = extract_value(query, "remove=");
+    int generated = fe_internal_url_ERROR;
 
-    if (nocache && strcasestr(nocache, "nocache"))
-	*flags |= access_NOCACHE;
+    if (url && url[0])
+    {
+	char *nocache = extract_value(query, "opt=");
+	char *remove = extract_value(query, "remove=");
+
+	if (nocache && strcasestr(nocache, "nocache"))
+	    *flags |= access_NOCACHE;
+
     
-    *new_url = check_url_prefix(url);
+	*new_url = check_url_prefix(url);
 
-    if (remove)
-	fe_dispose_view(fe_locate_view(remove));
+	if (remove)
+	    fe_dispose_view(fe_locate_view(remove));
 
-    tb_status_button(fevent_OPEN_URL, FALSE);
+	tb_status_button(fevent_OPEN_URL, FALSE);
        
+	mm_free(nocache);
+	mm_free(remove);
+
+	generated = fe_internal_url_REDIRECT;
+    }
+
     mm_free(url);
-    mm_free(nocache);
-    mm_free(remove);
-    return fe_internal_url_REDIRECT;
+    return generated;
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);

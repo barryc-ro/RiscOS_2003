@@ -27,6 +27,9 @@
 #define MAX_TEXT_LINE 1024
 #endif
 
+/* Wish to track propogation of this value. */
+#define TABLE_NULL		((void*)1)
+
 /*user count times two*/
 
 #define DEFAULT_BORDER		2
@@ -791,8 +794,10 @@ struct rid_fmt_state
 /* pos_fvpr and text_fvpr only for top level stream */
 struct rid_text_stream {
     rid_pos_item *pos_list,	/* First in list */
-	*pos_last,		/* Last in list */
+	*pos_last;		/* Last in list */
+#if 0
 	*pos_fvpr;		/* FVPR ptr */
+#endif
     rid_text_item *text_list,	/* First in list */
 	*text_last,		/* Last in list */
 	*text_fvpr;		/* FVPR ptr */

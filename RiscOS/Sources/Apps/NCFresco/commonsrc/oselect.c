@@ -34,6 +34,7 @@
 #include "rcolours.h"
 
 #include "object.h"
+#include "gbf.h"
 
 /* Option to use current font rather than fixed font */
 #ifndef SELECT_CURRENT_FONT
@@ -243,12 +244,23 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     int checked = 0;
     char *str = NULL;
     font_string fstr;
+    BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED);
+    int fg, bg;
 
-    int bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back;
-    int fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
-
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
+
+    if (draw_selection_box && sel->base.colours.select != -1)
+    {
+	draw_selection_box = FALSE;
+	bg = sel->base.colours.select | render_colour_RGB;
+    }
+    else
+    {
+	bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back | render_colour_RGB;
+    }
+
+    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 
     render_plinth(bg, render_plinth_IN,
 		  hpos, bline - ti->max_down,
@@ -302,7 +314,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	render_plot_icon("gright", hpos + ti->width - 48, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
 
     /* SJM */
-    if (ti->flag & rid_flag_SELECTED)
+    if (draw_selection_box)
     {
 	render_set_colour(render_colour_HIGHLIGHT, doc);
 	render_item_outline(ti, hpos, bline);

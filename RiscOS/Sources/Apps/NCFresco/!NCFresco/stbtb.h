@@ -26,6 +26,7 @@ extern void tb_status_update_fades(fe_view v);
 extern void tb_status_resize(int xdiff, int ydiff);
 extern int tb_status_redraw(wimp_redrawstr *r);
 extern void tb_status_refresh_if_small(void);
+extern void tb_status_box(wimp_box *box);
 
 #define light_state_OFF         0
 #define light_state_CONNECTING  1

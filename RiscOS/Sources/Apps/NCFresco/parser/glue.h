@@ -153,12 +153,11 @@ where U: underline, b: bold, A: align, V: valign, S: sub/sup, X: strike-through,
 #define rid_sf_SUP		( STYLE_SUP << STYLE_SUP_SHIFT )
 
 /* 10 RESERVED !! (Borris might have a use for it during progressive rendering) */
-#if 0
-#define RESERVED_SIZE		0x0001
-#define RESERVED_SIZE_MASK	0x0001
-#define RESERVED_SIZE_SHIFT	10
-#define rid_sf_ADJUSTED_SIZE		( RESERVED_SIZE << RESERVED_SIZE_SHIFT )
-#endif
+#define STYLE_RESERVED			0x0001
+#define STYLE_RESERVED_MASK		0x0001
+#define STYLE_RESERVED_SHIFT		10
+/*#define rid_sf_ADJUSTED_SIZE		( RESERVED_SIZE << RESERVED_SIZE_SHIFT )*/
+#define rid_sf_RESERVED			( RESERVED_SIZE << RESERVED_SIZE_SHIFT )
 
 /* 11 strikethrough */
 

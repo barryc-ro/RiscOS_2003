@@ -50,6 +50,7 @@ static char char_decode[256];
 static void dump_stack(SGMLCTX *ctx)
 {
     STACK_ITEM *item = ctx->tos;
+    char *dir = "vvvv";
 
 #if !DEBUG_STACK
     return;
@@ -69,13 +70,18 @@ static void dump_stack(SGMLCTX *ctx)
 
     while (item != NULL)
     {
+	if (item == ctx->tos)
+	    dir = "    ";
 #if 0
 	PRSDBG(("This %p, outer %p(%p), inner %p(%p)\n",
 		item, item->outer, &item->outer, item->inner, &item->inner));
 #else
-	PRSDBG(("This %p, fx %08x, outer %p, inner %p: %s\n", 
-		item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
+	PRSDBG(("%s %p, fx %08x, outer %p, inner %p: %s\n", 
+		dir, item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
 #endif
+
+	if (ctx->tos == item)
+	    dir = "^^^^";
 	item = item->inner;
     }
 }
@@ -901,6 +907,13 @@ extern void pop_stack(SGMLCTX *context)
 	PRSDBG(("stack underflow\n"));
 	sgml_note_stack_underflow(context);
     }
+
+#if DEBUG
+    new_tos = context->tos;
+    PRSDBGN(("pop_stack(): tos %p, inner %p, outer %p\n", 
+	     new_tos, new_tos->inner, new_tos->outer));
+    dump_stack(context);
+#endif
 }
 
 /*****************************************************************************/

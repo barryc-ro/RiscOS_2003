@@ -142,21 +142,36 @@ extern os_error *ensure_modem_line(void);
 typedef enum
 {
     key_action_NO_ACTION,
-    key_action_NEWLINE,
+    key_action_NEWLINE,			/* newline, submit if only this is the onyl TEXT/PASSWD */
+    key_action_NEWLINE_SUBMIT_ALWAYS,	/* newline, always submit if TEXT or PASSWD */
+    key_action_NEWLINE_SUBMIT_LAST,	/* newline, submit if the last TEXT or PASSWD */
     key_action_DELETE_LEFT,
     key_action_DELETE_RIGHT,
     key_action_DELETE_ALL,
+    key_action_DELETE_ALL_AREA,
     key_action_DELETE_TO_END,
     key_action_DELETE_TO_START,
     key_action_LEFT,
     key_action_RIGHT,
+    key_action_UP,
+    key_action_DOWN,
     key_action_START_OF_LINE,
     key_action_END_OF_LINE,
-    key_action_UP,
-    key_action_DOWN
+    key_action_START_OF_AREA,
+    key_action_END_OF_AREA
 } input_key_action;
 
+typedef struct
+{
+    int key;
+    input_key_action action;
+} input_key_map;
+
+
+
+extern void set_input_key_map(input_key_map *map);
 extern input_key_action lookup_key_action(int key);
+
 extern int cmos_op(int bit_start, int n_bits, int new_val, BOOL write);
 extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write);
 
@@ -226,5 +241,7 @@ extern void sound_event(sound_event_t event_num);
 #else
 #define sound_event(e) /*NOT_USED(e)*/
 #endif
+
+extern void pointer_set_position(int x, int y);
 
 /* eof util.h */

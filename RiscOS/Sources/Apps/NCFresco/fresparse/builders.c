@@ -301,7 +301,7 @@ extern void htmlriscos_colour(VALUE *col, int *word)
   thinking about. Zero or one spaces are automaticaly appended, according
   to the boolean space parameter. The string in htmlctx is freed after use.
 
-  I the rid_flag_SOLO_SPACE option is provided, then an item with zero normal
+  If the rid_flag_SOLO_SPACE option is provided, then an item with zero normal
   width but with a padding is entered.
 
   */

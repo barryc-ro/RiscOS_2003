@@ -766,24 +766,6 @@ void fe_get_wimp_caret(wimp_w w)
     wimp_set_caret_pos(&c);
 }
 
-/*
- * Set the mouse pointer to a given screen coordinate
- */
-
-#define osword_Mouse        0x15
-#define Mouse_SetPosition   3   /* signed 16bit - X, Y - mouse position */
-
-void fe_pointer_set_position(int x, int y)
-{
-    char block[5];
-    block[0] = Mouse_SetPosition;
-    block[1] = x & 0xff;
-    block[2] = (x >> 8) & 0xff;
-    block[3] = y & 0xff;
-    block[4] = (y >> 8) & 0xff;
-    _kernel_osword(osword_Mouse, (int *)block);
-}
-
 /* ----------------------------------------------------------------------------------------------------- */
 
 /* init_1 must be done before wimp initialise*/

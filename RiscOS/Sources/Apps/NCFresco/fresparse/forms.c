@@ -432,7 +432,8 @@ extern void startlabel (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     none.type = value_none;
     aref = new_aref_item(htmlctx,
 			 attributes->value[HTML_LABEL_FOR].type == value_string ? &attributes->value[HTML_LABEL_FOR] : &empty,
-			 &none, &none, &none, &none);
+			 attributes->value[HTML_LABEL_ID].type == value_string ? &attributes->value[HTML_LABEL_ID] : &empty,
+			 &none, &none, &none);
     aref->flags |= rid_aref_LABEL;
 }
 

@@ -27,21 +27,42 @@ static be_item map_item = NULL;
 
 /* ----------------------------------------------------------------------------- */
 
-static void fe_map_update_position_to(int x, int y)
+static int fe_map_update_position_to(int x, int y)
 {
     wimp_box box;
+    BOOL limit = FALSE;
+    int flags = 0;
+
     if (fe_item_screen_box(map_view, map_item, &box))
     {
         if (x < box.x0)
-            x = box.x0;
+	{
+	    limit = TRUE;
+	    flags = be_link_BACK;
+	}
         if (x > box.x1)
-            x = box.x1;
+	{
+	    limit = TRUE;
+	    flags = 0;
+	}
         if (y < box.y0)
-            y = box.y0;
+	{
+	    limit = TRUE;
+	    flags = be_link_VERT;
+	}
         if (y > box.y1)
-            y = box.y1;
+	{
+	    limit = TRUE;
+	    flags = be_link_VERT | be_link_BACK;
+	}
     }
-    fe_pointer_set_position(x, y);
+
+    if (limit)
+	return flags | be_link_MOVE_POINTER;
+
+    frontend_pointer_set_position(NULL, x, y);
+
+    return 0;
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -148,7 +169,14 @@ void fe_map_event_handler(int event, fe_view v)
     }
 
     if (x || y)
-        fe_map_update_position_to(m.x + x, m.y + y);
+    {
+        int flags = fe_map_update_position_to(m.x + x, m.y + y);
+	if (flags)
+	{
+	    fe_map_mode(NULL, NULL);
+	    fe_move_highlight(v, flags);
+	}
+    }
 }
 
 void fe_map_check_pointer_move(const wimp_mousestr *m)

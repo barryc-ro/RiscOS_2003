@@ -39,6 +39,7 @@
 #include "pluginfn.h"
 #include "imagemap.h"
 #include "oimage.h"
+#include "gbf.h"
 
 /* ----------------------------------------------------------------------------- */
 
@@ -190,7 +191,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     int bw;
     BOOL do_alt = FALSE, do_plinth = TRUE;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     bw = obj->bwidth;

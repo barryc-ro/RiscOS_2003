@@ -5,6 +5,13 @@
 #include "debug.h"
 #endif
 
+#ifdef PLOTCHECK
+# ifdef __ASSERT
+#  undef __ASSERT
+# endif
+# define __ASSERT		plotcheck_assert
+#endif
+
 #if DEBUG
  #define TASSERT(expr)          ((expr)?(void)0:__ASSERT(0,#expr,__FILE__,__LINE__))
 #else

@@ -39,6 +39,7 @@
 #include "object.h"
 #include "version.h"
 #include "dfsupport.h"
+#include "gbf.h"
 
 /* Make this 1 to see item boundaries */
 #define DEBUG_ITEMS 0
@@ -214,7 +215,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     int b;
     BOOL no_text, draw_highlight_box;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
 #ifdef STBWEB

@@ -17,6 +17,7 @@
 
 #include "wimp.h"
 #include "consts.h"
+#include "sgmlparser.h"
 #include "htmlparser.h"         /* Now includes bits that were local */
 
 #include "rid.h"
@@ -29,7 +30,6 @@
 #include "parsers.h"
 #include "images.h"
 
-#include "htmlparser.h"
 #include "tables.h"
 #include "unwind.h"
 
@@ -135,17 +135,87 @@ extern void dump_span(int *base, int span)
 
 extern void dump_style(ROStyle style)
 {
-        ROStyle *ptr = &style;
-#ifndef CHECKER
-return;
-#endif
-        my_print("ROStyle %08x", *(int*)ptr);
-        enter();
-                FIELD(ptr, wf_index, "%d");
-                FIELD(ptr, flags, "%02x");
-                FIELD(ptr, indent, "%d");
-/*                FIELD(ptr, old_list_no, "%d");*/
-        leave();
+    static char *align_names[8] = 
+    {
+	"", /*"unknown_align", but too common */
+	"left",
+	"center",
+	"right",
+	"char",
+	"justify",
+	"hspare6",
+	"hspare7"
+    };
+
+    static char *valign_names[8] = 
+    {
+	"", /*"unknown_valign", but too common */
+	"top",
+	"middle",
+	"bottom",
+	"baseline",
+	"texttop",
+	"absbottom",
+	"absmiddle"
+    };
+
+    ROStyle *ptr = &style;
+    BITS *bp = (BITS *)ptr;
+    int x;
+
+    my_print("ROStyle %08x", UNPACK(bp, ROSTYLE) );
+
+    enter();
+        if ( UNPACK(bp, ROSTYLE) & 0xffff )
+	{
+	    nonlprint("Flags:");
+	    if ( UNPACK(bp, STYLE_UNDERLINE) )
+		nonlprint(" underlined");
+	    nonlprint(" %s",  align_names[ UNPACK(bp, STYLE_ALIGN) ] );
+	    nonlprint(" %s", valign_names[ UNPACK(bp, STYLE_ALIGN) ] );
+	    if ( UNPACK(bp, STYLE_SUB) )
+		nonlprint(" sub");
+	    if ( UNPACK(bp, STYLE_SUP) )
+		nonlprint(" sup");
+	    if ( UNPACK(bp, STYLE_RESERVED) )
+		nonlprint(" RESERVED");
+	    if ( UNPACK(bp, STYLE_STRIKE) )
+		nonlprint(" strike");
+	    if ( UNPACK(bp, STYLE_COLOURNO) )
+		nonlprint(" colour=%d", UNPACK(bp, STYLE_COLOURNO) );
+	    my_print("");
+	}
+
+	x = UNPACK(bp, STYLE_WF_INDEX);
+	if (x != 2)		/* 2 being the common case */
+	{
+	    nonlprint("Font %d:", x );
+	    if (x & WEBFONT_FLAG_SPECIAL)
+	    {
+		int z = x & WEBFONT_SPECIAL_TYPE_MASK;
+		nonlprint(" %d", z);
+		if (z == WEBFONT_SPECIAL_TYPE_MENU)
+		    nonlprint(" menu");
+		else
+		    nonlprint(" symbol");
+	    }
+	    else
+	    {
+		if (x & WEBFONT_FLAG_BOLD)
+		    nonlprint(" bold");
+		if (x & WEBFONT_FLAG_ITALIC)
+		    nonlprint(" italic");
+		if (x & WEBFONT_FLAG_FIXED)
+		    nonlprint(" fixed");
+		if (WEBFONT_SIZEOF(x) != 3)
+		    nonlprint(" size=%d", WEBFONT_SIZEOF(x) );
+	    }
+	    my_print("");
+	}
+
+	if ( UNPACK(bp, STYLE_INDENT) )
+	    my_print("Indent %d", UNPACK(bp, STYLE_INDENT) );
+    leave();
 }
 
 extern void dump_float_item(rid_float_item *ptr)
@@ -281,7 +351,7 @@ extern void dump_item(rid_text_item *item, char *base)
 			my_print("%s", flag_names[i]);
 		leave();
                 my_print("tag %s", item_names[item->tag]);
-#ifdef CHECKER
+#if defined(CHECKER) || 1
                 dump_style(item->st);
 #endif
 		switch (item->tag)

@@ -180,6 +180,9 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
         }
         break;
 #endif
+
+#if 0
+	/* old way was to use the ALINK colour for the highlight - new is to just use whatever we configured */
     case render_colour_HIGHLIGHT:
 	if (doc &&
 	    (doc->flags & doc_flag_DOC_COLOURS) &&
@@ -198,6 +201,17 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
             if (colour_distance(pw, col) < 64*64)
                 pw.word = col.word ^ 0xffffff00;
 
+	    return pw;
+	}
+#endif
+	
+    case render_colour_ACTIVATED:
+	if (doc &&
+	    (doc->flags & doc_flag_DOC_COLOURS) &&
+	    doc->rh &&
+	    (doc->rh->bgt & rid_bgt_ACOL) )
+	{
+	    pw.word = doc->rh->colours.alink;
 	    return pw;
 	}
 	break;
@@ -269,8 +283,10 @@ void render_set_font_colours(int f, int b, antweb_doc *doc)
 int render_link_colour(rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
-    if (ti->flag & (rid_flag_SELECTED | rid_flag_ACTIVATED))
+    if (ti->flag & rid_flag_SELECTED)
 	rcol = render_colour_HIGHLIGHT;
+    else if (ti->flag & rid_flag_ACTIVATED)
+	rcol = render_colour_ACTIVATED;
     else
         rcol = render_text_link_colour(NULL, ti, doc);
     return rcol;
@@ -296,7 +312,7 @@ int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
             rcol = render_colour_PLAIN;
     }
     else if (ti->flag & rid_flag_ACTIVATED)
-	rcol = render_colour_HIGHLIGHT;
+	rcol = render_colour_ACTIVATED;
     else
     {
 #if 0

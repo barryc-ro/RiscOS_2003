@@ -90,10 +90,6 @@ typedef struct webfont {
 #define STYLE_WF_SIZE_SHIFT STYLE_WF_INDEX_SHIFT
 #define STYLE_WF_SIZE_MASK  WEBFONT_SIZE_MASK
 
-/* Defined above now */
-/* #define WEBFONT_COUNT	((WEBFONT_SIZES << WEBFONT_SIZE_SHIFT)) */
-/* #define WEBFONT_COUNT	(WEBFONT_SYMBOL(7)) */
-
 extern webfont webfonts[WEBFONT_COUNT];
 
 extern os_error *webfonts_init_font(int n);

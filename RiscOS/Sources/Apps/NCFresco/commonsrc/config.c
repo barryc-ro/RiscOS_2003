@@ -46,6 +46,7 @@
 #endif
 
 static void config_default_first(void);
+static void config_read_bool(const char *p, config_item *citem);
 
 #ifdef STBWEB
 static void config_read_variables(void);
@@ -158,7 +159,8 @@ config_item citems[] = {
 { config_COLOUR, "colour.line.dark",	(void *)offsetof(struct config_str, colours[7]), "Colour for the dark side of rules",		(void *) 0x55555500  },
 { config_COLOUR, "colour.button.text",	(void *)offsetof(struct config_str, colours[8]), "Colour for text on buttons",			(void *) 0x00000000  },
 { config_COLOUR, "colour.button.back",	(void *)offsetof(struct config_str, colours[9]), "Background colour for buttons",			(void *) 0xdddddd00  },
-{ config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[10]), "Colour for highlighted link",			(void *) 0x0000ff00  },
+{ config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[10]), "Colour for highlighted link",			(void *) 0xff000000  },
+{ config_COLOUR, "colour.activated",	(void *)offsetof(struct config_str, colours[10]), "Colour for activating link",			(void *) 0x0000ff00  },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_BOOL,	"proxy.http.enable",	(void *)offsetof(struct config_str, proxy_http_on),	"Enable proxies",	(void *) 0  },
 { config_BOOL,	"proxy.https.enable",	(void *)offsetof(struct config_str, proxy_https_on),	NULL,	                (void *) 0  },
@@ -191,7 +193,7 @@ config_item citems[] = {
 { config_STRING, "sound.click", 	(void *)offsetof(struct config_str, sound_click),	"Command to run when selecting", (void *)0  },
 { config_BOOL, "sound.fx", 	(void *)offsetof(struct config_str, sound_fx),	"User audio feedback sounds", (void *)0  },
 { config_BOOL, "sound.background", 	(void *)offsetof(struct config_str, sound_background),	"Play background sounds", (void *)0  },
-{ config_BOOL, "mode.keyboard", 	(void *)offsetof(struct config_str, mode_keyboard),	"Are we mouseless", (void *)1  },
+{ config_INT, "mode.keyboard", 	(void *)offsetof(struct config_str, mode_keyboard),	"Are we mouseless", (void *)1  },
 { config_BOOL, "mode.cursor.toolbar", 	(void *)offsetof(struct config_str, mode_cursor_toolbar),	"Move cursor to toolbar", (void *)1  },
 { config_INT, "mode.platform", 	(void *)offsetof(struct config_str, mode_platform),	"Platform type", (void *)0  },
 { config_INT,	"history.length",	(void *)offsetof(struct config_str, history_length),	"The number of pages in the per-view history list",	(void *) 50 },
@@ -297,16 +299,18 @@ static void config_read_int(const char *p, config_item *citem)
     {
 	*((int*) citem->ptr) = (int) strtol(p+2, NULL, 16);
     }
-    else
+    else if (isdigit(*p))
     {
 	*((int*) citem->ptr) = (int) strtol(p, NULL, 10);
     }
+    else
+	config_read_bool(p, citem);
 
     CNFDBGN(("Value string '%s' taken as interger value %d\n", p, *((int*) citem->ptr)));
 
 }
 
-static void config_read_bool(char *p, config_item *citem)
+static void config_read_bool(const char *p, config_item *citem)
 {
     if (strcasecomp(p, "YES") == 0 ||
 	strcasecomp(p, "Y") == 0 ||

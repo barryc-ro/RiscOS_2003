@@ -259,6 +259,8 @@ extern void frontend_fade_frame(fe_view v, wimp_paletteword colour);
 
 extern int frontend_internal_url(const char *path, const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags);
 
+extern void frontend_pointer_set_position(fe_view v, int x, int y);
+
 /***************************************************************************/
 /* Functions for talking to the back end */
 
@@ -416,6 +418,7 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 #define be_link_XY		(1 << 9)	/* x,y coordinates given */
 #define be_link_DONT_WRAP_H	(1 << 10)	/* don't wrap in h direction */
 #define be_link_CARETISE	(1 << 11)	/* if a writeabnle ends up with the highlight then caretise it */
+#define be_link_MOVE_POINTER	(1 << 12)	/* move the pointer with the highlight */
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);

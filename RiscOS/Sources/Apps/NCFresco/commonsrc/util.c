@@ -713,7 +713,7 @@ extern os_error *ensure_modem_line(void)
 #ifdef STBWEB
 int cmos_op(int bit_start, int n_bits, int new_val, BOOL write)
 {
-    int mask, byte, offset, r, old;
+    int mask, byte, offset, r;
 
     mask = (1<<n_bits) - 1;
     byte = bit_start/8;
@@ -746,7 +746,7 @@ int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write
     if (!write)
     {
 	_swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
-	if (err == 0)
+	if (err >= 0)
 	    return *(int *)buf;
     }
     else
@@ -757,6 +757,10 @@ int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write
 	    return 0;
     }
 
+#if DEBUG
+    fprintf(stderr, "nvram_op: error %d on %s write %d val %d\n", err, tag, write, new_val);
+#endif
+    
     return bit_start == -1 ? 0 : cmos_op(bit_start, n_bits, new_val, write);
 }
 
@@ -771,5 +775,23 @@ void sound_event(sound_event_t event_num)
 }
 
 #endif
+
+/*
+ * Set the mouse pointer to a given screen coordinate
+ */
+
+#define osword_Mouse        0x15
+#define Mouse_SetPosition   3   /* signed 16bit - X, Y - mouse position */
+
+void pointer_set_position(int x, int y)
+{
+    char block[5];
+    block[0] = Mouse_SetPosition;
+    block[1] = x & 0xff;
+    block[2] = (x >> 8) & 0xff;
+    block[3] = y & 0xff;
+    block[4] = (y >> 8) & 0xff;
+    _kernel_osword(osword_Mouse, (int *)block);
+}
 
 /* eof util.c */

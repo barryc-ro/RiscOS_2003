@@ -363,5 +363,23 @@ os_error *bbc_moveby(int x, int y)
    return(bbc_plot(bbc_SolidBoth, x, y));
 }
 
+
+#define ColourTrans_ReturnGCOL                      0x00040742
+
+os_error *colourtran_returnGCOL (wimp_paletteword entry, int *gcol)
+{
+  os_regset r;
+  os_error *e;
+
+  r.r[0] = entry.word;
+
+  e = os_swix(ColourTrans_ReturnGCOL, &r);
+
+  if (e == 0)
+    *gcol = r.r[0];
+
+  return(e);
+}
+
 /* eof rolib.c */
 

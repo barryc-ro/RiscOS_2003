@@ -66,6 +66,7 @@
 #endif
 
 #include "cookie.h"
+#include "gbf.h"
 
 #include "clipboard.h"
 #include "printing.h"
@@ -240,6 +241,24 @@ void fe_pointer_mode_update(pointermode_t mode)
     pointer_mode = mode;
 }
 
+void frontend_pointer_set_position(fe_view v, int x, int y)
+{
+    coords_pointstr p;
+
+    p.x = x;
+    p.y = y;
+
+    if (v)
+    {
+	coords_cvtstr cvt = fe_get_cvt(v);
+	coords_point_toscreen(&p, &cvt);
+    }
+    
+    pointer_set_position(p.x, p.y);
+    pointer_last_pos.x = p.x;
+    pointer_last_pos.y = p.y;
+}
+
 /* ----------------------------------------------------------------------------------------------------- */
 
 typedef struct
@@ -369,24 +388,6 @@ void fe_linedrop(int called_at, void *handle)
     NOT_USED(handle);
 }
 
-/* ----------------------------------------------------------------------------------------------------- */
-
-void fe_open_keyboard(fe_view v)
-{
-    char buffer[256];
-    int n;
-
-    n = sprintf(buffer, "NCKeyboard %s",
-	    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
-    
-    if (config_display_control_top)
-	sprintf(buffer + n, " -scrolldown %d", text_safe_box.y1 - tb_status_height());
-    else
-	sprintf(buffer + n, " -scrollup %d", text_safe_box.y0 + tb_status_height());
-
-    fe_start_task(buffer, NULL);
-    NOT_USED(v);
-}
 
 /* ----------------------------------------------------------------------------------------------------- */
 #if 0
@@ -1314,22 +1315,24 @@ int fe_check_download_finished(fe_view v)
 	/* if the frame has data then update the link position */
 	if (vcaret && vcaret->displaying)
 	{
-	    int flags = be_link_VISIBLE | be_link_INCLUDE_CURRENT;
-	    if (pointer_mode != pointermode_OFF)
-		flags |= be_link_TEXT;
+	    int flags = 0;
 
-	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | be_link_CARETISE);
-	    STBDBG(( "stbfe: current link %p/%p\n", vcaret, vcaret->current_link));
-#if 0
-	    if (!fe_caretise(vcaret))
+	    if (v->selected_id)
 	    {
-		STBDBG(( "stbfe: place caret %p\n", vcaret));
-
-		backend_place_caret(vcaret->displaying, NULL);
-
-		STBDBG(( "stbfe: placed caret %p\n", vcaret));
+		vcaret->current_link = backend_locate_id(vcaret->displaying, v->selected_id);
+		if (vcaret->current_link)
+		    flags = be_link_ONLY_CURRENT | be_link_CARETISE;
 	    }
-#endif
+
+	    if ((flags & be_link_ONLY_CURRENT) == 0)
+	    {
+		flags = be_link_VISIBLE | be_link_INCLUDE_CURRENT | be_link_CARETISE;
+		if (pointer_mode != pointermode_OFF)
+		    flags |= be_link_TEXT;
+	    }
+	    
+	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | be_link_MOVE_POINTER);
+	    STBDBG(( "stbfe: current link %p/%p\n", vcaret, vcaret->current_link));
 	}
     }
 
@@ -1982,10 +1985,6 @@ os_error *fe_handle_enter(fe_view v)
     if (!e)
     {
         if ((flags & (be_item_info_ISMAP | be_item_info_USEMAP)))
-#if 0
-	     (v->browser_mode != fe_browser_mode_DESKTOP && v->browser_mode != fe_browser_mode_APP &&		/* input=image is just a graphical button on a desktop page */
-	      (flags & (be_item_info_ACTION|be_item_info_IMAGE)) == (be_item_info_ACTION|be_item_info_IMAGE)))
-#endif
         {
             coords_pointstr p;
             coords_cvtstr cvt = fe_get_cvt(v);
@@ -1994,15 +1993,17 @@ os_error *fe_handle_enter(fe_view v)
             p.y = (box.y0 + box.y1)/2;
             coords_point_toscreen(&p, &cvt);
 
-            fe_pointer_set_position(p.x, p.y);
+            pointer_set_position(p.x, p.y);
             fe_map_mode(v, v->current_link);
         }
         else if (flags & be_item_info_INPUT)
         {
 	    STBDBG(( "stbfe: activate link in %p\n", v->current_link));
 
-            e = backend_activate_link(v->displaying, v->current_link, 0);
-        }
+/*             e = backend_activate_link(v->displaying, v->current_link, 0); */
+
+	    v->current_link = backend_highlight_link(v->displaying, v->current_link, be_link_MOVE_POINTER | be_link_TEXT | be_link_VERT | be_link_CARETISE);
+	}
         else
         {
             last_click_x = box.x0;
@@ -2012,11 +2013,16 @@ os_error *fe_handle_enter(fe_view v)
 	    STBDBG(( "stbfe: activate link in %p\n", v->current_link));
 
 	    e = backend_activate_link(v->displaying, v->current_link, 0);
-        }
+	}
     }
 
     return e;
 }
+
+#if 0
+/* 	     (v->browser_mode != fe_browser_mode_DESKTOP && v->browser_mode != fe_browser_mode_APP &&	 */	/* input=image is just a graphical button on a desktop page */
+/* 	      (flags & (be_item_info_ACTION|be_item_info_IMAGE)) == (be_item_info_ACTION|be_item_info_IMAGE))) */
+#endif
 
 /* ------------------------------------------------------------------------------------------- */
 /* key handlers */
@@ -2232,8 +2238,8 @@ static os_error *fe__locate_view_by_position(fe_view v, void *handle)
 
     sdist = s1 < s2 ? s1 : s2;
 
-    if (pdist < vals[0] ||
-	(pdist == vals[0] && sdist < vals[1]))
+    if (pdist > 0 &&
+	(pdist < vals[0] || (pdist == vals[0] && sdist > 0 && sdist < vals[1])))
     {
 	vals[0] = pdist;
 	vals[1] = sdist;
@@ -2304,8 +2310,10 @@ static fe_view fe_next_frame(fe_view v, BOOL next)
     return v;
 }
 
-void fe_move_highlight_frame_direction(fe_view v, int x, int y)
+void fe_move_highlight_frame_direction(fe_view v, int flags)
 {
+    wimp_box box = fe_get_cvt(v).box;
+    fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE | be_link_DONT_WRAP_H | be_link_DONT_WRAP);
 }
 
 void fe_move_highlight_frame(fe_view v, BOOL next)
@@ -2337,18 +2345,7 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
 
         if (vv->displaying)
         {
-            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | be_link_CARETISE);
-#if 0
-            if (vv->current_link)
-            {
-                if (!fe_caretise(vv))
-                    backend_update_link(vv->displaying, vv->current_link, 1);
-            }
-            else
-            {
-                backend_place_caret(vv->displaying, NULL);
-            }
-#endif
+            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | be_link_CARETISE | be_link_MOVE_POINTER);
         }
     }
 }
@@ -2379,19 +2376,18 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	wimp_box cbox;
 	wimp_wstate state;
 
-	v = fe_locate_view_by_position(box, flags);
-	if (!v)
+	new_v = fe_locate_view_by_position(box, flags);
+	if (!new_v)
 	    return;
 	
 	/* if given a position then search from that position */
 	cbox = *box;
 	
-	wimp_get_wind_state(v->w, &state);
+	wimp_get_wind_state(new_v->w, &state);
 	coords_box_toworkarea(&cbox, (coords_cvtstr *)&state.o.box);
 	
 	old_link = NULL;
-	new_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags | be_link_XY | be_link_DONT_HIGHLIGHT);
-	new_v = v;
+	new_link = backend_highlight_link_xy(new_v->displaying, NULL, &cbox, flags | be_link_XY | be_link_DONT_HIGHLIGHT);
     }
     else if (!v)
     {
@@ -2432,7 +2428,7 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
     {
         scrolled = FALSE;
     }
-    else
+    else if ((flags & be_link_VISIBLE) == 0)
     {
 	if (v->displaying)
 	{
@@ -2458,7 +2454,7 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
             /* if can't move on then beep */
             if (new_v == NULL)
 	    {
-                bbc_vdu(7);
+                sound_event(snd_WARN_NO_FIELD);
 	    }
             else if (new_v->displaying)
             {
@@ -2491,16 +2487,10 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
         /* if the highlighted object is actually an INPUT then place caret  */
         if (new_v->displaying)
 	{
-#if 1
-	    backend_highlight_link(new_v->displaying, new_link, be_link_ONLY_CURRENT | be_link_CARETISE | (flags & be_link_VERT | be_link_BACK));
-				/* include original flags so we know the direction we were trying to travel in */
-#else
-	    if (!fe_caretise(new_v))
-	    {
-		backend_update_link(new_v->displaying, new_link, 1);
-		backend_place_caret(new_v->displaying, NULL);
-	    }
-#endif
+	    /* include original flags so we know the direction we were trying to travel in */
+	    backend_highlight_link(new_v->displaying, new_link,
+				   be_link_ONLY_CURRENT | be_link_CARETISE | be_link_MOVE_POINTER |
+				   (flags & (be_link_VERT | be_link_BACK)));
 	}
 	else
 	{
@@ -2526,7 +2516,7 @@ void fe_cursor_movement(fe_view v, int x, int y)
 	tb_status_set_direction(y > 0);
 
 /*     backend_doc_cursor(v->displaying, y > 0 ? be_cursor_UP : be_cursor_DOWN, &used); */
-    backend_highlight_link(v->displaying, NULL, be_link_TEXT | (y > 0 ? be_link_BACK : 0));
+    v->current_link = backend_highlight_link(v->displaying, v->current_link, be_link_TEXT | (y > 0 ? be_link_BACK : 0) | be_link_MOVE_POINTER);
     
 #if 0				/* FIXME: this now has different behaviour than it used to */
     if (!used)
@@ -2961,7 +2951,7 @@ void fe_scroll_changed(fe_view v, int x, int y)
             frontend_view_bounds(v, &bb);
 
             dir = box.y1 < bb.y0 ? be_link_BACK : 0;
-            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | be_link_CARETISE);
+            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | be_link_CARETISE | be_link_MOVE_POINTER);
 /*             fe_caretise(v); */
         }
     }
@@ -2972,7 +2962,7 @@ void fe_scroll_changed(fe_view v, int x, int y)
 int fe_key_lookup(int chcode, const key_list *keys)
 {
     const key_list *d;
-    for (d = keys; d->key; d++)
+    if (keys) for (d = keys; d->key; d++)
         if (d->key == chcode)
         {
             if (d->flags & key_list_CLICK)
@@ -3948,6 +3938,70 @@ static BOOL fe_send_message(wimp_eventstr *e)
 
 /* ------------------------------------------------------------------------------------------- */
 
+#define MESSAGE_NCKEYBOARD_WINDOW_SIZE	0x4E701
+#define MESSAGE_NCKEYBOARD_CLOSE	0x4E702
+#define MESSAGE_NCKEYBOARD_CLOSED	0x4E703
+
+static wimp_t on_screen_kbd = 0;
+static wimp_box on_screen_kbd_pos;
+
+static void fe_keyboard_closed(void)
+{
+    on_screen_kbd = 0;
+    tb_status_button(fevent_OPEN_KEYBOARD, FALSE);
+}
+
+static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
+{
+    on_screen_kbd = t;
+    on_screen_kbd_pos = *box;
+
+    tb_status_button(fevent_OPEN_KEYBOARD, TRUE);
+}
+
+static void fe_keyboard__open(fe_view v)
+{
+    char buffer[256];
+    int n;
+    wimp_box box;
+
+    n = sprintf(buffer, "NCKeyboard %s",
+	    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
+    
+    tb_status_box(&box);
+    if (config_display_control_top)
+	sprintf(buffer + n, " -scrolldown %d", box.y0);
+    else
+	sprintf(buffer + n, " -scrollup %d", box.y1);
+
+    fe_start_task(buffer, NULL);
+    NOT_USED(v);
+}
+
+void fe_keyboard_close(void)
+{
+    if (on_screen_kbd)
+    {
+	wimp_msgstr msg;
+	msg.hdr.action = (wimp_msgaction)MESSAGE_NCKEYBOARD_CLOSE;
+	msg.hdr.size = sizeof(msg.hdr);
+	msg.hdr.your_ref = 0;
+	wimp_sendmessage(wimp_ESEND, &msg, on_screen_kbd);
+
+	fe_keyboard_closed();
+    }
+}
+
+void fe_keyboard_open(fe_view v)
+{
+    if (on_screen_kbd)
+	fe_keyboard_close();
+    else
+	fe_keyboard__open(v);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 static void fe_doc_bounce(wimp_msgdataopen *dataopen)
 {
     STBDBG(("fe_doc_bounce(): w %x\n", dataopen->w));
@@ -4516,8 +4570,7 @@ void fe_event_process(void)
 
             STBDBG(( "key: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
 
-/* 	    if (v || !tb_key_handler(&e.data.key.c, e.data.key.chcode)) */
-	    fe_key_handler(v, &e, use_toolbox, v->browser_mode);
+	    fe_key_handler(v, &e, use_toolbox, v ? v->browser_mode : main_view->browser_mode);
             break;
         }
 
@@ -4643,6 +4696,14 @@ void fe_event_process(void)
                     exit(0);
 		    break;
 		}
+		break;
+
+	    case MESSAGE_NCKEYBOARD_WINDOW_SIZE:
+		fe_keyboard_set_position((wimp_box *)&msg->data.words[0], msg->hdr.task);
+		break;
+
+	    case MESSAGE_NCKEYBOARD_CLOSED:
+		fe_keyboard_closed();
 		break;
 		
 	    case wimp_MCLOSEDOWN:
@@ -4886,10 +4947,15 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
+    gbf_flags &= ~GBF_FVPR;
+    gbf_init();
+
     STBDBG(( "task handle: %x\n", task_handle));
 
     /* Init our configuration */
     config_init();
+    stbkeys_init();
+
     fe_font_size_init();
 
     feutils_init_1();

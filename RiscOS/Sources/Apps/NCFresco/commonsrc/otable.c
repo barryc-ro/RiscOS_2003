@@ -31,6 +31,7 @@
 
 #include "stream.h"
 #include "unwind.h"
+#include "gbf.h"
 
 #define XF              2       /* or frontend_dx */
 #define YF              2       /* or frontend_dy */
@@ -129,7 +130,7 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	2 * (table->border + table->cellspacing + table->cellpadding);
     int oy_top, oy_bot;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     ox = hpos;

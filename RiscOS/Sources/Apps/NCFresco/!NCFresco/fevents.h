@@ -100,6 +100,7 @@
 #define fevent_COPY_TEXT                    0x2041
 #define fevent_PASTE                        0x2042
 #define fevent_PASTE_URL                    0x2043
+#define fevent_DELETE_TEXT                  0x2044
 
 #define fevent_SCROLL_LEFT                  0x2050
 #define fevent_SCROLL_RIGHT                 0x2051

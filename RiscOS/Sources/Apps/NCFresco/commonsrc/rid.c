@@ -20,6 +20,12 @@
 
 #include "myassert.h"
 
+#ifdef PLOTCHECK
+#include "antweb.h"
+#include <sys/types.h>
+#include "../plotcheck/rectplot.h"
+#endif
+
 #ifndef TABLE_DEBUG
 #define TABLE_DEBUG 0
 #endif
@@ -705,9 +711,13 @@ extern void rid_area_item_connect(rid_map_item *m, rid_area_item *a)
 
 extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
 {
-    if (st == NULL)
+    if (st == NULL || st == TABLE_NULL)
     {
 	/* @@@@ Work out why this happens! */
+#ifdef PLOTCHECK
+	SAY("rid_text_item_connect(%p, %p): NULL !!!!!\n", st, t);
+	plotcheck_boom();
+#endif
 	usrtrc("rid_text_item_connect: NULL stream\n");
 	return;
     }

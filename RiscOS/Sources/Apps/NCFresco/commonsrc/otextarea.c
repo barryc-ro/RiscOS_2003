@@ -36,6 +36,7 @@
 #include "object.h"
 
 #include "stream.h"
+#include "gbf.h"
 
 #ifndef MAX_TEXT_LINE
 #define MAX_TEXT_LINE 1024
@@ -164,13 +165,15 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     wimp_box ta_box, gwind_box;
     int fg, bg;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     tai = ((rid_text_item_textarea *)ti)->area;
 
     fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
-    bg = tai->base.colours.back == -1 ? render_colour_WRITE : tai->base.colours.back;
+    bg = tai->base.colours.back == -1 ? render_colour_WRITE :
+	    doc->input == ti && tai->base.colours.select != -1 ?
+	    tai->base.colours.select | render_colour_RGB : tai->base.colours.back | render_colour_RGB;
 
     if (fs->lf != webfonts[WEBFONT_TTY].handle)
     {
@@ -398,7 +401,7 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 	return FALSE;
     }
     
-    if (repos == object_caret_REPOSITION && tai->base.colours.select != -1)
+    if (repos == object_caret_FOCUS && tai->base.colours.select != -1)
 	antweb_update_item(doc, ti);
     
     if (doc->text_input_offset < 0)
@@ -495,6 +498,8 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	switch (lookup_key_action(key))
 	{
 	case key_action_NEWLINE:
+	case key_action_NEWLINE_SUBMIT_ALWAYS:
+	case key_action_NEWLINE_SUBMIT_LAST:
 	    {
 		rid_textarea_line *new_tal;
 
@@ -623,6 +628,20 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    tai->cx = 0;
 	    flags |= (REDRAW_LINE | REPOS_CARET);
 	    break;
+	case key_action_DELETE_ALL_AREA:
+	{
+	    rid_textarea_line *line = tai->lines;
+	    while (line)
+	    {
+		line->text[0] = 0;
+		line = line->next;
+	    }
+
+	    tai->caret_line = tai->lines;
+	    tai->cx = tai->cy = 0;
+	    flags |= (REDRAW_ALL | REPOS_CARET);
+	    break;
+	}
 	case key_action_LEFT:
 	    if (tai->cx > 0)
 	    {
@@ -654,6 +673,22 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
 	case key_action_END_OF_LINE:
 	    tai->cx = len;
+	    flags |= REPOS_CARET;
+	    break;
+
+	case key_action_START_OF_AREA:
+	    tai->cx = tai->cy = 0;
+	    tai->caret_line = tai->lines;
+	    flags |= REPOS_CARET;
+	    break;
+
+	case key_action_END_OF_AREA:
+	    while (tai->caret_line->next)
+	    {
+		tai->cy++;
+		tai->caret_line = tai->caret_line->next;
+	    }
+	    tai->cx = strlen(tai->caret_line->text);
 	    flags |= REPOS_CARET;
 	    break;
 

@@ -7,7 +7,10 @@
 
 static char *stack_indentation(SGMLCTX *context)
 {
-    static char buf[256];
+#ifdef HTMLCHECK
+    return "";
+#else
+static char buf[256];
 
     STACK_ITEM *ip = context->tos;
 
@@ -40,6 +43,7 @@ static char *stack_indentation(SGMLCTX *context)
     }
 	
     return buf;
+#endif /* HTMLCHECK */
 }
 
 static void sgml_print_value(FILE *output, ATTRIBUTE *attribute, VALUE *value)

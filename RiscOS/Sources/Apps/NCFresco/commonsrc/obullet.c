@@ -29,6 +29,7 @@
 #include "object.h"
 
 #include "indent.h"
+#include "gbf.h"
 
 #ifndef BULLET_CHAR
 #define BULLET_CHAR '\x8F'
@@ -220,7 +221,7 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
     BOOL symfont;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
 #if !DEBUG_DLCOMPACT

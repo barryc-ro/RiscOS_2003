@@ -91,11 +91,11 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		images.o layout.o licence.o makeerror.o memwatch.o \
 		myassert.o object.o obreak.o obullet.o oimage.o oinput.o \
 		oselect.o otable.o otext.o otextarea.o printing.o render.o \
-		resolve.o rid.o tables.o threads.o \
+		resolve.o rid.o tables.o threads.o gbf.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
-		files.o rlib_alloc.o fvpr.o remote.o coalesce.o keyhl.o \
+		files.o fvpr.o remote.o coalesce.o keyhl.o \
 		buildtime.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
@@ -179,7 +179,7 @@ FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
-		listfonts2.o history.o \
+		listfonts2.o history.o rlib_alloc.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
@@ -188,7 +188,7 @@ FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 RISCOS_BUILD_EXPORT=../../../../Export
 
 NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 -DPREVENT_ELEMENT_GUESSING
+NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4
 
 # Production flag set
 NCFRESCO_PRODUCTION_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -198,6 +198,9 @@ NCFRESCO_HIERPROF_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -F
 
 NCFRESCO_CFLAGS= $(NCFRESCO_DEBUG_CFLAGS)
 
+NCFRESCO_ASFLAGS=-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
+NCFRESCO_ROM_ASFLAGS=-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
+
 NCFRESCO_VPATH=	../!NCFresco
 NCFRESCO_BASEOBJS=	clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 		stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
@@ -205,8 +208,9 @@ NCFRESCO_BASEOBJS=	clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 NCFRESCO_MEMOBJS= flex.o heap.o da.o
 
-NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS)
+NCFRESCO_OBJS=		$(NCFRESCO_BASEOBJS)
 # NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS) $(NCFRESCO_MEMOBJS)
+NCFRESCO_ROM_OBJS=	$(NCFRESCO_BASEOBJS) rolib.o ModuleWrap.o
 NCFRESCO_LIBS=	../webimage/webimage1
 # NCFRESCO_LIBS=	../webimage/webimage1m ../memcheck/MC
 NCFRESCO_LDFLAGS=
@@ -233,30 +237,30 @@ CBFRESCO_CFLAGSD= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML
 # -------------
 
 BUILDERS_INCS=	-I../bunix -I../RISC_OSLib
-BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -g
+BUILDERS_CFLAGS=-DBUILDERS -DNEW_UNEXP_TABLE $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=0 -g
 BUILDERS_VPATH=	$(RISCOS_VPATH)
 BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o
+		coalesce.o fvpr.o gbf.o
 BUILDERS_LIBS=	-lefence
 
-CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNEW_UNEXP_TABLE -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o
+		coalesce.o fvpr.o gbf.o
 CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
 HTMLCHECK_CFLAGS= -DHTMLCHECK $(HTMLCHECK_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=1
 HTMLCHECK_VPATH= ../stdalone
 HTMLCHECK_OBJS=	$(SGML_OBJS) htmlcheck.o debug.o memwatch.o myassert.o \
-		reports.o htmldefs.o baseprocs.o deliver.o usrtrc.o
+		reports.o htmldefs.o baseprocs.o deliver.o usrtrc.o gbf.o
 HTMLCHECK_LIBS=
 
 MOST_INCS=	-I../unix  -I../RISC_OSLib -I../\!Fresco -I../tcpiplibs -I../memlib
@@ -271,14 +275,14 @@ FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
 
 PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -DNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=0 -O9
+PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -DNEW_UNEXP_TABLE -DNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=0 -O9
 PLOTCHECK_VPATH=$(RISCOS_VPATH)
-PLOTCHECK_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
+PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
-		coalesce.o fvpr.o
+		coalesce.o fvpr.o gbf.o
 PLOTCHECK_LIBS=
 
 #############################################################################
@@ -584,6 +588,7 @@ NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
+			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
 
 NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
@@ -592,7 +597,7 @@ NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 \
+NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
@@ -645,9 +650,10 @@ NCFRESCO_BUILD_ROM:	$(PREDEPS)
 		@-mkdir aof
 		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
 		LIBS="$(NCFRESCO_ROM_LIBS)" \
-		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
+		OBJS="$(NCFRESCO_ROM_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
+		ASFLAGS="$(NCFRESCO_ROM_ASFLAGS)" \
 		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
 		$(POSTACTS) \
 		cp -p aof/ncfresco $(RISCOS_BUILD_OBJECTS)

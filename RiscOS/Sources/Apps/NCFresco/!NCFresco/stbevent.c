@@ -396,19 +396,19 @@ static void highlight_event_handler(int event, fe_view v)
             break;
 
     case fevent_HIGHLIGHT_FRAME_UP:
-	fe_move_highlight_frame_direction(v, 0, +1);
+	fe_move_highlight_frame_direction(v, be_link_VERT | be_link_BACK);
 	break;
 
     case fevent_HIGHLIGHT_FRAME_DOWN:
-	fe_move_highlight_frame_direction(v, 0, -1);
+	fe_move_highlight_frame_direction(v, be_link_VERT);
 	break;
 
     case fevent_HIGHLIGHT_FRAME_LEFT:
-	fe_move_highlight_frame_direction(v, -1, 0);
+	fe_move_highlight_frame_direction(v, be_link_BACK);
 	break;
 
     case fevent_HIGHLIGHT_FRAME_RIGHT:
-	fe_move_highlight_frame_direction(v, +1, 0);
+	fe_move_highlight_frame_direction(v, 0);
 	break;
     }
 }
@@ -441,23 +441,24 @@ static void open_event_handler(int event, fe_view v)
             break;
 
         case fevent_OPEN_KEYBOARD:
-	    fe_open_keyboard(v);
+	    fe_keyboard_open(v);
             break;
 
     case fevent_OPEN_RELATED_STUFF:
-	frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	fe_dispose_view(fe_locate_view(TARGET_INFO));
+	frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_TOP, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_FONT_SIZE:
-	frontend_open_url("ncfrescointernal:openpanel?name=customfonts", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncfrescointernal:openpanel?name=customfonts", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_SOUND:
-	frontend_open_url("ncfrescointernal:openpanel?name=customsound", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncfrescointernal:openpanel?name=customsound", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_BEEPS:
-	frontend_open_url("ncfrescointernal:openpanel?name=custombeeps", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncfrescointernal:openpanel?name=custombeeps", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
     }
 }

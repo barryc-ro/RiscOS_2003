@@ -57,6 +57,7 @@
 
 #ifndef DRAW_AREA_HIGHLIGHT
 #define DRAW_AREA_HIGHLIGHT 0
+#include "gbf.h"
 #endif
 
 #define PLINTH_PAD 16
@@ -451,7 +452,7 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     int bw = tii->bwidth;
     wimp_box bbox;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     bbox.x0 = hpos + tii->hspace*2 + bw*2;

@@ -503,6 +503,7 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
 
+    /* get on screen area visible of window */
     if (v->w)
         frontend_fatal_error(wimp_get_wind_state(v->w, &ws));
     else
@@ -512,13 +513,27 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
         ws.o.y = -v->margin.y1;
     }
 
+    /* adjust visible area for the status bar */
+    if (use_toolbox && tb_is_status_showing())
+    {
+	wimp_box sbox;
+	tb_status_box(&sbox);
+
+	if (config_display_control_top)
+	{
+	    if (ws.o.box.y1 > sbox.y1)
+		ws.o.box.y1 = sbox.y1;
+	}
+	else
+	{
+	    if (ws.o.box.y0 < sbox.y0)
+		ws.o.box.y0 = sbox.y0;
+	}
+    }
+    
+    /* calculate box in work area coordinates */
     box->y1 = ws.o.y;
     box->y0 = ws.o.y - (ws.o.box.y1 - ws.o.box.y0);
-
-    if (config_display_control_top)
-	box->y1 -= fe_status_height_top(v);
-    else
-	box->y0 += fe_status_height_top(v);
 
     box->x0 = ws.o.x;
     box->x1 = ws.o.x + (ws.o.box.x1 - ws.o.box.x0);

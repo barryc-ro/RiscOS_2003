@@ -37,7 +37,7 @@ extern void fe_copy_text_to_clipboard(fe_view v);
 extern os_error *fe_home(fe_view v);
 extern void fe_move_highlight(fe_view v, int flags);
 extern void fe_move_highlight_frame(fe_view v, BOOL next);
-extern void fe_move_highlight_frame_direction(fe_view v, int x, int y);
+extern void fe_move_highlight_frame_direction(fe_view v, int flags);
 extern void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags);
 
 extern os_error *fe_handle_enter(fe_view v);
@@ -141,7 +141,7 @@ extern fe_view fe_locate_view(const char *name);
 extern fe_view fe_selected_view(void);
 
 extern void fe_submit_form(fe_view v, const char *id);
-extern void fe_open_keyboard(fe_view v);
+extern void fe_keyboard_open(fe_view v);
 
 extern os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle);
 
@@ -183,6 +183,7 @@ extern void fe_map_event_handler(int event, fe_view v);
 #define fe_browser_mode_APP		5
 
 extern void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_mode);
+extern void stbkeys_init(void);
 
 /* from ncreg.c */
 

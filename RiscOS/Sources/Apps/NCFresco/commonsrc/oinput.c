@@ -52,6 +52,7 @@
 
 #include "stream.h"
 #include "oimage.h"
+#include "gbf.h"
 
 #ifndef OI_DEBUG
 #define OI_DEBUG 0
@@ -310,7 +311,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     char *t;
     BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED) != 0;
 
-    if ((ti->flag & rid_flag_FVPR) == 0)
+    if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     switch (ii->tag)
@@ -1032,16 +1033,21 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	}
 	else
 	{
-	    switch (lookup_key_action(key))
+	    int action = lookup_key_action(key);
+	    switch (action)
 	    {
 	    case key_action_NEWLINE:
+	    case key_action_NEWLINE_SUBMIT_ALWAYS:
+	    case key_action_NEWLINE_SUBMIT_LAST:
 		if (ii->base.parent && ii->base.parent->last_text == NULL)
 		{
-		    rid_input_item *first;
+		    rid_input_item *first, *last;
 		    rid_form_element *ife;
-		    first = NULL;
 
-		    for(ife = ii->base.parent->kids; ife; ife = ife->next)
+		    first = last = NULL;
+
+		    /* scan through all the input items, clear the IMAGE settings and tick the first SUBMIT button */
+		    for (ife = ii->base.parent->kids; ife; ife = ife->next)
 		    {
 			if (ife->tag == rid_form_element_INPUT)
 			{
@@ -1062,14 +1068,25 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 				else
 				    ins->data.button.tick = 0;
 			    }
-#ifndef STBWEB
-			    if (ins->tag == rid_it_PASSWD || (ins->tag == rid_it_TEXT && ins != ii))
-				break;
-#endif
+
+			    /* standard behaviour, if a passwd or there is more than one TEXT then don't submit */
+			    if (action == key_action_NEWLINE)
+			    {
+				if (ins->tag == rid_it_PASSWD || (ins->tag == rid_it_TEXT && ins != ii))
+				    break;
+			    }
+			    /* new behaviour 1 if in the last TEXT or PASSWD of however many then submit */
+			    else if (action == key_action_NEWLINE_SUBMIT_LAST)
+			    {
+				if (ins->tag == rid_it_PASSWD || ins->tag == rid_it_TEXT)
+				    last = ins;
+			    }
+			    /* else, new behaviour 2 always submit */
 			}
 		    }
 
-		    if (ife == NULL)
+		    /* if we got to the end and either we were on the last text item or we didn't care then submit */
+		    if (ife == NULL && (action != key_action_NEWLINE_SUBMIT_LAST || ii == last))
 		    {
 			/* No passwords, the only text item is this one and only the first submit button 'ticked' */
 			sound_event(snd_FORM_SUBMIT);
@@ -1089,6 +1106,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		}
 		break;
 	    case key_action_DELETE_ALL:
+	    case key_action_DELETE_ALL_AREA:
 		ii->data.str[0] = 0;
 		doc->text_input_offset = 0;
 		redraw = TRUE;
@@ -1136,11 +1154,13 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		break;
 
 	    case key_action_START_OF_LINE:
+	    case key_action_START_OF_AREA:
 		doc->text_input_offset = 0;
 		redraw = TRUE;
 		break;
 
 	    case key_action_END_OF_LINE:
+	    case key_action_END_OF_AREA:
 		doc->text_input_offset = ii->flags & rid_if_NUMBERS ? len-1 : len;
 		redraw = TRUE;
 		break;
@@ -1331,17 +1351,36 @@ void oinput_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 
 void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
 {
-    rid_text_item_input *tii = (rid_text_item_input *) ti;
-    rid_input_item *ii = tii->input;
     wimp_box trim;
+    BOOL update_full = FALSE;
 
     memset(&trim, 0, sizeof(trim));
 
-    if ((ii->tag == rid_it_SUBMIT || ii->tag ==  rid_it_RESET || ii->tag == rid_it_BUTTON) &&
-	ii->data.button.im_sel)
+    switch (ti->tag)
     {
-	antweb_update_item_trim(doc, ti, &trim, FALSE);
+    case rid_tag_INPUT:
+    {
+	rid_input_item *ii = ((rid_text_item_input *) ti)->input;
+	update_full = (ii->tag == rid_it_SUBMIT || ii->tag ==  rid_it_RESET || ii->tag == rid_it_BUTTON) &&
+	    ii->data.button.im_sel;
+	break;
     }
+    case rid_tag_SELECT:
+    {
+	rid_select_item *sel = ((rid_text_item_select *)ti)->select;
+	update_full = sel->base.colours.select != -1;
+	break;
+    }
+    case rid_tag_TEXTAREA:
+    {
+	rid_textarea_item *ta = ((rid_text_item_textarea *)ti)->area;
+	update_full = ta->base.colours.select != -1;
+	break;
+    }
+    }
+
+    if (update_full)
+	antweb_update_item_trim(doc, ti, &trim, FALSE);
     else
     {
 	trim.x0 = ti->width - 4;
