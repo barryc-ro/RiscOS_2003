@@ -63,7 +63,7 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.Switcher: Version
+rm.Switcher: VersionASM
 rm.Switcher: Hdr:ListOpts
 rm.Switcher: Hdr:Macros
 rm.Switcher: Hdr:System
