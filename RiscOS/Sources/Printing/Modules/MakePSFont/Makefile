@@ -55,7 +55,7 @@ RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
-ABSSYM    = RISCOSLIB:o.abssym
+ABSSYM    = RISCOSLIB:o.c_abssym
 
 #
 # Include files
@@ -78,7 +78,7 @@ OBJS =\
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.cmhg.o:;   ${CMHG} $< $@
+.cmhg.o:;   ${CMHG} -p $< $@
 
 #
 # Build rules:
