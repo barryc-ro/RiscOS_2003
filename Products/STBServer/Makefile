@@ -27,7 +27,7 @@ modgen resgen:
 	(cd Tools/Sources/ResGen/ports/solaris; ./mklinks; make)
 
 modsqz:
-	(cd Tools/Sources/ModSqz/ports/solaris; ./mklinks; make)
+	(cd Tools/Sources/modsqz/ports/solaris; ./mklinks; make)
 
 mtftpd:
 	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make)
