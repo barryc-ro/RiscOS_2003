@@ -1,11 +1,34 @@
 ; >s.Module
 
-CR				* 13
-XDebugTools_ClaimOSSWI		*  7 + 0x000554C0 :OR: 0x20000
-XDebugTools_ReleaseOSSWI	*  9 + 0x000554C0 :OR: 0x20000
-Max_ModHandReason		* 21 * 4
-Max_BlockSize			* 12 * 4
-WSP_size			* Max_ModHandReason + Max_BlockSize
+CR				*	13
+
+XDebugTools_ClaimOSSWI		*	7 + 0x000554C0 :OR: 0x20000
+XDebugTools_ReleaseOSSWI	*	9 + 0x000554C0 :OR: 0x20000
+
+OSModule_MaxReason		*	1 + ModHandReason_FindEndOfROM_ModuleChain	; No of OS_Module R0 codes
+OSHeap_MaxReason		*	1 + HeapReason_ReadBlockSize			; No of OS_Heap R0 codes
+
+BlockSizes			*	10	; Number of different block sizes we're recording
+; 0 -> 0..3 bytes
+; 1 -> 4..7 bytes
+; 2 -> 8..15 bytes
+; 3 -> 16..31 bytes
+; 4 -> 32..63 bytes
+; 5 -> 64..127 bytes
+; 6 -> 128..255 bytes
+; 7 -> 256..511 bytes
+; 8 -> 512..1023 bytes
+; 9 -> 1024+ bytes
+	    			^	0
+WSP_OSModule_Reasons		#	OSModule_MaxReason * 4
+; Block of counters for each of the OS_Module reason codes
+WSP_OSModule_Claims		#	BlockSizes * 4
+; Block of counters for each claim block size for OS_Module #ModHandReason_Claim
+WSP_OSHeap_Reasons		#	OSHeap_MaxReason * 4
+; Block of counters for each of the OS_Heap reason codes
+WSP_OSHeap_Claims		#	BlockSizes * 4
+; Block of counters for each claim block size for OS_Heap #HeapReason_Get
+WSP_Size			*	@
 
 
 	AREA	|Asm$$Code|, CODE, READONLY
@@ -64,6 +87,8 @@ Mod_Flags
 Mod_HC_Table
 	Command OSModule, 0, 0
 	Command OSModule_Read, 0, 0
+	Command OSHeap, 0, 0
+	Command OSHeap_Read, 0, 0
 	DCB	0
 OSModule_Help
 	DCB	"Output count of OS_Module calls since last call to this *command.", CR
@@ -73,6 +98,14 @@ OSModule_Read_Help
 	DCB	"Output count of OS_Module calls without resetting the counts to zero.", CR
 OSModule_Read_Syntax
 	DCB	"Syntax: *OSModule_Read", 0
+OSHeap_Help
+	DCB	"Output count of OS_Heap calls since last call to this *command.", CR
+OSHeap_Syntax
+	DCB	"Syntax: *OSHeap", 0
+OSHeap_Read_Help
+	DCB	"Output count of OS_Heap calls without resetting the counts to zero.", CR
+OSHeap_Read_Syntax
+	DCB	"Syntax: *OSHeap_Read", 0
 
 
 ; ****************************************************
@@ -87,10 +120,10 @@ Mod_Title
 ; *
 ; * Unused stuff
 ; *
-Mod_Start * Module_BaseAddr
-Mod_SWIHandler * Module_BaseAddr
-Mod_SWITable * Module_BaseAddr
-Mod_Service * Module_BaseAddr
+Mod_Start	* Module_BaseAddr
+Mod_SWIHandler	* Module_BaseAddr
+Mod_SWITable	* Module_BaseAddr
+Mod_Service	* Module_BaseAddr
 
 ; ****************************************************
 ; *
@@ -113,7 +146,7 @@ Mod_Service * Module_BaseAddr
 Mod_Init Entry
 	WriteLn	"InitTest..."
 	MOV	R0, #ModHandReason_Claim
-	MOV	R3, #WSP_size
+	MOV	R3, #WSP_Size
 	SWI	XOS_Module
 	BVS	InitErr
 	WriteLn	"  Zero-init;"
@@ -123,9 +156,13 @@ Mod_Init Entry
 	SUBS	R3, R3, #4
 	BNE	%BT00
 	STR	R2, [R12]
-	WriteLn	"  Claim;"
+	WriteLn	"  Claim OS_Module;"
 	MOV	R0, #OS_Module
 	ADR	R1, OSModule_Handler
+	SWI	XDebugTools_ClaimOSSWI
+	WriteLn	"  Claim OS_Heap;"
+	MOV	R0, #OS_Heap
+	ADR	R1, OSHeap_Handler
 	SWI	XDebugTools_ClaimOSSWI
 	WriteLn	"  Done."
 InitErr	EXIT
@@ -152,12 +189,15 @@ InitErr	EXIT
 Mod_Die Entry
 	WriteLn	"DieTest..."
 	LDR	R2, [R12]
-	WriteLn	"  Release;"
+	WriteLn	"  Release OS_Heap;"
+	MOV	R0, #OS_Heap
+	ADR	R1, OSHeap_Handler
+	SWI	XDebugTools_ReleaseOSSWI
+	WriteLn	"  Release OS_Module;"
 	MOV	R0, #OS_Module
 	ADR	R1, OSModule_Handler
 	SWI	XDebugTools_ReleaseOSSWI
-	WriteLn	"  Free;"
-	;
+	WriteLn	"  Free RMA block;"
 	MOV	R0, #ModHandReason_Free
 	SWI	XOS_Module
 	MOV	R0, #0
@@ -167,136 +207,382 @@ Mod_Die Entry
 DieErr	EXIT
 
 
+; ****************************************************
+; *
+; * Handler installed onto the OS_Module OS SWI vector to count the number
+; * of calls for each reason code and the range of block sizes requested for
+; * RMA claim calls.
+; *
+; * In...
+; *   R0	= OS_Module reason code
+; *   R1-R9	= as for the OS_Module call
+; *   R10	= copy of the caller's CPSR
+; *   R11	= SWI number (&1E)
+; *   R12	= workspace pointer
+; *   R13	= full-descending supervisor stack pointer
+; *   R14	= return address to pass the SWI call on
+; *   CPSR_f	= undefined
+; *   CPSR_c	= ARM mode, SVC26 or SVC32, IRQs/FIQs as for caller
+; * Out...
+; *   R0-R13	= preserved
+; *   R14	= corrupted
+; *   CPSR_f	= corrupted
+; *   CPSR_c	= preserved
+; *
 OSModule_Handler
-	; Exit early for out-of-range reason codes...
-	CMP	R0, #(Max_ModHandReason-4) :SHR: 2
-	MOVHI	PC, LR
-	; Push some scratch registers...
-	Entry	"R0-R1"
-	; Disable interrupts...
-	SCPSR	I_bit, 0, R1,, R14
-	NOP
-	; Increment our counter...
-	LDR	R1, [R12, R0, LSL #2]
+	; Early exit for unknown reason codes...
+	CMP	R0, #OSModule_MaxReason
+	MOVHS	PC, LR
+	; Push some work registers...
+	Entry	"R0-R2"
+	; Increment counter for this reason code...
+	ADD	R2, R12, R0, LSL #2
+	SCPSR	I_bit, 0, R1,, R14	; IRQs off
+	LDR	R1, [R2, #WSP_OSModule_Reasons]
 	ADD	R1, R1, #1
-	STR	R1, [R12, R0, LSL #2]
-	; Restore interrupts...
-	RestPSR	R14
-	; Go to next section if it's a claim...
+	STR	R1, [R2, #WSP_OSModule_Reasons]
+	RestPSR	R14			; Restore IRQs
+	; Exit here if not a claim...
 	TEQ	R0, #ModHandReason_Claim
-	BEQ	%FT00
-	; Exit (allow claim to continue)...
-	EXIT
-00	; How big (power of 2) is the block to claim?
-	MOV	R0, #Max_ModHandReason
-	MOV	R14, R3, LSR #2		; Start at 4 byte blocks
-01	MOVS	R14, R14, LSR #1
-	ADDNE	R0, R0, #4
-	BNE	%BT01
-	; Blocks bigger than our limit are treated as the biggest...
-	CMP	R0, #WSP_size-4
-	MOVHI	R0, #WSP_size-4
-	; Disable interrupts again...
-	SCPSR	I_bit, 0, R1,, R14
-	NOP
-	; Incrememt hit count for the specified block size...
-	LDR	R1, [R12, R0]
+	EXIT	NE
+	; Increment counter for the claim block size...
+	MOV	R0, R3, LSR #2
+	BL	Ctz
+	RSB	R0, R0, #32
+	CMP	R0, #BlockSizes - 1
+	MOVHI	R0, #BlockSizes - 1
+	ADD	R0, R12, R0, LSL #2
+	SCPSR	I_bit, 0, R1,, R14	; IRQs off
+	LDR	R1, [R0, #WSP_OSModule_Claims]
 	ADD	R1, R1, #1
-	STR	R1, [R12, R0]
-	; Restore interrupts again...
-	RestPSR	R14
+	STR	R1, [R0, #WSP_OSModule_Claims]
+	RestPSR	R14			; Restore IRQs
 	NOP
-	; Exit (allow claim to continue)...
 	EXIT
 
 
+; ****************************************************
+; *
+; * Handler installed onto the OS_Heap OS SWI vector to count the number of
+; * calls for each reason code and the range of block sizes requested for
+; * RMA claim calls.
+; *
+; * In...
+; *   R0	= OS_Heap reason code
+; *   R1-R9	= as for the OS_Heap call
+; *   R10	= copy of the caller's CPSR
+; *   R11	= SWI number (&1D)
+; *   R12	= workspace pointer
+; *   R13	= full-descending supervisor stack pointer
+; *   R14	= return address to pass the SWI call on
+; *   CPSR_f	= undefined
+; *   CPSR_c	= ARM mode, SVC26 or SVC32, IRQs/FIQs as for caller
+; * Out...
+; *   R0-R13	= preserved
+; *   R14	= corrupted
+; *   CPSR_f	= corrupted
+; *   CPSR_c	= preserved
+; *
+OSHeap_Handler
+	; Early exit for unknown reason codes...
+	CMP	R0, #OSHeap_MaxReason
+	MOVHS	PC, LR
+	; Push some work registers...
+	Entry	"R0-R2"
+	; Increment counter for this reason code...
+	ADD	R2, R12, R0, LSL #2
+	SCPSR	I_bit, 0, R1,, R14	; IRQs off
+	LDR	R1, [R2, #WSP_OSHeap_Reasons]
+	ADD	R1, R1, #1
+	STR	R1, [R2, #WSP_OSHeap_Reasons]
+	RestPSR	R14			; Restore IRQs
+	; Exit here if not a claim...
+	TEQ	R0, #HeapReason_Get
+	EXIT	NE
+	; Increment counter for the claim block size...
+	MOV	R0, R3, LSR #2
+	BL	Ctz
+	RSB	R0, R0, #32
+	CMP	R0, #BlockSizes - 1
+	MOVHI	R0, #BlockSizes - 1
+	ADD	R0, R12, R0, LSL #2
+	SCPSR	I_bit, 0, R1,, R14	; IRQs off
+	LDR	R1, [R0, #WSP_OSHeap_Claims]
+	ADD	R1, R1, #1
+	STR	R1, [R0, #WSP_OSHeap_Claims]
+	RestPSR	R14			; Restore IRQs
+	NOP
+	EXIT
+
+
+;  ****************************************************
+;  *
+;  * Count the number of leading zeros in the value passed in R0.
+;  *
+;  *   R0	= word to test
+;  *   R13	= full-descending stack pointer
+;  *   R14	= return address
+;  * Out...
+;  *   R0	= bit position of lowest set bit (0..32)
+;  *   R1	= corrupted
+;  *   R2-R13	= preserved
+;  *
+Clz	RSB	R1, R0, #0
+	AND	R0, R1, R0
+	TEQ	R0, #0
+	LDRNE	R1, =0xFB9AC52
+	MOVEQ	R0, #32
+	MOVEQ	PC, LR
+	MUL	R0, R1, R0
+	ADR	R1, Clz_tbl
+	LDRB	R0, [R1, R0, LSR #27]
+	MOV	PC, LR
+Clz_tbl	DCB	31, 00, 22, 01, 28, 23, 13, 02
+	DCB	29, 26, 24, 17, 19, 14, 09, 03
+	DCB	30, 21, 27, 12, 25, 16, 18, 08
+	DCB	20, 11, 15, 07, 10, 06, 05, 04
+
+
+;  ****************************************************
+;  *
+;  * Count the number of trailing zeros in the value passed in R0.
+;  *
+;  *   R0	= word to test
+;  *   R13	= full-descending stack pointer
+;  *   R14	= return address
+;  * Out...
+;  *   R0	= bit position of lowest set bit (0..32)
+;  *   R1	= corrupted
+;  *   R2-R13	= preserved
+;  *
+Ctz	MOVS	R1, R0
+	MOV	R0, #32
+	MOVEQ	PC, LR
+00	SUB	R0, R0, #1
+	MOVS	R1, R1, LSR #1
+	BNE	%BT00
+	MOV	PC, LR
+
+
+; ****************************************************
+; *
+; * Handler code for the four *commands:
+; *
+; *   *OSModule   *OSModule_Read
+; *   *OSHeap     *OSHeap_Read
+; *
+; * Outputs a list of the number of calls to the specified OS SWI for
+; * each of the known reason codes. For the claim reason code, it also
+; * outputs an analysis of the number of calls for each block size.
+; *
+; * The "_Read" version of the command does not reset the counters to
+; * zero during this call.
+; *
+; * In...
+; *   R12	= private word pointer
+; *   R13	= full-descending supervisor stack pointer
+; *   R14	= return address to pass the SWI call on
+; * Out...
+; *   R0-R6	= corrupted
+; *   R7-R11	= preserved
+; *   R12	= ?
+; *   R13	= preserved
+; *
+OSMod    * 2_00
+OSHeap   * 2_10
+ReadOnly * 2_00
+Reset    * 2_01
 OSModule_Read_Code ROUT
-	MOV	R6, #0
+	MOV	R6, #OSMod :OR: ReadOnly
+	MOV	R4, #WSP_OSModule_Reasons
+	ADD	R5, R4, #(OSModule_MaxReason + BlockSizes) * 4
 	B	Common_Code
 OSModule_Code ROUT
-	MOV	R6, #1
+	MOV	R6, #OSMod :OR: Reset
+	MOV	R4, #WSP_OSModule_Reasons
+	ADD	R5, R4, #(OSModule_MaxReason + BlockSizes) * 4
 	B	Common_Code
-Common_Code Entry "R7-R11"
+OSHeap_Read_Code ROUT
+	MOV	R6, #OSHeap :OR: ReadOnly
+	MOV	R4, #WSP_OSHeap_Reasons
+	ADD	R5, R4, #(OSHeap_MaxReason + BlockSizes) * 4
+	B	Common_Code
+OSHeap_Code ROUT
+	MOV	R6, #OSHeap :OR: Reset
+	MOV	R4, #WSP_OSHeap_Reasons
+	ADD	R5, R4, #(OSHeap_MaxReason + BlockSizes) * 4
+Common_Code Entry
 	LDR	R12, [R12]
-	; Claim a block to copy our statistics into...
-	MOV	R0, #ModHandReason_Claim
-	MOV	R3, #WSP_size
-	SWI	XOS_Module
-	EXIT	VS
-	SCPSR	I_bit, 0, R0,, R14	; IRQs off
-	MOV	R0, #0
-	; Copy the values and reset them to zero...
-00	LDR	R1, [R12], #4
-	TEQ	R6, #1
-	STREQ	R0, [R12, #-4]
-	SUBS	R3, R3, #4
-	STR	R1, [R2], #4
-	BNE	%BT00
-	RestPSR	R14			; IRQs on
-	NOP
-	SUB	R12, R2, #WSP_size
-	; Output a title line...
+	TST	R6, #OSHeap
+	BEQ	%FT00
 	SWI	XOS_WriteS
+	DCB	"OS_Heap calls:", 10, 13, 0
+	ALIGN
+	B	%FT01
+00	SWI	XOS_WriteS
 	DCB	"OS_Module calls:", 10, 13, 0
 	ALIGN
-	; Loop through all OS_Module reason codes...
+01	BL	copy_wsp
+	BVS	%FT10
+	TST	R6, #OSHeap
+	MOVNE	R5, #OSHeap_MaxReason
+	MOVNE	R6, #HeapReason_Get
+	MOVEQ	R5, #OSModule_MaxReason
+	MOVEQ	R6, #ModHandReason_Claim
 	MOV	R4, #0
-	MOV	R5, #Max_ModHandReason :SHR: 2
-	; Claim a small stack frame for workspace...
+	MOV	R12, R2
 	SUB	SP, SP, #16
-01	SWI	XOS_WriteS
+	; R0  = scratch
+	; R1  = scratch
+	; R2  = scratch
+	; R3  = scratch
+	; R4  = reason code to output
+	; R5  = number of known reason codes for this SWI
+	; R6  = reason code for a claim operation
+	; R12 = pointer to block of copied workspace
+	;     = reason code counters followed by claimed block size counters
+	; R13 = pointer to 16 bytes of scratch buffer (and stack pointer)
+	; R14 = scratch
+
+02	; Output the reason code...
+	SWI	XOS_WriteS
 	DCB	"  R0=", 0
 	ALIGN
 	MOV	R0, R4
 	MOV	R1, SP
 	MOV	R2, #16
-	; Output reason number...
 	SWI	XOS_ConvertCardinal4
-	SWI	XOS_Write0
-	SWI	XOS_WriteI+" "
+	SWIVC	XOS_Write0
+	SWIVC	XOS_WriteI+" "
+
+	; Output the hit count for this reason code...
 	LDR	R0, [R12, R4, LSL #2]
-	MOV	R3, R0
 	MOV	R1, SP
 	MOV	R2, #16
-	; Output counter...
 	SWI	XOS_ConvertCardinal4
-	SWI	XOS_Write0
-	SWI	XOS_NewLine
-	; Is this claims? If so, output stats on ave. block sizes...
-	TEQ	R4, #ModHandReason_Claim
-	BNE	%FT03
-	; Loop through counters for various block claim sizes...
-	ADD	R7, R12, #Max_ModHandReason
-	ADD	R8, R7,  #Max_BlockSize
-	MOV	R9, #4
-02	SWI	XOS_WriteS
+	SWIVC	XOS_Write0
+	SWIVC	XOS_NewLine
+
+	; Is this a "claim" reason code?
+	TEQ	R4, R6
+	BNE	%FT09
+
+	; Yes - output the block size list...
+	Push	"R9-R12"
+	SUB	SP, SP, #16
+	MOV	R9, #0
+	LDR	R10, [R12, R4, LSL #2]
+	MOV	R11, #0
+	ADD	R12, R12, R5, LSL #2
+
+03	; Output the block size (range)...
+	SWI	XOS_WriteS
 	DCB	"    R3=", 0
 	ALIGN
 	MOV	R0, R9
 	MOV	R1, SP
 	MOV	R2, #16
 	SWI	XOS_ConvertCardinal4
-	SWI	XOS_Write0
-	SWI	XOS_WriteI+" "
-	LDR	R0, [R7], #4
+	SWIVC	XOS_Write0
+	TEQ	R11, #BlockSizes - 1
+	BNE	%FT04
+	SWI	XOS_WriteI+"+"
+	B	%FT05
+04	SWI	XOS_WriteI+"."
+	SWIVC	XOS_WriteI+"."
+	MOV	R0, #4
+	MOV	R9, R0, LSL R11
+	SUB	R0, R9, #1
 	MOV	R1, SP
 	MOV	R2, #16
 	SWI	XOS_ConvertCardinal4
-	SWI	XOS_Write0
-	SWI	XOS_NewLine
-	MOV	R9, R9, LSL #1
-	CMP	R7, R8
-	BLO	%BT02
-03	; Move on to the next reason code (if any)...
+	SWIVC	XOS_Write0
+05	SWIVC	XOS_WriteI+" "
+	LDR	R3, [R12, R11, LSL #2]
+	MOV	R1, SP
+	MOV	R2, #16
+	MOV	R0, R3
+	SWI	XOS_ConvertCardinal4
+	SWIVC	XOS_Write0
+	SWI	XOS_WriteS
+	DCB	" (", 0
+	ALIGN
+
+	; Output the percentage of total claims that this represents...
+	MOV	R0, #100
+	MUL	R3, R0, R3
+	DivRem	R0, R3, R10, R1
+	CMP	R3, R10, LSR #1
+	ADDHS	R0, R0, #1
+	MOV	R1, SP
+	MOV	R2, #16
+	SWI	XOS_ConvertCardinal4
+	SWIVC	XOS_Write0
+	SWI	XOS_WriteS
+	DCB	"%)", 10, 13, 0
+	ALIGN
+
+	; Move on to the next block size...
+	ADD	R11, R11, #1
+	CMP	R11, #BlockSizes
+	BLO	%BT03
+
+	ADD	SP, SP, #16
+	Pull	"R9-R12"
+        MOV	R6, #0	; So we don't enumerate the block list again!
+
+09	; Move on to the next reason code...
 	ADD	R4, R4, #1
 	CMP	R4, R5
-	BLO	%BT01
-	; Release our stack frame...
+	BLO	%BT02
 	ADD	SP, SP, #16
-	; Free our RMA copy...
+
+	; Free the RMA block which we copied some of our workspace into...
 	MOV	R0, #ModHandReason_Free
 	MOV	R2, R12
 	SWI	XOS_Module
+10	;
+	EXIT
+
+; ****************************************************
+; *
+; * Copy a block of the module workspace into another RMA block. If the
+; * flag bit in R6 is set, reset the workspace block to zero during the
+; * copy.
+; *
+; * In...
+; *   R4	= start offset into workspace of block to copy (inclusive)
+; *   R5	= end offset into workspace of block to copy (exclusive)
+; *   R6	= flags (bit zero set means reset to zero during copy)
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1	= corrupted
+; *   R2	= pointer to block of copied workspace
+; *   R3-R13	= preserved
+; *
+copy_wsp Entry "R3-R5"
+	SUBS	R3, R5, R4
+	MOVEQ	R2, #0
+	BEQ	%FT01
+	MOV	R0, #ModHandReason_Claim
+	SWI	XOS_Module
+	BVS	%FT01
+	ADD	R4, R12, R4
+	MOV	R0, R2
+	SCPSR	I_bit, 0, R1,, R14	; IRQs off
+	MOV	R1, #0
+00	LDR	R5, [R4], #4
+	TST	R6, #Reset
+	STRNE	R1, [R4, #-4]
+	SUBS	R3, R3, #4
+	STR	R5, [R0], #4
+	BNE	%BT00
+	RestPSR	R14			; Restore IRQs
+	NOP
+01	;
 	EXIT
 
 
