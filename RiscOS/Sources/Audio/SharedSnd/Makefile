@@ -31,7 +31,7 @@ SSLIB     = ${SL}.Drivers ${SL}.Handler ${SL}.Linear ${SL}.Memory ${SL}.Module \
 #
 # Generic rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} 
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -48,10 +48,9 @@ clean:
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}.SharedSoun ${SSLIB} vars
+${TARGET}: ${SOURCE}.SharedSoun ${SSLIB} 
+        Set MakeSSnd$Dir ${SOURCE}
         Run ${SOURCE}.SharedSoun
 
-vars:
-        Set MakeSSnd$Dir ${SOURCE}
 
 # Dynamic dependencies:
