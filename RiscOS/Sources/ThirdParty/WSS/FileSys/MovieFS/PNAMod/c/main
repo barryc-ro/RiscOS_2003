@@ -1,0 +1,428 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    PHBG 16/1/97: Initial version
+    PHBG 20/1/97: Introduced callbacks for timing out.
+    PHBG 29/1/97: Switch over to interupt driven servicing
+                  of the streamed data.
+*/
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "kernel.h"
+#include "pna_swis.h"
+#include "options.h"
+#include "memory.h"
+#include "error.h"
+#include "safeputc.h"
+#include "time.h"
+#include "callback.h"
+#include "forcecallb.h"
+#include "pnach.h"
+#include "pna.h"
+#include "sysvar.h"
+#include "pnaoptions.h"
+
+#define TIMEOUT         (1000)
+#define SERVICE_DELAY   (20)
+#define NRECS           (256)
+#define SWINO(x)        ((x) - PNA_Prepare)
+#define Service_DiallerStatus (0xB4)
+
+typedef struct
+{
+    char *url;
+    pnach_handle_t pnach;
+    int open;
+    int stamp;
+    int has_service;
+} pna_rec_t;
+
+static volatile int fetching = 0;
+
+static pna_rec_t empty_rec = {0, 0, 0, 0, 0};
+
+static _kernel_oserror error_ill_swi = {0x10000, "Illegal SWI"};
+
+
+static pna_rec_t rec[NRECS];
+
+static void dydown(int i)
+{
+    MemMinimalise();
+    CallBackAfter(dydown, 0, 1000);
+}
+
+static char *state_string(conn_state_t state)
+{
+    switch(state)
+    {
+        case CONN_STATE_RESOLVING:	return "resolving address";
+        case CONN_STATE_CONNECTING:	return "connecting";
+        case CONN_STATE_GREETING:	return "greeting server";
+        case CONN_STATE_PROXY:		return "greeting proxy";
+        case CONN_STATE_CHALLENGING:	return "challenging server";
+        case CONN_STATE_REQUESTING:	return "requesting resource";
+        case CONN_STATE_READY:		return "ready";
+        case CONN_STATE_FINISHED:	return "finished";
+        case CONN_STATE_CLOSED:		return "closed";
+        case CONN_STATE_FAILED:		return "failed";
+    }
+    return NULL;
+}
+
+static void blank(int i)
+{
+    pna_rec_t reci;
+
+    reci = rec[i];
+    rec[i] = empty_rec;
+    if(reci.url) Free(reci.url);
+    ExceptTry
+    {
+        if(reci.pnach) PnaChClose(reci.pnach);
+    }
+    ExceptCatch
+    {
+        printf("%s", ExceptCaught()->errmess);
+    }
+}
+
+static void service(int i)
+{
+#if DEBUG
+    safeputstr("(");
+#endif
+    if(rec[i].open == 0 && ((int) Time() - rec[i].stamp) >= TIMEOUT)
+    {
+      blank(i);
+    }
+    else
+    {
+        if(rec[i].url != NULL)
+        {
+            if(!fetching)
+            {
+                ExceptTry
+                {
+                    PnaChService(rec[i].pnach);
+                }
+                ExceptCatch
+                {
+                    ;
+                }
+            }
+            #if DEBUG
+            else
+            	safeputstr(".");
+            #endif
+            CallBackAfter(service, i, SERVICE_DELAY);
+        }
+    }
+#if DEBUG
+    safeputstr(")");
+#endif
+}
+
+static int prepare(char *url)
+{
+    int i;
+
+    for(i = 0; i < NRECS && rec[i].url != NULL; i++)
+    {
+        ;
+    }
+    if(i == NRECS)
+        Error("Too many open URLs");
+    ExceptTry
+    {
+        rec[i].url = Malloc(strlen(url) + 1);
+        strcpy(rec[i].url, url);
+        rec[i].pnach = PnaChOpen(rec[i].url);
+    }
+    ExceptCatch
+    {
+        blank(i);
+        ExceptRethrow();
+    }
+    return i;
+}
+
+static int find(char *url)
+{
+    int i, found;
+
+    found = -1;
+    for(i = 0; i < NRECS && found == -1; i++)
+    {
+        if(rec[i].url != NULL && strcmp(rec[i].url, url) == 0
+                              && rec[i].open == 0)
+        {
+            ExceptTry
+            {
+                if(PnaChState(rec[i].pnach) <= CONN_STATE_READY)
+                    found = i;
+            }
+            ExceptCatch
+            {
+                ;
+            }
+        }
+    }
+    return found;
+}
+
+static void swi_prepare(_kernel_swi_regs *r)
+{
+    int i;
+
+    i = prepare((char *) r->r[0]);
+    r->r[0] = i;
+    rec[i].stamp = Time();
+    CallBackAfter(service, i, SERVICE_DELAY);
+    rec[i].has_service = 1;
+}
+
+static void swi_open(_kernel_swi_regs *r)
+{
+    int i, going;
+    int time;
+    pna_rec_t *rp;
+    conn_state_t state;
+
+    i = find((char *) r->r[0]);
+    if(i == -1)
+        i = prepare((char *) r->r[0]);
+    r->r[0] = i;
+    rp = rec + i;
+    rp->open = 1; /* Stop death */
+    ExceptTry
+    {
+        time = Time();
+        going = 1;
+        while(going)
+        {
+            ForceCallBack();
+            PnaChService(rp->pnach);
+            state = PnaChState(rp->pnach);
+            if(state >= CONN_STATE_READY)
+                going = 0;
+            if(((int) (Time() - time)) >= TIMEOUT)
+                going = 0;
+        }
+        if(state < CONN_STATE_READY)
+            Error("Timed out while %s", state_string(state));
+        if(state == CONN_STATE_FAILED)
+            Error("%s", PnaChError(rp->pnach));
+        if(state > CONN_STATE_READY)
+            Error("Somehow got as far as %s", state_string(state));
+        if(!rp->has_service)
+        {
+            #if SERVICE
+            CallBackAfter(service, i, SERVICE_DELAY);
+            #endif
+            rp->has_service = 1;
+        }
+    }
+    ExceptCatch
+    {
+        blank(i);
+        ExceptRethrow();
+    }
+}
+
+static void swi_close(_kernel_swi_regs *r)
+{
+#if NOPAUSE
+    return;
+#endif
+    if(rec[r->r[0]].open == 0)
+    	Error("pna handle already closed");
+    rec[r->r[0]].stamp = Time();
+    rec[r->r[0]].open = 0;
+}
+
+static void swi_destroy(_kernel_swi_regs *r)
+{
+    blank(r->r[0]);
+    MemMinimalise();
+}
+
+static void swi_state(_kernel_swi_regs *r)
+{
+    pna_rec_t *rp;
+
+    rp = rec + r->r[0];
+    if(rp->url == NULL)
+    {
+        r->r[0] = CONN_STATE_FAILED;
+        return;
+    }
+    rp->stamp = Time();
+    r->r[0] = PnaChState(rp->pnach);
+}
+
+static void swi_error(_kernel_swi_regs *r)
+{
+    r->r[0] = (int) (rec[r->r[0]].url == NULL
+                       ? "Timed out"
+                       : PnaChError(rec[r->r[0]].pnach));
+}
+
+static void swi_info(_kernel_swi_regs *r)
+{
+    pnach_handle_t pnach;
+    data_t hdr;
+
+    if(rec[r->r[0]].url == NULL)
+    {
+        r->r[0] = NULL;
+        r->r[1] = 0;
+        r->r[2] = NULL;
+    }
+    else
+    {
+        pnach = rec[r->r[0]].pnach;
+        hdr = PnaChHeader(pnach);
+        r->r[0] = (int) PnaChInfo(pnach);
+        r->r[1] = hdr.size;
+        r->r[2] = (int) hdr.buf;
+        r->r[3] = (int) PnaChAddress(pnach);
+        r->r[4] = (int) PnaChResource(pnach);
+    }
+}
+
+static void swi_fetch(_kernel_swi_regs *r)
+{
+    fetching = 1; /* Prevent [<()>] Not nedded */
+    r->r[0] = (int) PnaChFetch(rec[r->r[0]].pnach, r->r[1]);
+    fetching = 0;
+#if 0
+    if (((int *)r->r[0])[0] == -1) {
+      printf("Fetch Kill!!!\n");
+    } else if (((int *)r->r[0])[0] != 0) {
+      printf("Fetch OK\n");
+    }
+#endif
+}
+
+_kernel_oserror *initialise(char *cmd_tail, int podule, void *pw)
+{
+    _kernel_oserror *err;
+    int i;
+    char *buf;
+
+    err = NULL;
+    ExceptTry
+    {
+        printf("PNA v1.21 (c) Warm Silence Software Ltd 1997-8\n"
+               "All rights reserved.\n"
+               "Written by Paul Gardiner and Robin Watts\n");
+        for(i = 0; i < NRECS; i++)
+            rec[i] = empty_rec;
+        CallBackInit(pw);
+        PnaChInit();
+        #if MEMMIN
+        CallBackAfter(dydown, 0, 1000);
+        #endif
+        buf = VarRead("RA$Bandwidth");
+        if (buf)
+          Free(buf);
+        else
+          VarSetInt("RA$Bandwidth", DEFAULT_BANDWIDTH);
+        buf = VarRead("RA$Proxy");
+        if (buf)
+          Free(buf);
+        else
+          VarSet("RA$Proxy", "");
+        buf = VarRead("RA$Transport");
+        if (buf)
+          Free(buf);
+        else
+          VarSet("RA$Transport", "UDP");
+    }
+    ExceptCatch
+    {
+        err = ExceptCaught();
+    }
+    return err;
+}
+
+_kernel_oserror* finalise(int fatal, int podule, void *pw)
+{
+    _kernel_oserror *err;
+    int i;
+
+    err = NULL;
+    ExceptTry
+    {
+        CallBacksOff();
+        for(i = 0; i < NRECS; i++)
+            blank(i);
+        PnaChFin();
+    }
+    ExceptCatch
+    {
+        err = ExceptCaught();
+    }
+    if(err == NULL) MemKill();
+    return err;
+}
+
+_kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
+{
+    _kernel_oserror *err;
+
+    err = NULL;
+    ExceptTry
+    {
+        switch(swi_no)
+        {
+            case SWINO(PNA_Prepare):
+                swi_prepare(r);
+                break;
+            case SWINO(PNA_Open):
+                swi_open(r);
+                break;
+            case SWINO(PNA_Close):
+                swi_close(r);
+                break;
+            case SWINO(PNA_Destroy):
+                swi_destroy(r);
+                break;
+            case SWINO(PNA_State):
+                swi_state(r);
+                break;
+            case SWINO(PNA_Error):
+                swi_error(r);
+                break;
+            case SWINO(PNA_Info):
+                swi_info(r);
+                break;
+            case SWINO(PNA_Fetch):
+                swi_fetch(r);
+                break;
+            default:
+                err = &error_ill_swi;
+                break;
+        }
+    }
+    ExceptCatch
+    {
+        //printf("%s\n", ExceptCaught()->errmess);
+        err = ExceptCaught();
+    }
+    return err;
+}
+
+void service_call(int service_number, _kernel_swi_regs *r, void *pw)
+{
+    switch (service_number)
+    {
+        case Service_DiallerStatus:
+            PnaLineUp(r->r[2] != 0);
+            break;
+    }
+}

@@ -1,0 +1,245 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    RJW 29/1/97: Initial version
+    PHBG 28/2/97: Repeated last transblk if last chunk is short.
+                  Bit of a hack, but better than a crash.
+    PHBG 17/3/97: Moved chunk presentation out into separate class.
+*/
+
+#include <string.h>
+#include <stdio.h>
+#include "swis.h"
+#include "error.h"
+#include "data.h"
+#include "chunk.h"
+#include "chpres.h"
+#include "pnach.h"
+#include "ra.h"
+#include "bool.h"
+#include "nocasecmp.h"
+#include "fileio.h"
+#include "rmheader.h"
+#include "packetread.h"
+
+struct filepnach_handle_s
+{
+    char              *fname;
+    bool               alreadyopen;
+    fs_handle          fhandle;
+    data_t             orig_header;
+    rmheader_t         rm_header;
+    packet_reader_t    packet_reader;
+    ra_header_t       *useful_header;
+    int                current_buffer;
+    char              *replay_buffer[2];
+    chunk_presentor_t  chpres;
+};
+
+typedef struct filepnach_handle_s *filepnach_handle_t;
+
+void filePnaChInit(void) {
+
+}
+
+void filePnaChFin(void) {
+
+}
+
+static pnach_generic_handle_t filePnaChOpen(char *url)
+{
+  char *p, *q;
+  char c;
+  fs_handle prior;
+  bool alreadyopen;
+  filepnach_handle_t f;
+
+  if (nocasecmp(url, "file:", 5) != 0)
+    return NULL;
+  url += 5;
+
+  alreadyopen = false;
+  if ((sscanf(url, "%x%c", &prior, &c) == 2) && (c == ':')) {
+    /* We have been passed a handle! For now we'll assume its the handle */
+    /* of the file we are interested in... */
+    url = strchr(url, ':')+1;
+    alreadyopen = true;
+  };
+
+  while (*url == '/')
+    url++;
+
+  p = Malloc(strlen(url)+1);
+  strcpy(p, url);
+  for (q = p; *q != 0; q++) {
+    if (*q == '/')
+      *q = '.';
+    else if (*q == '.')
+      *q = '/';
+  }
+
+  /* Paranoia attack: What happens if someone has given us the wrong handle? */
+  /* This happens when someone copies the ARMovie out... */
+  if (alreadyopen) {
+    alreadyopen = (strcmp(p, FsName(prior)) == 0);
+  }
+  /* If its not the real handle then we'd better open it anyway... */
+  if (!alreadyopen) {
+    prior = FsOpen(p);
+    if (prior == 0) {
+      Free(p);
+      Error("File specified in 'file:' URL not openable!");
+    }
+  }
+
+  f = Malloc(sizeof(*f));
+  f->fname          = p;
+  f->current_buffer = 0;
+  f->alreadyopen    = alreadyopen;
+  f->fhandle        = prior;
+  f->orig_header    = empty_data;
+  f->useful_header  = NULL;
+  f->rm_header      = NULL;
+  f->packet_reader  = NULL;
+
+  ExceptTry
+  {
+    f->orig_header    = RAHeaderReadFile(f->fhandle);
+  }
+  ExceptCatch
+  {
+    Free(f);
+    Free(p);
+    ExceptRethrow();
+  }
+
+  ExceptTry
+  {
+    f->rm_header = RMHeader();
+    f->packet_reader = RMHeaderExtract(f->rm_header, f->orig_header);
+    f->useful_header=(ra_header_t *)Malloc(sizeof(ra_header_t));
+    RAHeaderExtract(f->useful_header, RMHeaderAudio(f->rm_header));
+    if(f->useful_header->file_version == 3)
+        f->useful_header->interleavefactor = 1;
+  }
+  ExceptCatch
+  {
+    RMHeaderDestruct(f->rm_header);
+    PacketReaderDestruct(f->packet_reader);
+    Free(f->useful_header);
+    Free(f);
+    Free(p);
+    ExceptRethrow();
+  }
+  /* Now bend the orig_header... */
+  f->orig_header.size = f->useful_header->dataoffset;
+
+  /* Set up chunk pointers */
+  f->replay_buffer[0] = Malloc(f->useful_header->replaychunksize);
+  f->replay_buffer[1] = Malloc(f->useful_header->replaychunksize);
+
+  f->chpres = Chpres(f->useful_header);
+
+  return (pnach_generic_handle_t) f;
+}
+
+static void filePnaChClose(pnach_generic_handle_t p)
+{
+  filepnach_handle_t f;
+
+  f = (filepnach_handle_t) p;
+
+  if (!f->alreadyopen)
+    FsClose(f->fhandle);
+
+  ChpresFree(f->chpres);
+  RAHeaderFree(f->useful_header);
+  RMHeaderDestruct(f->rm_header);
+  PacketReaderDestruct(f->packet_reader);
+  Free(f->useful_header);
+  Free(f->replay_buffer[0]);
+  Free(f->replay_buffer[1]);
+  Free(f->orig_header.buf);
+  Free(f->fname);
+  Free(f);
+}
+
+static conn_state_t filePnaChState(pnach_generic_handle_t p)
+{
+    return CONN_STATE_READY;
+}
+
+static void filePnaChService(pnach_generic_handle_t p)
+{
+    ;
+}
+
+static chunk_desc_t *filePnaChFetch(pnach_generic_handle_t p, int n)
+{
+  int pos;
+  char *buf;
+  filepnach_handle_t f;
+  ra_header_t *hdr;
+
+  f = (filepnach_handle_t) p;
+  hdr = f->useful_header;
+  buf = f->replay_buffer[f->current_buffer];
+  f->current_buffer = !f->current_buffer;
+  if (f->packet_reader == NULL) {
+    pos = hdr->dataoffset + n*hdr->replaychunksize;
+    FsReadAt(f->fhandle, pos, buf, hdr->replaychunksize);
+  } else {
+    PacketReaderAudioFile(f->packet_reader, f->fhandle, n, hdr->replaychunksize, buf);
+  }
+  return ChpresPresent(f->chpres, n, buf);
+}
+
+static ra_header_t *filePnaChInfo(pnach_generic_handle_t p)
+{
+  filepnach_handle_t f;
+
+  f = (filepnach_handle_t) p;
+  return f->useful_header;
+}
+
+static char *filePnaChError(pnach_generic_handle_t p)
+{
+    return NULL;
+}
+
+static char *filePnaChAddress(pnach_generic_handle_t p)
+{
+    return NULL;
+}
+
+static char *filePnaChResource(pnach_generic_handle_t p)
+{
+  filepnach_handle_t f;
+
+  f = (filepnach_handle_t) p;
+  return f->fname;
+}
+
+static data_t filePnaChHeader(pnach_generic_handle_t p)
+{
+  filepnach_handle_t f;
+
+  f = (filepnach_handle_t) p;
+  return f->orig_header;
+}
+
+pnach FilePnaCh = {
+  filePnaChInit,
+  filePnaChFin,
+  filePnaChOpen,
+  filePnaChClose,
+  filePnaChState,
+  filePnaChService,
+  filePnaChFetch,
+  filePnaChInfo,
+  filePnaChError,
+  filePnaChAddress,
+  filePnaChResource,
+  filePnaChHeader,
+};

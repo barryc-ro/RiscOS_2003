@@ -1,0 +1,576 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+    
+    PHBG: Initial version
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "options.h"
+#include "error.h"
+#include "fileio.h"
+#include "memory.h"
+#include "sprite.h"
+#include "t_dec.h"
+#include "part.h"
+#include "tracks.h"
+#include "replay.h"
+
+#define HEADER_SIZE           (2 * 1024)
+#define PALETTE_SIZE          (256 * 3)
+
+#define HEADER_PART       (0)
+#define SPRITE_PART       (1)
+#define CATALOGUE_PART    (2)
+#define PALETTE_PART      (3)
+#define DATA_PART         (4)
+
+#define FPC_INDEX         (0)
+#define CHUNK_SIZE_INDEX  (1)
+#define INDEX_SIZE_INDEX  (2)
+#define SOUND_SIZE_INDEX  (3)
+#define NCHUNK_INDEX      (4)
+#define DATA_INDEX        (5)
+#define CHOFF_INDEX       (6)
+
+#define FILE_OFFSET       (0)
+#define CHUNK_SIZE        (1)
+#define FROFF_INDEX       (2)
+
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+static int align2k(int i)
+{
+    return ((i + 0x7FF) & ~0x7FF);
+}
+
+static int floor2k(int i)
+{
+    return (i & ~0x7FF);
+}
+
+static int alignword(int i)
+{
+    return ((i + 3) & ~3);
+}
+
+static void sprintfrac(char *str, int num, int div)
+{
+    int d, i;
+
+    d = num / div;
+    sprintf(str, "%d.", d); str += strlen(str);
+    for(i = 0; i < 4; i++)
+    {
+        num -= d * div;
+        num *= 10;
+        d = num / div;
+        sprintf(str, "%d", d); str += strlen(str);
+    }
+}
+
+/*
+
+The following procedure produces the closest integer to (val * num)/div even
+when val * num exceeds 32 bits.
+
+Notation: Let {acc} be the value of a pair of variables acc_d and acc_r where 
+acc_d * div + acc_r = {acc}, and 0 <= acc_r < div
+
+                               31
+Then we notice that (a*b)/c = SUM   a<i> * b/c (where a<i> is the ith bit of a)
+			       i=0
+
+On the ith time around the loop we have the following is true:
+
+{val} = num * (2**i)
+
+val<0..i> * num = div * {acc}
+
+So the algorithm resolves to a loop from i = 0 to 31 adding {val} to {acc}
+whenever val<i> = 1, and housekeeping {val} and {acc}.
+
+The following implementation has been data refined not to contain i, but to
+shift val down each time.
+
+ */
+
+int scale(int val, int num, int div)
+{
+    int acc_d, acc_r, val_d, val_r;
+
+    acc_d = acc_r = 0;
+    val_d = num/div; val_r = num % div;
+    while(val > 0)
+    {
+        if(val & 1)
+        {
+            acc_d += val_d; acc_r += val_r;
+            if(acc_r >= div)
+            {
+                acc_r -= div;
+                acc_d++;
+            }
+        }
+        val >>= 1;
+        val_d <<= 1;
+        val_r <<= 1;
+        if(val_r >= div)
+        {
+            val_r -= div;
+            val_d++;
+        }
+    }
+    if(acc_r >= (div >> 1)) acc_d++;
+    return acc_d;
+}
+
+static struct dec_s dec_novid = {"0", "", 0};
+
+static int chunk_period = 100;  /* centisecs */
+static int xsize, ysize;
+static struct dec_s *decoder;
+static char *compression;
+static int frames_per_chunk;
+static int nframes;
+static dib_t *frame;
+static int nchunks;
+
+static int sample_rate;
+static int sound_chunky;
+static samples2bytes_t samples2bytes;
+static bytes2samples_t bytes2samples;
+static sound_hdr_t *sound_hdr;
+static char *sound_desc;
+static char *sound_type;
+static int sound_depth;
+static int sound_channels;
+static char frame_rate[30];
+static int nsamples, samples_per_chunk;
+static int nsound;
+static dib_t *sound;
+
+static int bytes_per_sample;
+
+static sound_pos_t s2b_default(sound_hdr_t *shdr, int samples)
+{
+    sound_pos_t pos;
+    
+    pos.samples = 0;
+    pos.low = pos.high = samples * bytes_per_sample;
+    return pos;
+}
+
+static int b2s_default(sound_hdr_t *shdr, int bytes)
+{
+    return bytes / bytes_per_sample;
+}
+
+static sound_pos_t s2b_none(sound_hdr_t *shdr, int samples)
+{
+    sound_pos_t pos;
+    
+    pos.samples = 0;
+    pos.low = pos.high = 0;
+    return pos;
+}
+
+static int b2s_none(sound_hdr_t *shdr, int bytes)
+{
+    return 0;
+}
+
+static void calc_details(film_spec *film)
+{
+    video_spec *vs;
+    audio_spec *as;
+    int vrate, vscale;
+    
+    vs = TracksVideo() ? film->video : NULL;
+    as = TracksAudio() ? film->audio : NULL;
+    if(!vs && !as) Error("No audio or video channel");
+    sample_rate = 0;
+    sound_desc = "0";
+    sound_type = "unsigned";
+    sound_depth = 8;
+    sound_channels = 1;
+    sound_chunky = 0;
+    sound_hdr = NULL;
+    samples2bytes = s2b_none;
+    bytes2samples = b2s_none;
+    nsamples = 0;
+    samples_per_chunk = 0;
+    nsound = 0;
+    xsize = 64;
+    ysize = 64;
+    decoder = &dec_novid;
+    vrate = 25;
+    vscale = 1;
+    nframes = 0;
+    compression = "";
+    if(vs)
+    {
+        xsize = vs->xsize;
+        ysize = vs->ysize;
+        vrate = vs->rate;
+        vscale = vs->scale;
+        decoder = vs->decoder;
+        nframes = vs->nchunks;
+        frame = vs->chunk;
+        compression = vs->compression;
+    }
+    sprintfrac(frame_rate, vrate, vscale);
+    frames_per_chunk = MAX(chunk_period * vrate / vscale / 100, 4);
+    nchunks = (nframes + frames_per_chunk - 1) / frames_per_chunk;
+    if(as)
+    {
+        nsound = as->nchunks;
+        sound = as->chunk;
+        sample_rate = as->rate / as->scale;
+        sound_desc = as->desc == NULL ? "1" : as->desc;
+        switch(as->sign)
+        {
+            case 0: sound_type = "linear unsigned"; break;
+            case 1: sound_type = "linear signed"; break;
+            case 2: sound_type = "exponential"; break;
+        }
+        sound_depth = as->depth;
+        sound_channels = as->channels;
+        bytes_per_sample = sound_channels * as->depth / 8;
+        sound_chunky = (as->samples2bytes != NULL);
+        sound_hdr = as->header;
+        samples2bytes = as->samples2bytes ? as->samples2bytes : s2b_default;
+        bytes2samples = as->bytes2samples ? as->bytes2samples : b2s_default;
+        samples_per_chunk = scale(frames_per_chunk * sample_rate,
+                                  vscale, vrate);
+        switch(sound_channels)
+        {
+            case 1: break;
+            case 2: break;
+            default: Error("Audio channels = %d", sound_channels);
+        }
+        switch(sound_depth)
+        {
+            case 4: break;
+            case 8: break;
+            case 16: break;
+            default: Error("Audio bits per sample = %d", sound_depth);
+        }
+        {
+            int nbytes, i;
+            
+            nbytes = 0;
+            for(i = 0; i < nsound; i++)
+                nbytes += sound[i].size;
+            nsamples = bytes2samples(sound_hdr, nbytes);
+        }
+        if(!vs)
+            nchunks = (nsamples + samples_per_chunk - 1) / samples_per_chunk;
+    }
+}
+
+static int main_cat_words;
+
+static int header_size;
+static int sprite_size;
+static int catalogue_size;
+static int palette_size;
+static int data_size;
+static int header_pos;
+static int sprite_pos;
+static int catalogue_pos;
+static int palette_pos;
+static int data_pos;
+
+static void calc_sizes(int handle)
+{
+    int pos;
+    
+    header_size = HEADER_SIZE;
+    sprite_size = SprType(SPRITE_MODE, 4*xsize, 4*ysize).memory + 60 - 4;
+    main_cat_words = CHOFF_INDEX
+                   + (14 + frames_per_chunk) * nchunks /* sound header ref */
+                   + nsound * 2;
+    catalogue_size = main_cat_words * sizeof(int)
+                   + (sound_hdr ? sound_hdr->size : 0)
+                   + sizeof(int);
+    palette_size = decoder->has_pal ? PALETTE_SIZE : 0;
+    data_size = FsSize(FsName(handle));
+    /*
+    Error("spc %d, ext %d, mcat %d, cat %d", samples_per_chunk, extra_sound, main_cat_words, catalogue_size);
+    */
+    pos = 0;
+    header_pos = pos;
+    pos = alignword(pos + header_size);
+    sprite_pos = pos;
+    pos = align2k(pos + sprite_size);
+    catalogue_pos = pos;
+    pos = alignword(pos + catalogue_size);
+    palette_pos = pos;
+    pos = align2k(pos + palette_size);
+    data_pos = pos;
+}
+
+static int          fr_ind, s_ind, s_used;
+static sound_pos_t  s_pos;
+static int         *catalogue;
+static int          max_chunk_size;
+static int          max_index_size;
+static int          max_sound_size;
+static int          total_chunk_size;
+static int          sound_header_offset;
+static int         *chunk_ptr;
+
+static void make_chunk_init(void)
+{
+    fr_ind = s_ind = s_used = 0;
+    s_pos.low = s_pos.high = s_pos.samples = 0;
+    max_chunk_size = 0;
+    max_index_size = 0;
+    max_sound_size = 0;
+    sound_header_offset = main_cat_words;
+    catalogue = Malloc(catalogue_size);
+    PartDefPool(catalogue);
+    PartDef(CATALOGUE_PART, PartMemory(catalogue, catalogue_pos,
+                                                  catalogue_size));
+    catalogue[0] = catalogue_size;
+    catalogue++;
+    if(sound_hdr)
+        memcpy(catalogue+sound_header_offset, sound_hdr->data,
+                                              sound_hdr->size);
+    chunk_ptr = catalogue + CHOFF_INDEX + nchunks;
+}
+
+
+static void make_chunk(int ch_ind)
+{
+    int max_offset, min_offset;
+    int i, size;
+    int sound_parts;
+    int chunk_samples;
+    int start, end;
+    int *ptr, *chunk_details;
+    int s_bytes;
+    
+    ptr = chunk_ptr;
+    chunk_samples = MIN(nsamples, samples_per_chunk);
+    nsamples -= chunk_samples;
+    if(sound_chunky)
+    {
+        *ptr++ = s_pos.samples;
+        *ptr++ = chunk_samples;
+    }
+    chunk_details = ptr;
+    (catalogue+CHOFF_INDEX)[ch_ind] = chunk_details - catalogue;
+    ptr += FROFF_INDEX;
+    min_offset = data_size;
+    max_offset = 0;
+    for(i = 0; i < frames_per_chunk && fr_ind < nframes; i++)
+    {
+        size = frame[fr_ind].size;
+        if(size)
+        {
+            start = frame[fr_ind].start;
+            end = start + size;
+            if(start < min_offset)
+                min_offset = start;
+            if(end > max_offset)
+                max_offset = end;
+            *ptr++ = start;
+        }
+        else
+        {
+            *ptr++ = -1;
+        }
+        fr_ind++;
+    }
+    while(i < frames_per_chunk)
+    {
+        *ptr++ = -1;
+        i++;       
+    }
+    ptr++;
+    sound_parts = 0;
+    if(sound_chunky)
+    {
+        *ptr++ = (chunk_ptr - catalogue) * sizeof(int);
+        *ptr++ = -8;
+       sound_parts++;
+    }
+    if(sound_hdr)
+    {
+        *ptr++ = sound_header_offset * sizeof(int);
+        *ptr++ = -sound_hdr->size;
+        sound_parts++;
+    }
+    s_pos = samples2bytes(sound_hdr, s_pos.samples + chunk_samples);
+    s_bytes = s_pos.high;
+    while(s_bytes > 0 && s_ind < nsound)
+    {
+        size = MIN(s_bytes, sound[s_ind].size - s_used);
+        if(size)
+        {
+            start = sound[s_ind].start + s_used;
+            end = start + size;
+            if(start < min_offset)
+                min_offset = start;
+            if(end > max_offset)
+                max_offset = end;
+            *ptr++ = start;
+            *ptr++ = size;
+            sound_parts++;
+            s_used += size;
+            s_bytes -= size;
+            if(s_used >= sound[s_ind].size)
+            {
+                s_ind++;
+                s_used = 0;
+            }
+        }
+    }
+    if(s_bytes == 0)
+    {
+        s_used -= s_pos.high - s_pos.low;
+        if(s_used < 0)
+        {
+            s_ind--;
+            if(s_ind < 0) Error("s_ind < 0 (bug)");
+            s_used += sound[s_ind].size;
+            if(s_used < 0) Error("s_ind < 0 (bug)");
+        }
+    }
+    min_offset = floor2k(min_offset);
+    max_offset = align2k(max_offset);
+    ptr = chunk_details;
+    *ptr++ = min_offset + data_pos;
+    *ptr++ = max_offset - min_offset;
+    for(i = 0; i < frames_per_chunk; i++)
+    {
+        if(*ptr != -1)
+            *ptr -= min_offset;
+        ptr++;
+    }
+    *ptr++ = sound_parts;
+    for(i = 0; i < sound_parts; i++)
+    {
+        if(ptr[1] > 0)
+            ptr[0] -= min_offset;
+        ptr += 2;
+    }
+    chunk_ptr = ptr;
+    max_chunk_size = MAX(max_chunk_size, max_offset - min_offset);
+    max_index_size = MAX(max_index_size,
+          (frames_per_chunk + 1 + sound_parts * 2) * sizeof(int));
+    max_sound_size = MAX(max_sound_size,
+                          s_pos.high
+                          + (sound_chunky ? 8 : 0)
+                          + (sound_hdr ? sound_hdr->size : 0));
+}
+
+static void make_header(film_spec *film)
+{
+    char *h;
+    
+    h = Malloc(header_size);
+    PartDefPool(h);
+    PartDef(HEADER_PART, PartMemory(h, header_pos, header_size));
+    sprintf(h, "ARMovie\n");                                h += strlen(h);
+    sprintf(h, "\n");                                       h += strlen(h);
+    sprintf(h, "Copyright information not known\n");        h += strlen(h);
+    sprintf(h, "Converted from %s %s by MovieFS\n", film->type, compression);
+                                                            h += strlen(h);
+    sprintf(h, "%s\n", decoder->dec_num);                   h += strlen(h);
+    sprintf(h, "%d pixels\n", xsize);                      h += strlen(h);
+    sprintf(h, "%d pixels\n", ysize);                      h += strlen(h);
+    if(decoder->has_pal)
+        sprintf(h, "8 bpp Palette %d\n", palette_pos);
+    else
+        sprintf(h, "16 bpp %s\n", decoder->col_space);
+                                                            h += strlen(h);
+    sprintf(h, "%s frames per second\n", frame_rate);       h += strlen(h);
+    sprintf(h, "%s\n", sound_desc);                         h += strlen(h);
+    sprintf(h, "%d Hz samples\n", sample_rate);             h += strlen(h);
+    sprintf(h, "%d channel\n", sound_channels);             h += strlen(h);
+    sprintf(h, "%d bits (%s)\n", sound_depth, sound_type);  h += strlen(h);
+    sprintf(h, "%d frames per chunk\n", frames_per_chunk);  h += strlen(h);
+    sprintf(h, "%d number of chunks\n", nchunks - 1);       h += strlen(h);
+    sprintf(h, "%d even chunk size\n", total_chunk_size);   h += strlen(h);
+    sprintf(h, "%d odd chunk size\n", total_chunk_size);    h += strlen(h);
+    sprintf(h, "%d Fetcher [Universal]\n", catalogue_pos);  h += strlen(h);
+    sprintf(h, "%d offset to sprite\n", sprite_pos);        h += strlen(h);
+    sprintf(h, "%d size of sprite\n", sprite_size);         h += strlen(h);
+    sprintf(h, "No offset to keys\n");
+}
+
+static void make_sprite(film_spec *film)
+{
+    PartDefXsize(xsize);
+    PartDefYsize(ysize);
+    PartDef(SPRITE_PART, PartSprite(sprite_pos, sprite_size));
+}
+
+static void conv32to24(int i, char *buf)
+{
+    buf[0] = ((char *) &i)[2];
+    buf[1] = ((char *) &i)[1];
+    buf[2] = ((char *) &i)[0];
+}
+
+static void make_palette(film_spec *film)
+{
+    int i;
+    char *palette;
+
+    palette = NULL;
+    if(palette_size)
+    {
+        palette = Malloc(palette_size);
+        for(i = 0; i < 256; i++)
+            conv32to24(film->video->palette[i], palette + (i*3));
+        PartDefPool(palette);
+    }
+    PartDef(PALETTE_PART, PartMemory(palette, palette_pos, palette_size));
+}
+
+static void make_catalogue(void)
+{
+    catalogue[FPC_INDEX] = frames_per_chunk;
+    catalogue[CHUNK_SIZE_INDEX] = max_chunk_size;
+    catalogue[INDEX_SIZE_INDEX] = max_index_size;
+    catalogue[SOUND_SIZE_INDEX] = max_sound_size;    
+    catalogue[NCHUNK_INDEX]     = nchunks;
+    catalogue[DATA_INDEX]       = data_pos;
+    total_chunk_size = max_chunk_size;
+}
+
+static void make_data(void)
+{
+    PartDef(DATA_PART, PartFile(0, data_pos, data_size));
+}
+
+void ReplaySetChunkPeriod(int cs)
+{
+    chunk_period = cs;
+}
+
+image_t *ReplayImage(film_spec *film)
+{
+    int i;
+    
+    calc_details(film);
+    calc_sizes(film->handle);
+    PartInit(10);
+    PartDefHandle(film->handle);
+    make_palette(film);
+    make_chunk_init();
+    for(i = 0; i < nchunks; i++)
+        make_chunk(i);
+    make_catalogue();
+    make_header(film);
+    make_sprite(film);
+    make_data();
+    return PartImage();
+}

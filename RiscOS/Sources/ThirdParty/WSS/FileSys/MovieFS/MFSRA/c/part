@@ -1,0 +1,275 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+    
+    PHBG: Initial version
+*/
+
+#include <string.h>
+#include "error.h"
+#include "fileio.h"
+#include "memory.h"
+#include "sprite.h"
+#include "wss.h"
+#include "part.h"
+#include "error.h"
+
+#define MAXPOOLS (5)
+
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+#define OFF(area, tile) ((((area + tile) / 2) % tile) - tile)
+
+typedef struct
+{
+    int npools;
+    void *pool[MAXPOOLS];
+    int xsize, ysize;
+    int handle;
+} rep_blk_t;
+
+static void memory_fill(char *buf, int size, int pos,
+                        void *data, part_t *part)
+{
+    PartFreeSprite();
+    memcpy(buf, (char *) part->fill_arg + pos, size);
+}
+
+static void file_fill(char *buf, int size, int pos,
+                      void *data, part_t *part)
+{
+    PartFreeSprite();
+    FsReadAt(((rep_blk_t *)data)->handle, part->fill_arg + pos, buf, size);
+}
+
+/*
+static void frame_fill(char *buf, int size, int pos,
+                      void *data, part_t *part)
+{
+    int hsize, pre[PartFrameHeaderSize/4];
+    
+    PartFreeSprite();
+    pre[0] = part->end - part->start - 4;
+    pre[1] = AviFsVersion;
+    pre[2] = ((rep_blk_t *) data)->xsize;
+    pre[3] = ((rep_blk_t *) data)->ysize;
+    hsize = MIN(PartFrameHeaderSize - pos, size);
+    if(hsize > 0)
+        memcpy(buf, ((char *) pre) + pos, hsize);
+    pos -= PartFrameHeaderSize;
+    if(pos < 0)
+    {
+        buf -= pos;
+        size += pos;
+        pos = 0;
+    }
+    BufReadAt(((rep_blk_t *)data)->handle, part->fill_arg + pos, buf, size);
+}
+*/
+
+static void constant_fill(char *buf, int size, int pos,
+                      void *data, part_t *part)
+{
+    int i;
+    
+    PartFreeSprite();
+    for(i = 0; i < size; i++)
+        buf[i] = part->fill_arg;
+}
+
+static void int_fill(char *buf, int size, int pos,
+                      void *data, part_t *part)
+{
+    PartFreeSprite();
+    memcpy(buf, ((char *)&part->fill_arg) + pos, size);
+}
+
+static int sprite_owner = -1;
+static spr_sprite sprite = NULL;
+
+static void sprite_fill(char *buf, int size, int pos,
+                      void *data, part_t *part)
+{
+    rep_blk_t *rb;
+    
+    rb = (rep_blk_t *) data;
+    if(sprite == NULL || sprite_owner != rb->handle)
+    {
+        int xsize, ysize, x, y;
+        
+        xsize = 4*(rb->xsize + 7 & ~7);
+        ysize = 4*(rb->ysize);
+        PartFreeSprite();
+        sprite = SprCreate(SprType(SPRITE_MODE, xsize, ysize));
+        if(sprite == NULL)
+            Error("Insufficient memory");
+        SprVDU(sprite);
+        for(y = OFF(ysize, WSSysize); y < ysize; y += WSSysize)
+            for(x = OFF(xsize, WSSxsize); x < xsize; x += WSSxsize)
+                SprPlotQ(WSSsprite(), x, y);
+        SprVDU(NULL);
+        sprite_owner = rb->handle;
+    }
+    part->fill_arg = ((int *) sprite)[0] + 4;
+    memcpy(buf, (char *) part->fill_arg + pos, size);
+}
+
+static int plimit, nparts;
+static part_t *part;
+static rep_blk_t *rep_blk;
+static image_t *img;
+
+static void free_rep_blk(void *data)
+{
+    rep_blk_t *rep_blk;
+    int i;
+    
+    PartFreeSprite();
+    rep_blk = data;
+    for(i = 0; i < rep_blk->npools; i++)
+        Free(rep_blk->pool[i]);
+    Free(rep_blk);
+}
+
+static void reset_handle(void *data, int h)
+{
+    rep_blk_t *rep_blk;
+    
+    rep_blk = data;
+    rep_blk->handle = h;
+}
+
+void PartInit(int np)
+{
+    plimit = np;
+    nparts = 0;
+    part = Malloc(np * sizeof(part_t));
+    rep_blk = Malloc(sizeof(rep_blk_t));
+    img = Malloc(sizeof(image_t));
+    rep_blk->npools = 0;
+}
+
+void PartDef(int i, part_t p)
+{
+    if(i >= plimit)
+    {
+        plimit = i + 1;
+        Free(part);
+        part = Malloc(plimit * sizeof(part_t));
+    }
+    nparts = MAX(nparts, i + 1);
+    part[i] = p;
+}
+
+part_t PartMemory(void *mem, int offset, int size)
+{
+    part_t p;
+    
+    p.start = offset;
+    p.end = offset + size;
+    p.fill = memory_fill;
+    p.fill_arg = (int) mem;
+    return p;
+}
+
+part_t PartFile(int pos, int offset, int size)
+{
+    part_t p;
+    
+    p.start = offset;
+    p.end = offset + size;
+    p.fill = file_fill;
+    p.fill_arg = pos;
+    return p;
+}
+
+part_t PartFrame(int pos, int offset, int size)
+{
+    part_t p;
+    
+    Error("Attempt to create a frame part (bug)");
+    return p;
+}
+
+part_t PartConstant(int val, int offset, int size)
+{
+    part_t p;
+    
+    p.start = offset;
+    p.end = offset + size;
+    p.fill = constant_fill;
+    p.fill_arg = val;
+    return p;
+}
+
+part_t PartInt(int val, int offset)
+{
+    part_t p;
+    
+    p.start = offset;
+    p.end = offset + sizeof(int);
+    p.fill = int_fill;
+    p.fill_arg = val;
+    return p;
+}
+
+part_t PartSprite(int offset, int size)
+{
+    part_t p;
+    
+    p.start = offset;
+    p.end = offset + size;
+    p.fill = sprite_fill;
+    p.fill_arg = 0;
+    return p;
+}
+
+void PartDefHandle(int h)
+{
+    rep_blk->handle = h;
+}
+
+void PartDefPool(void *p)
+{
+    if(rep_blk->npools >= MAXPOOLS)
+        Error("Too many pools (bug)");
+    rep_blk->pool[rep_blk->npools++] = p;
+}
+
+void PartDefXsize(int x)
+{
+    rep_blk->xsize = x;
+}
+
+void PartDefYsize(int y)
+{
+    rep_blk->ysize = y;
+}
+
+image_t *PartImage(void)
+{
+    char *name;
+    
+    img->handle = rep_blk->handle;
+    name = FsName(img->handle);
+    img->name = Malloc(strlen(name)+1);
+    strcpy(img->name, name);
+    img->nparts = nparts;
+    img->index = 0;
+    img->part = part;
+    img->data = rep_blk;
+    img->free_data = free_rep_blk;
+    img->reset_handle = reset_handle;
+    return img;
+}
+
+void PartFreeSprite(void)
+{
+    if(sprite)
+    {
+        SprFree(sprite);
+        sprite = NULL;
+    }
+    
+}

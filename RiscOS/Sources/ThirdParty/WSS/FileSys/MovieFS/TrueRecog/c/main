@@ -1,0 +1,265 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    PHBG: Initial version
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "var.h"
+#include "t_mod_stat.h"
+#include "swis.h"
+#include "kernel.h"
+#include "error.h"
+#include "memory.h"
+#include "decode.h"
+#include "replay.h"
+#include "authority.h"
+#include "unit.h"
+#include "serv.h"
+#include "tracks.h"
+
+#define MAX_FILETYPES   (20)
+#define SWI_AUTHORITY   (0)
+#define SWI_GET_STATE   (1)
+#define SWI_SET_STATE   (2)
+#define SWI_MYWORLD_CODE   (3)
+
+static _kernel_oserror error_ill_swi = {0x10000, "Illegal SWI"};
+
+static char user_reg[512 + 16] = "unencrypted  regIllegal copy";
+
+static int ftarr[MAX_FILETYPES];
+static mod_state_t state = {1,200,0};
+
+static void load_configuration(void)
+{
+    FILE *f;
+
+    f = fopen("<MovieFS$Dir>.Configure", "r");
+    if(f == NULL)
+    {
+        printf("Cant't read <MovieFS$Dir>.Configure\n");
+        return;
+    }
+    fread(&state, sizeof(int), 3, f);
+    if(state.nfiletypes > MAX_FILETYPES)
+    {
+        printf("Corrupt configuration file.\n");
+        return;
+    }
+    fseek(f, 3*sizeof(int), SEEK_SET);
+    fread(ftarr, sizeof(int), state.nfiletypes, f);
+    fclose(f);
+    VarSet("MovieFSOnBar", state.front_end ? "1" : "0");
+}
+
+static void add_fs(void *pw)
+{
+    int i;
+
+    for(i = 0; i < state.nfiletypes; i++)
+        UnitAdd(pw, state.filetype[i]);
+}
+
+static void add_fs_reply(void *pw, int reply)
+{
+    int i;
+
+    for(i = 0; i < state.nfiletypes; i++)
+        UnitAddReply(pw, state.filetype[i], (unit_reply_t) reply);
+}
+
+static void remove_fs(void)
+{
+    int i;
+
+    for(i = 0; i < state.nfiletypes; i++)
+        UnitRemove(state.filetype[i]);
+}
+
+_kernel_oserror* finalise(int fatal, int podule, void *pw)
+{
+    remove_fs();
+    AuthorityFree();
+    DecodeFree();
+    MemKill();
+    return NULL;
+}
+
+static void avifs_fill_period(char *args, void *pw)
+{
+    int fp;
+
+    if(!sscanf(args, "%d", &fp))
+        Error("Invalid parameter");
+    if(fp < 0 || fp > 500)
+        Error("Fill period must be between 0 and 500");
+    state.fill_period = fp;
+    ReplaySetChunkPeriod(fp);
+    remove_fs();
+    add_fs(pw);
+}
+
+static void avifs_add_file_type(char *args, void *pw)
+{
+    int ft, i;
+
+    if(!sscanf(args, "%x", &ft) || ft < 0 || ft > 0xFFF)
+        Error("Invalid parameter");
+    for(i = 0; i < state.nfiletypes && state.filetype[i] != ft; i++)
+    	;
+    if(i == state.nfiletypes)
+    {
+        if(state.nfiletypes >= MAX_FILETYPES)
+            Error("Attempt to handle too many file types");
+        remove_fs();
+        state.filetype[state.nfiletypes++] = ft;
+        add_fs(pw);
+    }
+}
+
+static void avifs_remove_file_type(char *args, void *pw)
+{
+    int ft, i;
+
+    if(!sscanf(args, "%x", &ft) || ft < 0 || ft > 0xFFF)
+        Error("Invalid parameter");
+    for(i = 0; i < state.nfiletypes && state.filetype[i] != ft; i++)
+    	;
+    if(i != state.nfiletypes)
+    {
+        remove_fs();
+        for(i++; i < state.nfiletypes; i++)
+            state.filetype[i-1] = state.filetype[i];
+        state.nfiletypes--;
+        add_fs(pw);
+    }
+}
+
+static void avifs_authority(char *args, void *pw)
+{
+    char buf[257];
+
+    sscanf(args, "%s", buf);
+    AuthorityFile(buf);
+}
+
+static void avifs_registration(char *args, void *pw)
+{
+    printf("Registered to: %s\n", user_reg + 16);
+}
+
+static void avifs_clear_file_types(char *args, void *pw)
+{
+    remove_fs();
+    state.nfiletypes = 0;
+    add_fs(pw);
+}
+
+static void avifs_tracks(char *args, void *pw)
+{
+    char buf[257];
+    int i;
+
+    sscanf(args, "%s", buf);
+    for(i = 0; buf[i]; i++)
+        if('a' <= buf[i] && buf[i] <= 'z')
+             buf[i] += ('A' - 'a');
+    if(strcmp(buf, "AUDIO") == 0)
+        TracksSet(TrksAudio);
+    else if(strcmp(buf, "VIDEO") == 0)
+        TracksSet(TrksVideo);
+    else if(strcmp(buf, "BOTH") == 0)
+        TracksSet(TrksBoth);
+    else
+        Error("Invalid argument");
+}
+
+_kernel_oserror *command(char *arg_string, int argc, int cmd_no, void *pw)
+{
+    if(setjmp(*ErrorLink()))
+    {
+        return ErrorReport();
+    }
+    else
+    {
+        switch(cmd_no)
+        {
+            case 0: avifs_registration(arg_string, pw); break;
+            case 1: avifs_fill_period(arg_string, pw); break;
+            case 2: avifs_clear_file_types(arg_string, pw); break;
+            case 3: avifs_add_file_type(arg_string, pw); break;
+            case 4: avifs_remove_file_type(arg_string, pw); break;
+            case 5: avifs_authority(arg_string, pw); break;
+            case 6: avifs_tracks(arg_string, pw); break;
+        }
+        return 0;
+    }
+}
+
+_kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
+{
+    mod_state_t *nstate;
+    int i;
+
+    if(setjmp(*ErrorLink()))
+    {
+        return ErrorReport();
+    }
+    else
+    {
+        switch(swi_no)
+        {
+            case SWI_AUTHORITY:
+                AuthorityImage(r->r[0], (void *) r->r[1]);
+                return NULL;
+                break;
+            case SWI_GET_STATE:
+                r->r[0] = (int) &state;
+                return NULL;
+                break;
+            case SWI_SET_STATE:
+                remove_fs();
+                nstate = (mod_state_t *) r->r[0];
+                state.front_end = nstate->front_end;
+                state.fill_period = nstate->fill_period;
+                state.nfiletypes = nstate->nfiletypes;
+                for(i = 0; i < state.nfiletypes; i++)
+                    state.filetype[i] = nstate->filetype[i];
+                ReplaySetChunkPeriod(state.fill_period);
+                add_fs(pw);
+                return NULL;
+                break;
+            case SWI_MYWORLD_CODE:
+                AuthorityMyWorldCode(r->r[0]);
+                return NULL;
+                break;
+            default:
+                return &error_ill_swi;
+                break;
+        }
+    }
+}
+
+_kernel_oserror *initialise(char *cmd_tail, int podule, void *pw)
+{
+    state.filetype = ftarr;
+    load_configuration();
+    DecodeLoadMap();
+    add_fs(pw);
+    printf("MFS_Univ v1.96 (c) Warm Silence Software Ltd.\nAll rights reserved.\nWritten by Paul Gardiner and Robin Watts\n");
+    return 0;
+}
+
+void service(int service_number, _kernel_swi_regs *r, void *pw)
+{
+  switch (service_number) {
+    case Service_RecogEnumerate:
+      if (r->r[3] == 0)
+        add_fs_reply(pw, r->r[2]);
+      break;
+  }
+}

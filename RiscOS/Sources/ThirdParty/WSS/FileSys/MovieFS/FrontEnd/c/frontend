@@ -1,0 +1,466 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    PHBG: Initial version
+*/
+
+#include "kernel.h"
+#include "swis.h"
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "@.^.TrueRecog.h.t_mod_stat"
+#include "WSSvar.h"
+#include "WSSwin.h"
+#include "WSSmnu.h"
+#include "WSSicn.h"
+#include "WSSspr.h"
+#include "WSSerr.h"
+#include "WSSfs.h"
+
+#define MovieFS_GetState (0x83741)
+#define MovieFS_SetState (0x83742)
+
+#define MAX_FILETYPES   (20)
+#define REG_SEARCH (16*1024)
+#define NTYPES (4)
+#define NBSIZE (4)
+#define WHITE (" \t\n")
+
+int       icon_type_index[NTYPES][2]  = {{2,6},{3,7},{4,8},{5,9}};
+char     *type_name[NTYPES]           = {"AVI", "FLI", "WAV", "AIFF"};
+char     *type_digit[NTYPES]          = {"FB2", "B9F", "FB1", "FC2"};
+int       type_numb[NTYPES]           = {0xFB2, 0xB9F, 0xFB1, 0xFC2};
+int       type_active[NTYPES];
+icn_icon  icon_type_active[NTYPES];
+
+static int ftarr[MAX_FILETYPES];
+static mod_state_t state = {1,200,0,ftarr};
+
+static int going;
+
+static icn_icon icon_fill, icon_fill_up, icon_fill_down,
+                icon_install,
+                icon_cancel, icon_load, icon_save, icon_set,
+                icon_default;
+
+static win_window config;
+
+/*
+static int streq(char *s1, char *s2)
+{
+    int c;
+
+    while((c = toupper(*s1++)) == toupper(*s2++))
+        if(c == '\0')
+            return 1;
+    return 0;
+}
+*/
+
+/*
+static int find_type_digit(char *dig)
+{
+    int i;
+
+    for(i = 0; i < NTYPES; i++)
+        if(streq(type_digit[i], dig))
+            return i;
+    return -1;
+}
+*/
+
+static int find_type_numb(int nmb)
+{
+    int i;
+
+    for(i = 0; i < NTYPES; i++)
+        if(type_numb[i] == nmb)
+            return i;
+    return -1;
+}
+
+static int get_fill(void)
+{
+    int n;
+
+    if(sscanf(IcnText(icon_fill), "%d", &n) == 1)
+        return n;
+    else
+        return -1;
+}
+
+static void set_fill(int n)
+{
+    char buf[10];
+
+    sprintf(buf, "%d", n);
+    IcnSetText(icon_fill, buf);
+}
+
+static int corrected_fill(int n)
+{
+    if(n < 0) return 0;
+    if(n > 500) return 500;
+    return n;
+}
+
+static void fill_check(void)
+{
+    int n;
+
+    n = get_fill();
+    if(corrected_fill(n) != n)
+        set_fill(corrected_fill(n));
+}
+
+static void update_icons(void)
+{
+    char buf[32];
+    int i, t;
+
+    WinPress(config, NULL);
+    sprintf(buf, "%d", state.fill_period);
+    IcnSetText(icon_fill, buf);
+    for(i = 0; i < NTYPES; i++)
+        type_active[i] = 0;
+    for(i = 0; i < state.nfiletypes; i++)
+    {
+        t = find_type_numb(state.filetype[i]);
+        if(t != -1)
+            type_active[t] = 1;
+    }
+    for(i = 0; i < NTYPES; i++)
+        IcnSetSel(icon_type_active[i], type_active[i]);
+    IcnSetSel(icon_install, state.front_end);
+}
+
+static void read_icons(void)
+{
+    int i;
+
+    fill_check();
+    sscanf(IcnText(icon_fill), "%d", &state.fill_period);
+    state.nfiletypes = 0;
+    for(i = 0; i < NTYPES; i++)
+        if(type_active[i])
+            state.filetype[state.nfiletypes++] = type_numb[i];
+}
+
+static void poll_module(void)
+{
+    _kernel_swi_regs regs;
+    mod_state_t *mstate;
+    int i;
+
+    if(_kernel_swi(MovieFS_GetState, &regs, &regs))
+        Error("Module MFSUniv not loaded");
+    mstate = (mod_state_t *) regs.r[0];
+    state.front_end = mstate->front_end;
+    state.fill_period = mstate->fill_period;
+    state.nfiletypes = mstate->nfiletypes;
+    for(i = 0; i < state.nfiletypes; i++)
+        state.filetype[i] = mstate->filetype[i];
+}
+
+static void set_module(void)
+{
+    _kernel_swi_regs regs;
+    regs.r[0] = (int) &state;
+    _kernel_swi(MovieFS_SetState, &regs, &regs);
+    VarSet("MovieFSOnBar", state.front_end ? "1" : "0");
+}
+
+static void quit(void)
+{
+    going = 0;
+}
+
+static void quit_all(void)
+{
+    system("RMKill Kickstart");
+    system("RMKill MovieFS");
+    system("RMKill MFSUniv");
+    going = 0;
+}
+
+static void toggleN(int n)
+{
+    type_active[n] = !type_active[n];
+    IcnSetSel(icon_type_active[n], type_active[n]);
+}
+
+static void toggle0(void) {toggleN(0);}
+static void toggle1(void) {toggleN(1);}
+static void toggle2(void) {toggleN(2);}
+static void toggle3(void) {toggleN(3);}
+
+static void (*toggle[NTYPES])(void) = {toggle0, toggle1, toggle2, toggle3};
+
+static void toggle_install(void)
+{
+    state.front_end = !state.front_end;
+    IcnSetSel(icon_install, state.front_end);
+}
+
+static void fill_up(void)
+{
+    int n;
+
+    WinPress(config, NULL);
+    fill_check();
+    n = get_fill() + 1;
+    if(corrected_fill(n) == n)
+        set_fill(n);
+}
+
+static void fill_down(void)
+{
+    int n;
+
+    WinPress(config, NULL);
+    fill_check();
+    n = get_fill() - 1;
+    if(corrected_fill(n) == n)
+        set_fill(n);
+}
+
+static void cancel(void)
+{
+    WinClose(config);
+    poll_module();
+    going = state.front_end;
+}
+
+static void default_settings(void)
+{
+    int i;
+
+    state.front_end = 1;
+    state.fill_period = 200;
+    state.nfiletypes = 4;
+    for(i = 0; i < NTYPES; i++)
+        state.filetype[i] = type_numb[i];
+    update_icons();
+}
+
+static void load(void)
+{
+    FILE *f;
+
+    f = fopen("<MovieFS$Dir>.Configure", "r");
+    if(f == NULL)
+        ErrorFatal("Cant't read <MovieFS$Dir>.Configure");
+    fread(&state, sizeof(int), 3, f);
+    if(state.nfiletypes > MAX_FILETYPES)
+        ErrorFatal("Corrupt configuration file.");
+    fseek(f, 3*sizeof(int), SEEK_SET);
+    fread(state.filetype, sizeof(int), state.nfiletypes, f);
+    fclose(f);
+    update_icons();
+}
+
+static void save(void)
+{
+    FILE *f;
+
+    read_icons();
+    f = fopen("<MovieFS$Dir>.Configure", "w");
+    if(f == NULL)
+    {
+        Error("Cant't write <MovieFS$Dir>.Configure");
+        return;
+    }
+    fwrite(&state, sizeof(int), 3, f);
+    fwrite(state.filetype, sizeof(int), state.nfiletypes, f);
+    fclose(f);
+    FsSetType("<MovieFS$Dir>.Configure", 0xFFD);
+}
+
+static void set_close(void)
+{
+    read_icons();
+    set_module();
+    WinClose(config);
+    going = state.front_end;
+}
+
+static void activate_config_icons(void)
+{
+    int i;
+
+    for(i = 0; i < NTYPES; i++)
+        IcnClickS(icon_type_active[i], toggle[i]);
+    IcnClickS(icon_fill_up, fill_up);
+    IcnClickS(icon_fill_down, fill_down);
+    IcnClickS(icon_install, toggle_install);
+    IcnClickS(icon_default, default_settings);
+    IcnClickS(icon_cancel, cancel);
+    IcnClickS(icon_load, load);
+    IcnClickS(icon_save, save);
+    IcnClickS(icon_set, set_close);
+
+    for(i = 0; i < NTYPES; i++)
+        IcnClickA(icon_type_active[i], toggle[i]);
+    IcnClickA(icon_fill_up, fill_up);
+    IcnClickA(icon_fill_down, fill_down);
+    IcnClickA(icon_install, toggle_install);
+    IcnClickA(icon_default, default_settings);
+    IcnClickA(icon_cancel, cancel);
+    IcnClickA(icon_load, load);
+    IcnClickA(icon_save, save);
+    IcnClickA(icon_set, set_module);
+}
+
+static void get_config_icons(void)
+{
+    icn_icon *icon;
+    int i;
+
+    icon = IcnButtons(config);
+    for(i = 0 ; i < NTYPES; i++)
+    {
+        icon_type_active[i] = icon[icon_type_index[i][1]];
+        IcnSetText(icon[icon_type_index[i][0]], type_name[i]);
+    }
+    icon_fill       = icon[12];
+    icon_fill_down  = icon[14];
+    icon_fill_up    = icon[15];
+    icon_install    = icon[18];
+    icon_default    = icon[19];
+    icon_load       = icon[20];
+    icon_save       = icon[21];
+    icon_set        = icon[22];
+    icon_cancel     = icon[23];
+}
+
+static void make_config(void)
+{
+    win_template config_tplt;
+
+    config_tplt = WinLdTplt("<MovieFS$Dir>.Templates", "config");
+    if(config_tplt == NULL)
+        ErrorFatal("Can't find \"config\" in \"<MovieFS$Dir>.Templates\"");
+    config = WinCreate(config_tplt);
+    if(config == NULL)
+        ErrorFatal("Can't create \"Config\" window");
+    get_config_icons();
+    activate_config_icons();
+}
+
+static void open_config(void)
+{
+    poll_module();
+    update_icons();
+    WinOpen(config);
+}
+
+static mnu_menu quit_menu(void)
+{
+    mnu_item item[3];
+
+    item[0] = MnuAction("Front end", quit);
+    item[1] = MnuAction("All MovieFS", quit_all);
+    item[2] = NULL;
+    return MnuMenu("Quit", item);
+}
+
+static char *find_reg(char *base)
+{
+    int i, j;
+    char key[] = "unencrypted  reg";
+
+    i = j = 0;
+    while(i < REG_SEARCH && key[j] != 0)
+        if(key[j++] != base[i++])
+            j = 0;
+    if(key[j] != 0)
+        return NULL;
+    else
+        return base + i;
+}
+
+static void set_info_icons(win_window win)
+{
+    icn_icon *icon;
+    _kernel_swi_regs regs;
+    _kernel_oserror *err;
+    char *help, buf[256], *cptr;
+
+    icon = IcnButtons(win);
+    regs.r[0] = 18;
+    regs.r[1] = (int) "MovieFS";
+    err = _kernel_swi(OS_Module, &regs, &regs);
+    if(err != NULL)
+        ErrorFatal("MovieFS module not loaded");
+    help = (char *) (regs.r[3] + *((int *)(regs.r[3] + 20)));
+    cptr = strstr(help, "\t\t");
+    if(cptr == NULL)
+        Error("MovieFS module has corrupted help string");
+    strcpy(buf, cptr + 2);
+    cptr = strstr(buf, ")");
+    if(cptr == NULL)
+        Error("MovieFS module has corrupted help string");
+    cptr[1] = '\0';
+    IcnSetText(icon[6], buf);
+    cptr = find_reg((char *) regs.r[4]);
+    if(cptr == NULL)
+        Error("MovieFS module has corrupted help string");
+    IcnSetText(icon[7], cptr);
+}
+
+static win_window info_window(void)
+{
+    win_template info_tplt;
+    win_window info;
+
+    info_tplt = WinLdTplt("<MovieFS$Dir>.Templates", "info");
+    if(info_tplt == NULL)
+        ErrorFatal("Can't find \"info\" in \"<MovieFS$Dir>.Templates\"");
+    info = WinCreate(info_tplt);
+    if(info == NULL)
+        ErrorFatal("Can't create \"Info\" window");
+    set_info_icons(info);
+    return info;
+}
+
+static mnu_menu menu;
+
+static void make_menu(void)
+{
+    mnu_item item[4];
+
+    make_config();
+    item[0] = MnuSubmenu("Info", MnuWindow(info_window()));
+    item[1] = MnuAction("Configure...", open_config);
+    item[2] = MnuSetAct(MnuSubmenu("Quit", quit_menu()), quit);
+    item[3] = NULL;
+    menu = MnuMenu("MovieFS", item);
+}
+
+static void open_menu(void)
+{
+    MnuOpen(menu);
+}
+
+int main()
+{
+    spr_sprite bar_spr;
+    icn_icon bar_icon;
+
+    going = 1;
+    WinInit("MovieFS");
+    make_menu();
+    bar_spr = SprLoad("<MovieFS$Dir>.BarSprite");
+    if(bar_spr == NULL)
+        ErrorFatal("Cannot find \"<MovieFS$Dir>.BarSprite\"");
+    bar_icon = IcnBarFS(bar_spr);
+    IcnClickS(bar_icon, open_config);
+    IcnClickM(bar_icon, open_menu);
+    IcnClickA(bar_icon, open_config);
+    while(going) WinCoOp();
+    WinFin();
+    return 0;
+}

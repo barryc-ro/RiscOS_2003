@@ -1,0 +1,225 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1998
+    All rights reserved.
+
+    RJW 16/7/98: Initial version
+*/
+
+#include "error.h"
+#include "data.h"
+#include "packetread.h"
+
+struct packet_reader_s {
+    /* The following fields are the state for the state machine used to */
+    /* read packets of data from the streams */
+    int stream;
+    int current_offset;
+    int num_packets;
+    int next;
+    int packet_left;
+    int initial_offset;
+    int last_chunk;
+};
+
+#define int32(p) ((((unsigned char *)p)[0] << 24) | (((unsigned char *)p)[1] << 16) | (((unsigned char *)p)[2] << 8) | ((unsigned char *)p)[3])
+
+#define int16(p) ((((unsigned char *)p)[0] << 8) | ((unsigned char *)p)[1])
+
+packet_reader_t PacketReader(int data_off, int stream) {
+
+  packet_reader_t pr;
+
+  pr = (packet_reader_t)Malloc(sizeof(struct packet_reader_s));
+
+  pr->current_offset = 0;
+  pr->num_packets    = 0;
+  pr->packet_left    = 0;
+  pr->next           = data_off;
+  pr->initial_offset = data_off;
+  pr->stream         = stream;
+  pr->last_chunk     = -1;
+  return pr;
+}
+
+void PacketReaderDestruct(packet_reader_t pr) {
+
+  Free(pr);
+}
+
+static int file_read_audio(packet_reader_t pr, fs_handle f, char *buf, int n) {
+
+  char temp[8];
+  int m;
+
+  /* If we are part way through reading a packet then read the rest of */
+  /* that one (or as much as we need of it anyway). */
+  if (pr->packet_left != 0) {
+    m = n;
+    if (m > pr->packet_left)
+      m = pr->packet_left;
+    FsReadAt(f, pr->current_offset, buf, m);
+    pr->current_offset += m;
+    pr->packet_left -= m;
+    return m;
+  }
+
+  /* So find the next audio packet */
+  do {
+    /* Do we have more packets to read in the current chunk? */
+    if (pr->num_packets == 0) {
+      /* First skip to the next data chunk */
+      /* If this would be a skip backwards, just exit */
+      if (pr->next < pr->current_offset)
+        return -1;
+      pr->current_offset = pr->next;
+      /* Next, read the data chunk details */
+      FsReadAt(f, pr->current_offset+10, temp, 8);
+      pr->num_packets = int32(temp);
+      pr->next = pr->current_offset + int32(temp+4);
+      pr->current_offset += 18;
+    }
+
+    /* So now we know that rm->data_current_offset is pointing at  */
+    /* a data packet. Read the packet header. */
+    FsReadAt(f, pr->current_offset+2, temp, 4);
+    /* Move the offset pointer to point at the actual data */
+    if (int16(temp+2) != pr->stream) {
+      pr->current_offset += int16(temp);
+      pr->num_packets -= 1;
+    }
+  } while (int16(temp+2) != pr->stream);
+
+  pr->current_offset += 12;
+  m = pr->packet_left = int16(temp) - 12;
+  if (m > n)
+    m = n;
+  FsReadAt(f, pr->current_offset, buf, m);
+  pr->current_offset += m;
+  pr->packet_left -= m;
+  if (pr->packet_left == 0)
+    pr->num_packets -= 1;
+  return m;
+}
+
+void PacketReaderAudioFile(packet_reader_t pr, fs_handle f, int chunknum, int datasize, char *buf) {
+
+  int fetched, size;
+
+  if (chunknum <= pr->last_chunk) {
+    Error("Can't seek backwards!");
+  }
+  while (chunknum > pr->last_chunk+1) {
+    /* We need to skip some packets */
+    size = datasize;
+    while (size != 0) {
+      fetched = file_read_audio(pr, f, buf, size);
+      if (fetched < 0)
+        return;
+      //printf("Part Fetch: %d\n", fetched);
+      size -= fetched;
+      buf += fetched;
+    }
+    buf -= datasize;
+  }
+  pr->last_chunk = chunknum;
+  //printf("Fetch: %d %d\n", chunknum, datasize);
+  while (datasize != 0) {
+    fetched = file_read_audio(pr, f, buf, datasize);
+    if (fetched < 0)
+      return;
+    //printf("Part Fetch: %d\n", fetched);
+    datasize -= fetched;
+    buf += fetched;
+  }
+}
+
+static int audiohttp(packet_reader_t pr, tcp_conn_t conn, queue_t q, int size_wanted) {
+
+  char *ptr;
+  int stream, size;
+
+  /* If we are part way through reading a packet, then return the rest */
+  //printf("Have Read: %d\n", pr->current_offset);
+  if (pr->packet_left > 0) {
+    if (QueueAtLeast(pr->packet_left, q, conn)) {
+      return pr->packet_left;
+    } else {
+      //printf("Fragmented Packet (%d vs %d)!\n", pr->packet_left, size_wanted);
+      return 0;
+    }
+  }
+
+  /* So find the next audio packet */
+  do {
+    /* Do we have more packets to read in the current chunk? */
+    if (pr->num_packets == 0) {
+      /* First skip to the next data chunk */
+      /* If this would be a skip backwards, just exit */
+      if (pr->next < pr->current_offset)
+        return -1;
+      if (!QueueAtLeast(pr->next - pr->current_offset, q, conn))
+        return 0;
+      QueueDrop(pr->next - pr->current_offset, q);
+      pr->current_offset = pr->next;
+      pr->next = 0;
+      /* Next, read the data chunk details */
+      if (!QueueAtLeast(18, q, conn))
+        return 0;
+      ptr = QueueReadPos(q);
+      pr->num_packets = int32(ptr+10);
+      pr->next = pr->current_offset + int32(ptr+14);
+      pr->current_offset += 18;
+      QueueDrop(18, q);
+    }
+
+    /* So now we know that rm->data_current_offset is pointing at  */
+    /* a data packet. Read the packet header. */
+    if (!QueueAtLeast(12, q, conn))
+      return 0;
+    /* Move the offset pointer to point at the actual data */
+    ptr = QueueReadPos(q);
+    stream = int16(ptr+4);
+    size = int16(ptr+2);
+    if (stream != pr->stream) {
+      if (!QueueAtLeast(size, q, conn))
+        return 0;
+      pr->current_offset += size;
+      QueueDrop(size, q);
+      pr->num_packets -= 1;
+    }
+  } while (stream != pr->stream);
+
+  if (size < size_wanted)
+    Error("Packet found with too little data in it!");
+  if (!QueueAtLeast(size, q, conn))
+    return 0;
+  QueueDrop(12, q);
+  pr->current_offset += 12;
+  pr->packet_left = size-12;
+  return size-12;
+}
+
+/* return the number of contiguous data packet bytes available in the connection */
+int PacketReaderAudioHttp(packet_reader_t pr, tcp_conn_t conn, queue_t q, int size_wanted) {
+
+  //if (chunknum <= pr->last_chunk)
+  //  Error("Can't seek backwards in an http streaming file!");
+  //while (chunknum > pr->last_chunk+1) {
+  //  /* We need to skip some chunks forwards */
+  //  if (audiohttp(pr, conn, q, size_wanted) == size_wanted) {
+  //    PacketReaderAudioHttpDrop(pr, conn, q, size_wanted);
+  //  } else
+  //    return 0;
+  //}
+  return audiohttp(pr, conn, q, size_wanted);
+}
+
+void PacketReaderAudioHttpDrop(packet_reader_t pr, tcp_conn_t conn, queue_t q, int drop_count) {
+
+  //pr->last_chunk++;
+  pr->current_offset += drop_count;
+  pr->packet_left -= drop_count;
+  if (pr->packet_left == 0)
+    pr->num_packets -= 1;
+  QueueDrop(drop_count, q);
+}

@@ -1,0 +1,278 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1998
+    All rights reserved.
+
+    RJW   8/5/98: Initial version (ripped from chunk.c)
+*/
+
+#include <stdio.h>
+#include <string.h>
+#include "options.h"
+#include "error.h"
+#include "memory.h"
+#include "safeputc.h"
+#include "pqueue.h"
+
+#include "httpchunk.h"
+
+#define MIN_START (4)
+#define LOW_WATER (6)
+#define HIGH_WATER (10)
+#define MAX_BUFFS (14)
+#define BIG_MIN_START (MIN_START + 3)
+
+#define MAX_QUEUE (32)
+
+
+struct httpchunk_buf_s
+{
+    http_handle_t http;
+    ra_header_t  *info;
+    int           n;         /* First replay chunk in queue */
+    int           base;
+    int           level;
+    int           min_start, low_water, high_water, max;
+    int           buffering;
+    int           eof;
+    pqueue_t      pqueue;
+    chunk_presentor_t chpres;
+};
+
+typedef struct
+{
+    int count;
+    char *buf;
+    char **buf_ptr;
+} *chunk_t;
+
+static chunk_t make_chunk(ra_header_t *info)
+{
+    chunk_t res;
+
+    res = Malloc(sizeof(*res));
+    res->buf = Malloc(info->trans_per_chunk * info->transsize);
+    res->buf_ptr = Malloc(info->trans_per_chunk * sizeof(char *));
+    return res;
+}
+
+static void free_chunk(chunk_t chunk)
+{
+    Free(chunk->buf);
+    Free(chunk->buf_ptr);
+    Free(chunk);
+}
+
+static void zero_chunk(ra_header_t *info, chunk_t chunk)
+{
+    int i;
+
+    chunk->count = 0;
+    for(i = 0; i < info->trans_per_chunk; i++)
+        chunk->buf_ptr[i] = NULL;
+}
+
+static httpchunk_buf_t make_chb(http_handle_t http)
+{
+    httpchunk_buf_t chb;
+    int i;
+
+    chb             = Malloc(sizeof(*chb));
+    chb->http       = http;
+    chb->info       = HttpInfo(http);
+    chb->n          = 0;
+    chb->base       = 0;
+    chb->level      = 0;
+    chb->min_start  = MIN_START;
+    chb->low_water  = LOW_WATER;
+    chb->high_water = HIGH_WATER;
+    chb->max        = MAX_BUFFS;
+    chb->buffering  = 1;
+    chb->eof        = 0;
+    chb->pqueue     = PQueue(MAX_QUEUE);
+    for(i = 0; i < chb->max; i++)
+        PQueuePush(chb->pqueue, make_chunk(chb->info));
+
+    chb->chpres = Chpres(chb->info);
+    return chb;
+}
+
+static void drop_first_chunk(httpchunk_buf_t chb)
+{
+    chunk_t chunk;
+
+    chunk = PQueuePop(chb->pqueue);
+    zero_chunk(chb->info, chunk);
+    PQueuePush(chb->pqueue, chunk);
+    chb->n++;
+    chb->base += chb->info->trans_per_chunk;
+    chb->level--;
+}
+
+static void reset(void *obj, int sequence)
+{
+    httpchunk_buf_t chb;
+    int i;
+
+    chb = (httpchunk_buf_t) obj;
+    chb->base = sequence;
+    for(i = 0; i < chb->max; i++)
+        zero_chunk(chb->info, PQueueLook(chb->pqueue, i));
+}
+
+static int samples(void *obj, data_t data, int sequence)
+{
+    httpchunk_buf_t chb;
+    chunk_t chunk;
+    int index, pos;
+
+    chb = (httpchunk_buf_t) obj;
+    if(data.size > chb->info->transsize) {
+        return 1;
+    }
+    sequence -= chb->base;
+    index = sequence / chb->info->trans_per_chunk;
+    pos = sequence % chb->info->trans_per_chunk;
+#if BENH
+    printf("%3d", pos);
+#endif
+    chb->level = index;
+    if(index >= chb->min_start)
+    {
+#if DEBUG || BENH
+        if(chb->buffering)
+            printf(" Buf off ");
+#endif
+        chb->buffering = 0;
+        chb->min_start = BIG_MIN_START;
+    }
+    if(index >= chb->max)
+    {
+#if BENH
+    printf(" Early arrival ");
+#endif
+        return 0;  /*  Early arrival - hold off (works for TCP only) */
+    }
+
+    chunk = PQueueLook(chb->pqueue, index);
+    if(chunk->buf_ptr[pos] == NULL)
+    {
+        chunk->count++;
+        chunk->buf_ptr[pos] = chunk->buf + pos * chb->info->transsize;
+        //if(data.size < chb->info->transsize)
+        //    memset(chunk->buf_ptr[pos], 0, chb->info->transsize);
+        memcpy(chunk->buf_ptr[pos], data.buf, data.size);
+    }
+    return 1;
+}
+
+static void eof(void *obj)
+{
+    httpchunk_buf_t chb;
+
+#if DEBUG
+    printf("eof\n");
+#endif
+    chb = (httpchunk_buf_t) obj;
+    chb->eof = 1;
+    chb->buffering = 0;
+}
+
+static void inform_http(http_handle_t http, httpchunk_buf_t chb)
+{
+    http_receiver_t receiver;
+
+    receiver.obj = chb;
+    receiver.samples = samples;
+    receiver.eof = eof;
+    reset(chb, 0);
+    HttpReceiver(http, receiver);
+}
+
+
+httpchunk_buf_t HttpChunk(http_handle_t http)
+{
+    httpchunk_buf_t chb;
+
+    chb = make_chb(http);
+    inform_http(http, chb);
+    //chb->buffering = 1;
+    return chb;
+}
+
+void HttpChunkFree(httpchunk_buf_t chb)
+{
+    chunk_t chunk;
+
+    ChpresFree(chb->chpres);
+    while((chunk = PQueuePop(chb->pqueue)) != NULL)
+        free_chunk(chunk);
+    PQueueFree(chb->pqueue);
+    Free(chb);
+}
+
+chunk_desc_t *HttpChunkFetch(httpchunk_buf_t chb, int n)
+{
+    chunk_t chunk;
+
+    /* If we are being asked for a chunk we we have thrown away, then we can't help! */
+    if(n < chb->n) /* Could look further */
+    {
+      Error("Can't seek backwards in an HTTP stream!");
+      return &EmptyDesc;
+    }
+    if(n > chb->n+2) /* Could look further */
+    {
+      //printf("Dropping!\n");
+      drop_first_chunk(chb);
+      //printf("Dropped!\n");
+      return &EmptyDesc;
+    }
+    /* If we are being asked for the third (or more) chunk in memory, then we can */
+    /* ditch the first one. */
+    //while(n > chb->n + 2)
+    //{
+    //    drop_first_chunk(chb);
+    //}
+    if(n == chb->n + 2)
+    {
+        drop_first_chunk(chb);
+    }
+    /* If we are buffering at the moment, then give back an empty one */
+    if(chb->buffering) /* Big delay now, perhaps none later. */
+        return &EmptyDesc;
+    /* Do we have enough subchunks to make one whole chunk? */
+    chunk = PQueueLook(chb->pqueue, n - chb->n);
+    if(chunk->count >= chb->info->trans_per_chunk)
+    {
+#if BENH
+        printf("\nFetch %d %3d%%\n", n, 100 * chunk->count / chb->info->trans_per_chunk);
+#endif
+        return ChpresPresentPatch(chb->chpres, n, chunk->buf_ptr);
+    }
+    /* If we have just the dregs at the end of the file left, make the best */
+    /* of it */
+    if(chb->eof)
+    {
+        //if(n == chb->info->nchunks-1 && chunk->count > 0)
+        if(chunk->count > 0)
+        {
+#if BENH
+            printf("\nDregs Fetch %d, %3d%%\n", n, 100*chunk->count/chb->info->trans_per_chunk);
+#endif
+            return ChpresPresentPatch(chb->chpres, n, chunk->buf_ptr);
+        }
+        return &EndDesc;
+    }
+    /* If we are attempting to fetch more chunks than there are, give up */
+    /* No particular reason for this, but its safety */
+    if(n >= chb->info->nchunks) {
+      return &EndDesc;
+    }
+    /* If we get here, the connection is still up, but we can't satisfy a */
+    /* chunk request. So lets go into a buffering state... */
+#if BENH
+    printf("\nStarting Buffering %d %d\n", n, chb->info->nchunks);
+#endif
+    chb->buffering = 1;
+    return &EmptyDesc;
+}

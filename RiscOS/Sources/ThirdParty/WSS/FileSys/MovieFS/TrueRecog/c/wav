@@ -1,0 +1,195 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    PHBG: Initial version
+*/
+
+#include <stdio.h>
+#include <string.h>
+#include "word.h"
+#include "error.h"
+#include "memory.h"
+#include "riff.h"
+#include "wav.h"
+
+#define ADPCM_HDR_SIZE(fmt) (3 * sizeof(int) + Word16(fmt->ncoefs) * sizeof(coef_t))
+typedef struct
+{
+    word16_t format;
+    word16_t channels;
+    int sample_rate;
+    int byte_rate;
+    word16_t align;
+    word16_t depth;
+    word16_t extra;
+    word16_t samples_per_block;
+    word16_t ncoefs;
+    word16s_t coef[1];
+} wav_fmt_t;
+
+typedef struct {int ic1, ic2;} coef_t;
+
+typedef struct
+{
+    int align, samples_per_block, ncoefs;
+    coef_t coef[1];
+} adpcm_hdr_t;
+
+typedef struct
+{
+    int align, samples_per_block;
+} dvi_hdr_t;
+
+static adpcm_hdr_t *make_adpcm_hdr(wav_fmt_t *fmt)
+{
+    adpcm_hdr_t *res;
+    int i;
+
+    res = Malloc(ADPCM_HDR_SIZE(fmt));
+    res->align = Word16(fmt->align);
+    res->samples_per_block = Word16(fmt->samples_per_block);
+    res->ncoefs = Word16(fmt->ncoefs);
+    for(i = 0; i < res->ncoefs; i++)
+    {
+        res->coef[i].ic1 = Word16S(fmt->coef[2*i]);
+        res->coef[i].ic2 = Word16S(fmt->coef[2*i+1]);
+    }
+    return res;
+}
+
+static dvi_hdr_t *make_dvi_hdr(wav_fmt_t *fmt)
+{
+    dvi_hdr_t *res;
+
+    res = Malloc(sizeof(*res));
+    res->align = Word16(fmt->align);
+    res->samples_per_block = Word16(fmt->samples_per_block);
+    return res;
+}
+
+static chunk_handle find_chunk(int type, chunk_handle ch)
+{
+    chunk_handle sub_ch;
+
+    while(!RiffEOC(ch))
+    {
+        sub_ch = RiffRead(ch);
+        if(RiffType(sub_ch) == type)
+            return sub_ch;
+    }
+    return NULL;
+}
+
+static sound_pos_t s2b_msadpcm(sound_hdr_t *shdr, int samples)
+{
+    adpcm_hdr_t *ahdr;
+    int blocks;
+    sound_pos_t pos;
+
+    ahdr = (adpcm_hdr_t *) shdr->data;
+    blocks = samples / ahdr->samples_per_block;
+    pos.samples = samples - blocks * ahdr->samples_per_block;
+    pos.low = blocks * ahdr->align;
+    pos.high = pos.low + (pos.samples ? ahdr->align : 0);
+    return pos;
+}
+
+static int b2s_msadpcm(sound_hdr_t *shdr, int bytes)
+{
+    adpcm_hdr_t *ahdr;
+
+    ahdr = (adpcm_hdr_t *) shdr->data;
+    return (bytes / ahdr->align) * ahdr->samples_per_block;
+}
+
+audio_spec *WAVReadFmt(chunk_handle fmt_ch)
+{
+    wav_fmt_t *fmt;
+    audio_spec *as;
+    int type;
+
+    fmt = Malloc(RiffSize(fmt_ch));
+    RiffData(fmt_ch, fmt, RiffSize(fmt_ch));
+    type = Word16(fmt->format);
+    switch(type)
+    {
+        case 1: break;
+        case 2: break;
+        case 6: break;
+        case 7: break;
+        case 17: break;
+        default: Free(fmt); return NULL;
+    }
+    as = Malloc(sizeof(audio_spec));
+    as->depth = Word16(fmt->depth);
+    as->channels = Word16(fmt->channels);
+    as->rate = fmt->sample_rate;
+    as->scale = 1;
+    as->header = NULL;
+    as->samples2bytes = NULL;
+    as->bytes2samples = NULL;
+    switch(type)
+    {
+        case 1:
+            as->desc = NULL;
+            as->depth = ((as->depth + 7) & ~7);
+            as->sign = (as->depth == 8 ? 0 : 1);
+            break;
+        case 2:
+            as->desc = "2 MSADPCM";
+            as->sign = 1;
+            as->header = Malloc(sizeof(sound_hdr_t));
+            as->header->size = ADPCM_HDR_SIZE(fmt);
+            as->header->data = make_adpcm_hdr(fmt);
+            as->samples2bytes = s2b_msadpcm;
+            as->bytes2samples = b2s_msadpcm;
+            break;
+        case 6:
+            as->desc = "2 Alaw";
+            as->sign = 0;
+            break;
+        case 7:
+            as->desc = "2 MuLaw";
+            as->sign = 0;
+            break;
+        case 17:
+            as->desc = "2 DVIADPCM";
+            as->sign = 1;
+            as->header = Malloc(sizeof(sound_hdr_t));
+            as->header->size = sizeof(dvi_hdr_t);
+            as->header->data = make_dvi_hdr(fmt);
+            as->samples2bytes = s2b_msadpcm;
+            as->bytes2samples = b2s_msadpcm;
+            break;
+    }
+    Free(fmt);
+    return as;
+}
+
+film_spec *WavStructure(int handle)
+{
+    film_spec *film;
+    audio_spec *as;
+    chunk_handle file_ch, fmt_ch, data_ch;
+
+    file_ch = RiffOpen(handle, RIFF_WAVE);
+    if(file_ch == NULL)
+        return NULL;
+    fmt_ch = find_chunk(RIFF_fmt, file_ch);
+    if(fmt_ch == NULL) Error("WAV file has no format");
+    data_ch = find_chunk(RIFF_data, file_ch);
+    if(data_ch == NULL) Error("WAV file has no data");
+    as = WAVReadFmt(fmt_ch);
+    if(as == NULL)
+        Error("Unsupported WAV format");
+    as->nchunks = 1;
+    as->chunk = Malloc(sizeof(dib_t));
+    as->chunk[0] = RiffPlace(data_ch);
+    film = Malloc(sizeof(film_spec));
+    film->handle = handle;
+    film->type = "WAV";
+    film->video = NULL;
+    film->audio = as;
+    return film;
+}

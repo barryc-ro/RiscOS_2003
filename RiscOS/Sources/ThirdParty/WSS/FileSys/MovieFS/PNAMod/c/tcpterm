@@ -1,0 +1,609 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    PHBG 20/12/96: Initial version
+    PHBG  15/1/97: Brought upto date with bsd version.
+    PHBG   5/2/97: Added UDP support
+    PHBG  10/2/97: Corrected deallocation of ports.
+*/
+
+#include <string.h>
+#include "swis.h"
+#include "tip_swis.h"
+#include "kernel.h"
+/*
+#include "forcecallb.h"
+*/
+#include "error.h"
+#include "memory.h"
+
+#include "tcp.h"
+
+#define ForceCallBackMacro
+/* #define ForceCallBackMacro ForceCallBack() */
+
+#define EmptyReg {int i; for(i=0; i<10; i++) r.r[i] = 0;}
+
+struct tcp_conn_s
+{
+    int port;
+    int socket;
+    tcp_conn_state_t state;
+};
+
+struct tcp_bleeper_s
+{
+    int x;
+};
+
+typedef struct udp_socket_list_s *udp_socket_list_t;
+
+struct udp_socket_list_s
+{
+    int socket;
+    int port;
+    udp_socket_list_t next;
+};
+
+struct udp_conn_s
+{
+    int port;
+    int socket;
+};
+
+static int termite_id;
+
+static udp_socket_list_t udp_socket_list = NULL;
+
+static tcp_port_t allocate_port(tcp_port_t sp)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[0] = termite_id;
+    r.r[2] = sp == TCP_PORT_ANY ? -1 : sp;
+    r.r[3] = 1;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_AllocatePort, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    return r.r[2] == -1 ? sp : r.r[2];
+}
+
+static tcp_port_t allocate_listening_port(tcp_port_t sp)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[0] = termite_id;
+    r.r[2] = sp == TCP_PORT_ANY ? -1 : sp;
+    r.r[3] = 0;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_AllocatePort, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    return r.r[2] == -1 ? sp : r.r[2];
+}
+
+int socket_port(int socket)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[0] = socket;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_SocketInformation, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    return r.r[5] == 0 ? r.r[2] : -1;
+}
+
+void stash_socket(int socket, int port)
+{
+    udp_socket_list_t old;
+
+    old = udp_socket_list;
+    udp_socket_list = Malloc(sizeof(*udp_socket_list));
+    udp_socket_list->socket = socket;
+    udp_socket_list->port = port;
+    udp_socket_list->next = old;
+}
+
+int find_socket_for_port(int port)
+{
+    udp_socket_list_t *list, tmp;
+    int socket;
+
+    list = &udp_socket_list;
+    while(*list)
+    {
+        socket = (*list)->socket;
+        if(port == (*list)->port)
+        {
+            tmp = *list;
+            *list = (*list)->next;
+            Free(tmp);
+            return socket;
+        }
+        else
+        {
+            list = &((*list)->next);
+        }
+    }
+    return -1;
+}
+
+void forget_port(int port)
+{
+    udp_socket_list_t *list, tmp;
+
+    list = &udp_socket_list;
+    while(*list)
+    {
+        if(port == (*list)->port)
+        {
+            tmp = *list;
+            *list = (*list)->next;
+            Free(tmp);
+        }
+        else
+        {
+            list = &((*list)->next);
+        }
+    }
+}
+
+int poll_for_socket(int port)
+{
+    _kernel_swi_regs r;
+    int going, sport;
+
+    going = 1;
+    while(going)
+    {
+        EmptyReg
+        r.r[0] = termite_id;
+        r.r[1] = 0;
+        r.r[2] = -1;
+        ForceCallBackMacro;
+        {
+            _kernel_oserror *err;
+
+            err = _kernel_swi(TermiteIP_ReadNextEvent, &r, &r);
+            if(err)
+                ErrorErr(err);
+        }
+        switch(r.r[0])
+        {
+            case 0:  going = 0;
+                     break;
+            case 2:  sport = socket_port(r.r[2]);
+                     if(port == sport)
+                         return r.r[2];
+                     else if(sport != -1)
+                         stash_socket(r.r[2], sport);
+                     break;
+            default: Error("Ignored an event %d", r.r[0]);
+                     break;
+        }
+    }
+    return -1;
+}
+
+int udp_read(void *buf, int len, int socket)
+{
+    _kernel_swi_regs r;
+    int going, got_one;
+    int packet;
+    static char tbuf[1024];
+
+    going = 1;
+    while(going)
+    {
+        EmptyReg
+        r.r[0] = termite_id;
+        r.r[1] = 0;
+        r.r[2] = socket;
+        ForceCallBackMacro;
+        {
+            _kernel_oserror *err;
+
+            err = _kernel_swi(TermiteIP_ReadNextEvent, &r, &r);
+            if(err)
+                ErrorErr(err);
+        }
+        switch(r.r[0])
+        {
+            case 0:  going = 0;
+                     got_one = 0;
+                     break;
+            case 4:  going = 0;
+                     got_one = 1;
+                     packet = r.r[2];
+                     if(r.r[3] != socket)
+                         Error("Termite's gone screwy");
+                     break;
+            default: Error("Not a zero or four");
+        }
+    }
+    if(!got_one) return 0;
+    EmptyReg
+    r.r[0] = packet;
+    r.r[2] = 0;
+    r.r[3] = (int) tbuf;
+    r.r[4] = 1024;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ReadPacket, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    if(len < r.r[4]-8)
+        Error("UDP packet too large %d", r.r[4]-8);
+    memcpy(buf, tbuf+8, r.r[4]-8);
+    return r.r[4]-8;
+}
+
+void TcpInitialise(void)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[2] = 0;
+    r.r[3] = 0;
+    r.r[4] = (int) "WSSLib";
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_Register, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    termite_id = r.r[0];
+}
+
+void TcpFinalise(void)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[0] = termite_id;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_DeRegister, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+}
+
+tcp_addr_t TcpResolve(char *name)
+{
+    _kernel_swi_regs r;
+    static char *current = NULL;
+    static int job;
+
+    if(current != NULL && current != name)  /* Dangerous ??? */
+    {
+        EmptyReg
+        r.r[1] = 1;         /* Kill old job */
+        r.r[2] = job;
+        ForceCallBackMacro;
+        {
+            _kernel_oserror *err;
+
+            err = _kernel_swi(TermiteIP_ResolveOp, &r, &r);
+            if(err)
+                ErrorErr(err);
+        }
+        current = NULL;  /* Mark resolver not busy */
+    }
+    EmptyReg
+    r.r[0] = current == NULL ? 0 : 2;
+    r.r[2] = current == NULL ? (int) name : job;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ResolveOp, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    if(current == NULL) job = r.r[2];
+    current = r.r[0] ? NULL : name;
+    switch(r.r[0])
+    {
+        case 0: return TCP_ADDR_RESOLVING;
+        case 1: return *((tcp_addr_t *) &r.r[2]);
+        case 2: return TCP_ADDR_UNKNOWN;
+    }
+    Error("Strange result from ResolveOP");
+    return 0;
+}
+
+void TcpFreeAddr(tcp_addr_t ip)
+{
+}
+
+tcp_conn_t TcpCall(tcp_port_t sp, tcp_port_t dp, tcp_addr_t dip)
+{
+    _kernel_swi_regs r;
+    tcp_conn_t res;
+
+    sp = allocate_port(sp);
+    EmptyReg
+    r.r[0] = termite_id;
+    r.r[2] = sp;
+    r.r[3] = dp;
+    r.r[4] = *((int *) &dip);
+    r.r[5] = 0x101;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_CreateSocket, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    res = Malloc(sizeof(*res));
+    res->port = sp;
+    res->socket = r.r[0];
+    res->state  = TCP_CONN_NASCENT;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_StartTCPConnection, &r, &r);
+        if(err)
+        {
+            Free(res);
+            ErrorErr(err);
+        }
+    }
+    return res;
+}
+
+tcp_bleeper_t TcpListen(tcp_port_t port)
+{
+    Error("TcpListen not yet implemented");
+    return NULL;
+}
+
+tcp_conn_t TcpAnswer(tcp_bleeper_t bleep)
+{
+    Error("TcpAnswer not yet implemented");
+    return NULL;
+}
+
+tcp_conn_state_t TcpConnState(tcp_conn_t conn)
+{
+    _kernel_swi_regs r;
+    int going;
+
+    going = conn->state != TCP_CONN_CLOSED;
+    while(going)
+    {
+        EmptyReg
+        r.r[0] = termite_id;
+        r.r[2] = conn->socket;
+        ForceCallBackMacro;
+        {
+            _kernel_oserror *err;
+
+            err = _kernel_swi(TermiteIP_ReadNextEvent, &r, &r);
+            if(err)
+                ErrorErr(err);
+        }
+        switch(r.r[0])
+        {
+            case 0:  going = 0;
+                     break;
+            case 4:  Error("The TCP socket has the UDP data");
+                     break;
+            case 5:  conn->state = TCP_CONN_WRITE_ONLY;
+                     break;
+            case 10: if(r.r[3] == 4)
+                         conn->state = TCP_CONN_ESTABLISHED;
+                     break;
+            case 11: conn->state = TCP_CONN_CLOSED;
+                     going = 0;
+                     break;
+            case 7:  conn->state = TCP_CONN_CLOSED;
+                     going = 0;
+                     break;
+        }
+    }
+    return conn->state;
+}
+
+char *TcpStateString(tcp_conn_state_t st)
+{
+    switch(st)
+    {
+        case TCP_CONN_NASCENT : return "Nascent";
+        case TCP_CONN_ESTABLISHED : return "Established";
+        case TCP_CONN_WRITE_ONLY : return "Write only";
+        case TCP_CONN_READ_ONLY : return "Read only";
+        case TCP_CONN_CLOSED : return "Closed";
+        default: return "What!!!!";
+    }
+}
+
+int TcpRead(void *buf, int size, tcp_conn_t conn)
+{
+    _kernel_swi_regs r;
+
+    if(conn->state == TCP_CONN_CLOSED)
+        return 0;
+    EmptyReg
+    r.r[0] = conn->socket;
+    r.r[2] = (int) buf;
+    r.r[3] = size;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ReadTCPData, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    return r.r[3];
+}
+
+int TcpWrite(void *buf, int size, tcp_conn_t conn)
+{
+    _kernel_swi_regs r;
+
+    if(conn->state == TCP_CONN_CLOSED)
+        return 0;
+    EmptyReg
+    r.r[0] = conn->socket;
+    r.r[2] = (int) buf;
+    r.r[3] = size;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_SendTCPData, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    return size;			/* Eeek ??? */
+}
+
+void TcpClose(tcp_conn_t conn)
+{
+    _kernel_swi_regs r;
+
+    if(conn->state == TCP_CONN_CLOSED)
+        return;
+    EmptyReg
+    r.r[0] = conn->socket;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_CloseTCPConnection, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+}
+
+void TcpDelete(tcp_conn_t conn)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[2] = conn->port;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ClosePortSockets, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    EmptyReg
+    r.r[2] = conn->port;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ClosePort, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    Free(conn);
+}
+
+udp_conn_t UdpCreate(tcp_port_t sp)
+{
+    udp_conn_t res;
+
+    res = Malloc(sizeof(*res));
+    res->port = allocate_listening_port(sp);
+    res->socket = -1;
+    return res;
+}
+
+tcp_port_t UdpLocalPort(udp_conn_t conn)
+{
+    return conn->port;
+}
+
+int UdpRead(void *buf, int len, udp_conn_t conn)
+{
+    if(conn->socket == -1)
+        conn->socket = find_socket_for_port(conn->port);
+    if(conn->socket == -1)
+        conn->socket = poll_for_socket(conn->port);
+    if(conn->socket == -1)
+        return 0;
+    return udp_read(buf, len, conn->socket);
+}
+
+int UdpWrite(void *buf, int len, udp_conn_t conn)
+{
+    _kernel_swi_regs r;
+
+    if(conn->socket == -1)
+        return 0;
+    EmptyReg
+    r.r[0] = conn->socket;
+    r.r[1] = 0;
+    r.r[2] = (int) buf;
+    r.r[3] = len;
+    r.r[4] = 0;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_SendUDPData, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    return len;
+}
+
+void UdpDelete(udp_conn_t conn)
+{
+    _kernel_swi_regs r;
+
+    EmptyReg
+    r.r[2] = conn->port;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ClosePortSockets, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    EmptyReg
+    r.r[2] = conn->port;
+    ForceCallBackMacro;
+    {
+        _kernel_oserror *err;
+
+        err = _kernel_swi(TermiteIP_ClosePort, &r, &r);
+        if(err)
+            ErrorErr(err);
+    }
+    forget_port(conn->port);
+    Free(conn);
+}

@@ -1,0 +1,374 @@
+/*
+    (c) Copyright Warm Silence Software Ltd, 1996
+    All rights reserved.
+
+    PHBG: Initial version
+*/
+
+#include <stdio.h>
+#include <string.h>
+#include "options.h"
+#include "error.h"
+#include "memory.h"
+#include "prot1.h"
+#include "prot2.h"
+#include "riff.h"
+#include "decode.h"
+#include "wav.h"
+#include "avi.h"
+
+typedef struct {chunk_handle  movi_ch, rec_ch, data_ch;
+                int           acode, vcode;} index;
+
+typedef struct
+{
+    int MicroSecPerFrame;
+    int MaxBytesPerSec;
+    int Reserved1;
+    int Flags;
+    int TotalFrames;
+    int InitialFrames;
+    int Streams;
+    int SuggestedBufferSize;
+    int Width;
+    int Height;
+    int Scale;
+    int Rate;
+    int Start;
+    int Length;
+} avi_header;
+
+typedef struct
+{
+    int code, flags;
+    dib_t dib;
+} index_rec_t;
+
+static int str_ind;
+
+
+static int data_code(int st)
+{
+    if(0 <= st < 100)
+    {
+#ifndef BaseRelease
+        int buf[2];
+
+        sprintf((char *)buf, "%02d%c%c", st, 0, 0);
+        return buf[0];
+#else
+        return Prot2Code(st+2);
+#endif
+    }
+    else
+    {
+        ErrorFatal("Too many streams");
+        return 0;
+    }
+}
+
+static void init_index(index *i, chunk_handle ch, film_spec *film)
+{
+    i->acode = i->vcode = 0;
+    if(film->audio)
+        i->acode = data_code(film->audio->stream);
+    if(film->video)
+        i->vcode = data_code(film->video->stream);
+    i->movi_ch = ch;
+    i->rec_ch = NULL;
+    i->data_ch = NULL;
+}
+
+int at_audio(index *i)
+{
+    return (RiffType(i->data_ch) & 0xFFFF) == i->acode;
+}
+
+int at_video(index *i)
+{
+    return (RiffType(i->data_ch) & 0xFFFF) == i->vcode;
+}
+
+int is_palette(chunk_handle ch)
+{
+    return (RiffType(ch) & 0xFFFF0000) == RIFF_xxpc;
+}
+
+static void increment(index *i)
+{
+    chunk_handle ch;
+
+    RiffFree(i->data_ch);
+    if(!RiffEOC(i->rec_ch))
+    {
+        i->data_ch = RiffRead(i->rec_ch);
+    }
+    else
+    {
+        ch = RiffRead(i->movi_ch);
+        if(RiffType(ch) == RIFF_rec)
+        {
+            RiffFree(i->rec_ch);
+            i->rec_ch = ch;
+            i->data_ch = RiffRead(i->rec_ch);
+        }
+        else
+        {
+            i->data_ch = ch;
+        }
+    }
+}
+
+static void read_strl_ch(chunk_handle strl_ch, film_spec *film)
+{
+    chunk_handle strh_ch, strf_ch;
+    stream_info st;
+    int type;
+
+    strh_ch = RiffRead(strl_ch);
+    if(RiffType(strh_ch) != RIFF_strh)
+        Error("stream found with no header");
+    RiffData(strh_ch, &st.header, sizeof(st.header));
+    strf_ch = RiffRead(strl_ch);
+    if(RiffType(strf_ch) != RIFF_strf)
+        Error("stream found with no format");
+    RiffData(strf_ch, &st.format, sizeof(st.format));
+    type = DecodeType(&st);
+    if(type == RIFF_vids)
+    {
+#ifdef BaseRelease
+        Prot2SetCh(strf_ch);
+#endif
+        film->video = DecodeVideo(&st);
+        if(film->video)
+        {
+            film->video->chunk = NULL;
+            film->video->stream = str_ind;
+            if(film->video->force_interleave)
+                film->interleaved = 1;
+        }
+    }
+    if(type == RIFF_auds)
+    {
+        film->audio = WAVReadFmt(strf_ch);
+        if(film->audio)
+        {
+            film->audio->chunk = NULL;
+            film->audio->stream = str_ind;
+        }
+    }
+#ifdef BaseRelease
+    Prot1(film);
+#endif
+    ++str_ind;
+}
+
+static void read_hdrl_ch(chunk_handle hdrl_ch, film_spec *film)
+{
+    chunk_handle avih_ch, strl_ch;
+    avi_header avih;
+
+    avih_ch = RiffRead(hdrl_ch);
+    if(RiffType(avih_ch) != RIFF_avih)
+        Error("avih chunk not found");
+    RiffData(avih_ch, &avih, sizeof(avih));
+    film->interleaved = avih.Flags & 0x100;
+    str_ind = 0;
+    while((strl_ch = RiffRead(hdrl_ch)) != NULL)
+    {
+        if(RiffType(strl_ch) == RIFF_strl)
+            read_strl_ch(strl_ch, film);
+    }
+}
+
+static void calc_chunks(index *ai, film_spec *film)
+{
+    int acn, vcn, aci, vci;
+    dib_t *achunk, *vchunk;
+
+    if(film->video == NULL)
+        ErrorFatal("AVI file has no video stream");
+    acn = vcn = film->video->nchunks;
+    acn += 2;
+    aci = vci = 0;
+    achunk = Malloc(acn * sizeof(dib_t));
+    vchunk = Malloc(vcn * sizeof(dib_t));
+    for(increment(ai); ai->data_ch != NULL; increment(ai))
+    {
+        if(at_audio(ai))
+        {
+            if(aci >= acn)
+            {
+                acn = aci + 1;
+                Free(achunk);
+                achunk = Malloc(acn * sizeof(dib_t));
+            }
+            achunk[aci++] = RiffPlace(ai->data_ch);
+        }
+        if(at_video(ai))
+        {
+            if(is_palette(ai->data_ch))
+                Error("Palette change found");
+            if(vci >= vcn)
+            {
+                vcn = vci + 1;
+                Free(vchunk);
+                vchunk = Malloc(vcn * sizeof(dib_t));
+            }
+            vchunk[vci++] = RiffPlace(ai->data_ch);
+        }
+    }
+    if(film->video)
+    {
+        film->video->chunk = vchunk;
+        film->video->nchunks = vci;
+    }
+    if(film->audio)
+    {
+        film->audio->chunk = achunk;
+        film->audio->nchunks = aci;
+    }
+}
+
+static void calc_chunks_from_movi(chunk_handle ch, film_spec *film)
+{
+    index ai;
+
+    init_index(&ai, ch, film);
+    calc_chunks(&ai, film);
+}
+
+static void calc_chunks_from_index(int offset, chunk_handle ch,
+                                               film_spec *film)
+{
+    video_spec *vs;
+    audio_spec *as;
+    index_rec_t *ind;
+    int nrecs;
+    int code;
+    int i, j;
+
+    vs = film->video;
+    as = film->audio;
+    nrecs = RiffSize(ch) / sizeof(index_rec_t);
+    ind = Malloc(nrecs * sizeof(index_rec_t));
+    RiffData(ch, ind, nrecs * sizeof(index_rec_t));
+    if(ind[0].dib.start >= offset)
+        offset = 8;
+    else
+        offset += 4;
+    if(as)
+    {
+        code = data_code(as->stream);
+        as->nchunks = 0;
+        for(i = 0; i < nrecs; i++)
+        {
+            if((ind[i].code & 0xFFFF) == code)
+                as->nchunks++;
+        }
+        as->chunk = Malloc(as->nchunks * sizeof(dib_t));
+        j = 0;
+        for(i = 0; i < nrecs; i++)
+        {
+            if((ind[i].code & 0xFFFF) == code)
+            {
+                as->chunk[j] = ind[i].dib;
+                as->chunk[j].start += offset;
+                j++;
+            }
+        }
+    }
+    if(vs)
+    {
+        code = data_code(vs->stream);
+        vs->nchunks = 0;
+        for(i = 0; i < nrecs; i++)
+            if((ind[i].code & 0xFFFF) == code)
+                vs->nchunks++;
+        vs->chunk = Malloc(vs->nchunks * sizeof(dib_t));
+        j = 0;
+        for(i = 0; i < nrecs; i++)
+        {
+            if((ind[i].code & 0xFFFF) == code)
+            {
+                vs->chunk[j] = ind[i].dib;
+                vs->chunk[j].start += offset;
+                j++;
+            }
+        }
+    }
+    Free(ind);
+}
+
+film_spec *AviStructure(int handle)
+{
+    film_spec *film;
+    chunk_handle file_ch, hdrl_ch, movi_ch, idx_ch;
+
+    file_ch = RiffOpen(handle, RIFF_AVI);
+    if(file_ch == NULL)
+        return NULL;
+    film = Malloc(sizeof(film_spec));
+    film->handle = handle;
+    film->type = "AVI";
+    film->video = NULL;
+    film->audio = NULL;
+    hdrl_ch = RiffRead(file_ch);
+    if(RiffType(hdrl_ch) != RIFF_hdrl)
+    {
+        AviFree(film);
+        Error("hdrl chunk not found");
+        return NULL;
+    }
+    read_hdrl_ch(hdrl_ch, film);
+    while(movi_ch = RiffRead(file_ch), RiffType(movi_ch) != RIFF_movi)
+    {
+        if(RiffEOC(file_ch))
+        {
+            AviFree(film);
+            Error("movi chunk not found");
+            return NULL;
+        }
+    }
+    while(!RiffEOC(file_ch))
+    {
+        idx_ch = RiffRead(file_ch);
+        if(RiffType(idx_ch) == RIFF_idx1)
+        {
+            calc_chunks_from_index(RiffPlace(movi_ch).start, idx_ch, film);
+            return film;
+        }
+    }
+    calc_chunks_from_movi(movi_ch, film);
+    return film;
+}
+
+void AviFree(film_spec *film)
+{
+    video_spec *vs;
+    audio_spec *as;
+
+    if(film)
+    {
+        vs = film->video;
+        as = film->audio;
+        if(vs)
+        {
+            if(vs->chunk) Free(vs->chunk);
+            Free(vs);
+        }
+        if(as)
+        {
+            if(as->header)
+            {
+                if(as->header->data)
+                    Free(as->header->data);
+                Free(as->header);
+            }
+            if(as->chunk) Free(as->chunk);
+            Free(as);
+        }
+        Free(film);
+    }
+}
+
