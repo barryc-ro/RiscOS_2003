@@ -85,7 +85,6 @@ rm.Fonts: Hdr:HighFSI
 rm.Fonts: hdr:NewErrors
 rm.Fonts: hdr:Variables
 rm.Fonts: hdr:VduExt
-rm.Fonts: hdr:Debug
 rm.Fonts: hdr:PDriver
 rm.Fonts: hdr:Font
 rm.Fonts: hdr:Super
