@@ -69,7 +69,7 @@ static _kernel_oserror *ModeChange(Image *this);
 static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig);
 static _kernel_oserror *LoadFromCache(Image *this, const char *filename);
 static _kernel_oserror *StartExportPNG(Image *this, int *size);
-static _kernel_oserror *BGColPNG(Image *this, int *bgcol);
+static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride);
 static _kernel_oserror *RegisterFiller(Image *this, FillerFunction *fill_fn, void *handle1, int *handle2);
 
 typedef struct png_loaddata
@@ -78,6 +78,8 @@ typedef struct png_loaddata
     int maskwidth;
     unsigned int finished:1;
     unsigned int eightbpphack:1; /* Processing 8bpp + alpha data */
+    unsigned int have_bkgd:1;
+    unsigned int bkgd;
     #ifdef TRACE
     FILE *trace;
     #endif
@@ -254,7 +256,6 @@ void info_callback(png_struct *png_ptr, png_info *info)
     int pal_entries;
     _kernel_oserror *e;
     int r1, r2, r3;
-    int background;
     png_color *palette;
     int num_palette;
     bool have_mask;
@@ -286,7 +287,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
     }
 
-    if (this->flags & IMAGE_FAST || osver < 0xA5)
+    if (/*this->flags & IMAGE_FAST ||*/ osver < 0xA5)
         this->full_alpha = 0;
 
     if (this->full_alpha)
@@ -666,16 +667,21 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
     load->color_type = info->color_type;
 
-    /* Clear the background */
-    background = ((info->background.blue>>(info->bit_depth-8))<<24) |
-                 ((info->background.green>>(info->bit_depth-8))<<16) |
-                 ((info->background.red>>(info->bit_depth-8))<<8);
+    if (info->valid & PNG_INFO_bKGD)
+    {
+        /* Clear the background */
+        load->bkgd = ((info->background.blue>>(info->bit_depth-8))<<24) |
+                     ((info->background.green>>(info->bit_depth-8))<<16) |
+                     ((info->background.red>>(info->bit_depth-8))<<8);
 
-    _swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 256+60, this->private_data2, "png", 0,
-    	    	    	    	    	     &r1, &r2, &r3);
-    _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), background, 128, 0);
-    _swix(OS_WriteI + 16, 0);
-    _swix(OS_SpriteOp, _INR(0,3), 256+60, r1, r2, r3);
+        _swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 256+60, this->private_data2, "png", 0,
+        	    	    	    	    	     &r1, &r2, &r3);
+        _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), load->bkgd, 128, 0);
+        _swix(OS_WriteI + 16, 0);
+        _swix(OS_SpriteOp, _INR(0,3), 256+60, r1, r2, r3);
+
+        load->have_bkgd = 1;
+    }
 
     return;
 
@@ -1257,8 +1263,12 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
     _kernel_oserror *e;
     int oldbudge, oldcompact;
     int *palette = 0;
+    int *bgpal;
+    char *bgptr;
     PNGloaddata *load=(PNGloaddata *) this->private_data;
+  #if 0
     #define imagename "image"
+  #endif
     /*char imagename[12];*/
     static int imageno;
     int width = this->width, height = this->height;
@@ -1285,6 +1295,11 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         }
         else if (scale != 100)
             goto dont_clip;
+        else
+        {
+            x_size = width * 2;
+            y_size = height * 2;
+        }
 
         var.clip.xmin = (var.clip.xmin << var.xeig) + var.ox;
         var.clip.ymin = (var.clip.ymin << var.yeig) + var.oy;
@@ -1344,6 +1359,7 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
 
   dont_clip:
 
+  #if 0
     bgmem = 16 + 44;
     bgwidth = width * (1 << (log2bpp - 3));
     bgwidth = (bgwidth + 3) &~ 3;
@@ -1395,6 +1411,36 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
                                                  &oldsw0, &oldsw1, &oldsw2, &oldsw3);
     if (e) goto error2;
 
+    bgptr = (char *) (bgarea + 1) + ((sprite_header *)(bgarea + 1))->image;
+    bgpal = (int *) ((char *) bgarea + 16 + 44)
+  #else
+    switch (log2bpp)
+    {
+        case 3: mode = 28;              break;
+        case 4: mode = MODE(5, 90, 90); break;
+        case 5: mode = MODE(6, 90, 90); break;
+    }
+
+    bgwidth = width * (1 << (log2bpp - 3));
+    bgwidth = (bgwidth + 3) &~ 3;
+
+    e = MakeBufferSprite((void *) mode, width, height, &bgpal);
+    if (e) return e;
+
+    e = SwitchToBufferSprite();
+    if (e) goto error2;
+
+    {
+        static const int list[] = { 6, 148, -1 };
+        int out[2];
+
+        e = _swix(OS_ReadVduVariables, _INR(0,1), list, out);
+        if (e) goto error2;
+        bgwidth = out[0];
+        bgptr = (char *) out[1];
+    }
+  #endif
+
     if (xo != 0 || yo != 0)
     {
         char cmd[5];
@@ -1417,7 +1463,11 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
     if (!e) e = load->filler(load->filler_handle1, load->filler_handle2);
     #endif
 
+  #if 0
     _swix(OS_SpriteOp, _INR(0,3), oldsw0, oldsw1, oldsw2, oldsw3);
+  #else
+    e = SwitchFromBufferSprite();
+  #endif
 
     if (e) goto error2;
 
@@ -1427,9 +1477,9 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
                 this->private_data2 + 4 + 11,
                 load->color_type,
                 load->spritewidth,
-                (char *) (bgarea + 1) + ((sprite_header *)(bgarea + 1))->image,
+                bgptr,
                 bgwidth,
-                (int *) ((char *) bgarea + 16 + 44),
+                bgpal,
                 log2bpp);
 
     memcpy(fac, this->factors, sizeof fac);
@@ -1458,8 +1508,7 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
     {
         int bufsize;
 
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4), bgarea, imagename, -1, -1,
-                                           0, 0, &bufsize);
+        e=BufferSprite_TableSize(&bufsize);
         if (e) goto error2;
 
         table = malloc(bufsize);
@@ -1469,28 +1518,26 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
             goto error2;
         }
 
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5), bgarea, imagename, -1, -1,
-                                           table, 0);
+        e=BufferSprite_GenerateTable(table);
         if (e) goto error2;
     }
 
-    e=_swix(OS_SpriteOp, _INR(0,7), 256+PutSpriteScaled,
-                                    bgarea,
-                                    imagename,
-                                    x - xo, y - yo,
-                                    osver >= 0xa5 ? PutSpriteScaled_UsePalette
-                                                  : 0,
-                                    fac,
-                                    table);
+    e=BufferSprite_PlotScaled(x - xo, y - yo, osver >= 0xa5 ? PutSpriteScaled_UsePalette : 0, fac, table);
 
     free(table);
  error2:
+  #if 0
     free(savearea);
+  #endif
  error1:
+  #if 0
     flex_set_budge(oldbudge);
     flex_set_deferred_compaction(oldcompact);
 
     flex_free((flex_ptr) &bgarea);
+  #else
+    FreeBufferSprite();
+  #endif
 
     return e;
 }
@@ -1502,7 +1549,17 @@ static _kernel_oserror *StartExportPNG(Image *this, int *size)
     return StartExport((flex_ptr) &this->private_data2, this->private_data2[0]-4, 4);
 }
 
-static _kernel_oserror *BGColPNG(Image *this, int *bgcol)
+static _kernel_oserror *bgfiller(void *h, int *bg)
+{
+    /* Set background colour */
+    _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), *bg, 128, 0);
+    /* CLG */
+    _swix(OS_WriteI+16, 0);
+
+    return NULL;
+}
+
+static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride)
 {
     _kernel_oserror *e;
     int size, *sphead;
@@ -1515,13 +1572,14 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol)
     int r1, r2, r3;
     PNGloaddata *load = (PNGloaddata *) this->private_data;
     int nw, nh, log2bpp;
-
-    e=BGCol(this->private_data2, bgcol);
-    if (e)
-        return e;
+    unsigned int bg = *bgcol;
+    int *newarea;
 
     if (!(this->flags & IMAGE_FAST))
-        return NULL;
+       return BGCol(this->private_data2, bgcol);
+
+    ModeChange(this);
+    this->modechanged = 0;
 
     l = (Spriteloaddata *)malloc(sizeof *l);
     if (!l)
@@ -1555,33 +1613,67 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol)
         /* Add the palette... */
         size += 8 << (1 << log2bpp);
 
+    #if 0
     if (flex_midextend((flex_ptr) &this->private_data2, 0, size) == 0)
         return NULL;
 
     sphead=(int *)((char *)sphead + size);
     this->private_data2[0]=size;
     this->private_data2[2]=16;
+    #else
+    newarea = malloc(size);
+    if (!newarea)
+        return NULL;
+
+    newarea[0] = size;
+    newarea[2] = 16;
+    #endif
     /* Initialise sprite area */
-    _swix(OS_SpriteOp, _INR(0,1), 0x109, this->private_data2);
+    #if 0
+    _swix(OS_SpriteOp, _INR(0,1), 256+9, this->private_data2);
+    #else
+    _swix(OS_SpriteOp, _INR(0,1), 256+9, newarea);
+    #endif
     /* Create sprite */
-    e=_swix(OS_SpriteOp, _INR(0,6), 0x10f, this->private_data2, "sprite",
+    #if 0
+    e=_swix(OS_SpriteOp, _INR(0,6), 256+15, this->private_data2, "sprite",
                                     0, nw, nh, mode);
+    #else
+    e=_swix(OS_SpriteOp, _INR(0,6), 256+15, newarea, "sprite",
+                                    0, nw, nh, mode);
+    #endif
     /* Add the palette */
     if (!e && log2bpp <= 3)
     {
         void *palette;
+        #if 0
         e=_swix(OS_SpriteOp, _INR(0,3), 0x125, this->private_data2, "sprite", (1U<<31)+1);
+        #else
+        e=_swix(OS_SpriteOp, _INR(0,3), 0x125, newarea, "sprite", (1U<<31)+1);
+        #endif
         if (!e)
+            #if 0
             e=_swix(OS_SpriteOp, _INR(0,3)|_OUT(4), 0x125, this->private_data2, "sprite", -1, &palette);
+            #else
+            e=_swix(OS_SpriteOp, _INR(0,3)|_OUT(4), 0x125, newarea, "sprite", -1, &palette);
+            #endif
         if (!e)
             e=_swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1, palette, 8<<(1<<log2bpp), 2);
     }
     if (e)
     {
+        #if 0
         flex_midextend((flex_ptr) &this->private_data2, size, -size);
+        #else
+        free(newarea);
+        #endif
         return NULL;
     }
+#if 0
 #define ORIG ((int *)((char *)this->private_data2+size))
+#else
+#define ORIG (this->private_data2)
+#endif
 
     _swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4),
                                      ORIG, sphead, -1, -1, 0, 1, &bufsiz);
@@ -1589,35 +1681,65 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol)
     colbuf = malloc(bufsiz);
     if (!colbuf)
     {
+        #if 0
         flex_midextend((flex_ptr) &this->private_data2, size, -size);
+        #else
+        free(newarea);
+        #endif
         return NULL;
     }
 
     _swix(ColourTrans_GenerateTable, _INR(0,5), ORIG, sphead, -1, -1, colbuf, 1);
 
     /* Switch output to it */
+    #if 0
     e=_swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 0x13C, this->private_data2, "sprite", 0,
                                                &r1, &r2, &r3);
+    #else
+    e=_swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 0x13C, newarea, "sprite", 0,
+                                               &r1, &r2, &r3);
+    #endif
     if (e)
     {
+        #if 0
         flex_midextend((flex_ptr) &this->private_data2, size, -size);
+        #else
+        free(newarea);
+        #endif
         return NULL;
     }
 
+    /* What background colour? */
+    if (!dontoverride && load->have_bkgd)
+        bg = load->bkgd;
+
     /* Set background colour */
-    _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), *bgcol, 128, 0);
+    _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), bg, 128, 0);
     /* CLG */
     _swix(OS_WriteI+16, 0);
 
+    this->RegisterFiller(this, bgfiller, this, (int *) &bg);
+
+    this->Render(this, 0, 0, 100, -1, -1);
     /* Plot sprite */
-    _swix(OS_SpriteOp, _INR(0,7), 512+52, ORIG, sphead, 0, 0, 8+16, fac, colbuf);
+    /*_swix(OS_SpriteOp, _INR(0,7), 512+52, ORIG, sphead, 0, 0, 8+16, fac, colbuf);*/
 
     /* Unswitch output */
     _swix(OS_SpriteOp, _INR(0,3), 0x13c, r1, r2, r3);
 
     free(colbuf);
 
+    #if 0
     flex_midextend((flex_ptr) &this->private_data2, size+ORIG[0], -ORIG[0]);
+    #else
+    if (flex_extend((flex_ptr) &this->private_data2, size) == 0)
+    {
+        free(newarea);
+        return NULL;
+    }
+    memcpy(this->private_data2, newarea, size);
+    free(newarea);
+    #endif
 
     if (load)
     {
@@ -1625,9 +1747,11 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol)
     }
     free(this->table);
 
+    BGCol(this->private_data2, bgcol);
+
     this->DumpSprite=SpriteDumpSprite;
     this->Render=RenderSprite;
-    this->ModeChange=ModeChangeSprite;
+    /*this->ModeChange=ModeChangeSprite;*/
     this->DumpToCache=DumpToCacheSprite;
     this->StartExport=StartExportSprite;
     this->Export=Export;

@@ -385,7 +385,10 @@ _kernel_oserror *BGCol(void *spr_ptr, int *bgcol)
         {
             ReadPixel(spr_ptr, sphead, x, y, &colour, &tint);
             if (colour==-1)
+            {
                 col_word=bg;
+                goto do24bpp;
+            }
             else
             {
                 if (bpp < 4)
@@ -446,10 +449,208 @@ int SpriteAreaSize(void *mode, int w, int h)
 
     rowwidthinbits = w<<bpp;
     rowwidthinwords = (rowwidthinbits+31)/32;
-    return 16+44+rowwidthinwords*4*h;
+    return 16+44+rowwidthinwords*4*h + SprExtendBonus;
 }
 
-extern _kernel_oserror *BGColSimple(Image *this, int *bgcol)
+extern _kernel_oserror *BGColSimple(Image *this, int *bgcol, int dontoverride)
 {
     return BGCol(this->private_data2, bgcol);
 }
+
+
+#ifdef USESYSTEMSPRITEAREA
+static unsigned int areasize, newsize;
+#else
+static int *sprarea;
+#endif
+static unsigned int sw0, sw1, sw2, sw3;
+static int *savearea;
+
+_kernel_oserror *MakeBufferSprite(void *mode, int width, int height, int **paletteptr)
+{
+    _kernel_oserror *e;
+  #ifdef USESYSTEMSPRITEAREA
+    unsigned int freeoffset, freespace;
+  #endif
+    unsigned int log2bpp, sprsize;
+
+    _swix(OS_SpriteOp, _IN(0)|_IN(2), 25, "itransbuffer");
+    if (savearea)
+    {
+        free(savearea);
+        savearea = NULL;
+    }
+
+  #ifdef USESYSTEMSPRITEAREA
+    e = _swix(OS_SpriteOp, _IN(0)|_OUT(2)|_OUT(5), SprReadControlBlock, &areasize, &freeoffset);
+    if (e) return e;
+
+    freespace = areasize - freeoffset;
+  #endif
+
+    log2bpp = _swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), mode, 9);
+
+    sprsize = 44 + (((width << log2bpp) + 31)/32)*4*height + SprExtendBonus;
+
+    if (log2bpp <= 3)
+       sprsize += 8 << (1 << log2bpp);
+
+  #ifdef USESYSTEMSPRITEAREA
+    if (freespace < sprsize)
+    {
+        e = _swix(OS_ChangeDynamicArea, _INR(0,1), 3, sprsize - freespace);
+        if (e) return e;
+        e = _swix(OS_SpriteOp, _IN(0)|_OUT(2), SprReadControlBlock, &newsize);
+        if (e) return e;
+    }
+    else
+        newsize = areasize;
+  #else
+    sprarea = malloc(16 + sprsize);
+    sprarea[0] = 16 + sprsize;
+    sprarea[2] = 16;
+    e = _swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, sprarea);
+    if (e) goto error1;
+  #endif
+
+  #ifdef USESYSTEMSPRITEAREA
+    e = _swix(OS_SpriteOp, _IN(0)|_INR(2,6), SprCreateSprite, "itransbuffer", 0, width, height, mode);
+  #else
+    e = _swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, sprarea, "itransbuffer", 0, width, height, mode);
+  #endif
+    if (e)
+        goto error1;
+
+    if (log2bpp <= 3)
+    {
+        int *palette;
+        unsigned int palsize;
+
+      #ifdef USESYSTEMSPRITEAREA
+        e = _swix(OS_SpriteOp, _IN(0)|_INR(2,3), SprAddPalette, "itransbuffer", 1+(1U<<31));
+      #else
+        e = _swix(OS_SpriteOp, _INR(0,3), 256+SprAddPalette, sprarea, "itransbuffer", 1+(1U<<31));
+      #endif
+        if (e) goto error2;
+
+      #ifdef USESYSTEMSPRITEAREA
+        e = _swix(OS_SpriteOp, _IN(0)|_INR(2,3)|_OUTR(3,4),
+                               SprAddPalette, "itransbuffer", -1,
+                               &palsize, &palette);
+      #else
+        e = _swix(OS_SpriteOp, _INR(0,3)|_OUTR(3,4),
+                               256+SprAddPalette, sprarea, "itransbuffer", -1,
+                               &palsize, &palette);
+      #endif
+        if (e) goto error2;
+
+        e = _swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1, palette, palsize * 8, 2);
+        if (e) goto error2;
+
+        if (paletteptr)
+            *paletteptr = palette;
+    }
+
+    return NULL;
+
+  error2:
+  #ifdef USESYSTEMSPRITEAREA
+    _swix(OS_SpriteOp, _IN(0)|_IN(2), SprDelete, "itransbuffer");
+  #endif
+
+  error1:
+  #ifdef USESYSTEMSPRITEAREA
+    if (areasize != newsize)
+        _swix(OS_ChangeDynamicArea, _INR(0,1), 3, areasize - newsize);
+  #else
+    free(sprarea);
+  #endif
+
+    return e;
+}
+
+_kernel_oserror *SwitchToBufferSprite(void)
+{
+    _kernel_oserror *e;
+    unsigned int savesize;
+
+    if (!savearea)
+    {
+      #ifdef USESYSTEMSPRITEAREA
+        e = _swix(OS_SpriteOp, _IN(0)|_IN(2)|_OUT(3), SprSaveAreaSize, "itransbuffer", &savesize);
+      #else
+        e = _swix(OS_SpriteOp, _INR(0,2)|_OUT(3), 256+SprSaveAreaSize, sprarea, "itransbuffer", &savesize);
+      #endif
+        if (e) return e;
+
+        savearea = malloc(savesize);
+        if (e) return imgtrnsError("Out of memory");
+
+        savearea[0] = 0;
+    }
+
+  #ifdef USESYSTEMSPRITEAREA
+    return _swix(OS_SpriteOp, _IN(0)|_INR(2,3)|_OUTR(0,3),
+                              SprSwitchVdu, "itransbuffer", savearea,
+                              &sw0, &sw1, &sw2, &sw3);
+  #else
+    return _swix(OS_SpriteOp, _INR(0,3)|_OUTR(0,3),
+                              256+SprSwitchVdu, sprarea, "itransbuffer", savearea,
+                              &sw0, &sw1, &sw2, &sw3);
+  #endif
+}
+
+_kernel_oserror *SwitchFromBufferSprite(void)
+{
+    return _swix(OS_SpriteOp, _INR(0,3), sw0, sw1, sw2, sw3);
+}
+
+_kernel_oserror *FreeBufferSprite(void)
+{
+    if (savearea)
+    {
+        free(savearea);
+        savearea = NULL;
+    }
+  #ifdef USESYSTEMSPRITEAREA
+    _kernel_oserror *e;
+
+    e = _swix(OS_SpriteOp, _IN(0)|_IN(2), SprDelete, "itransbuffer");
+    if (e) return e;
+
+    if (areasize != newsize)
+    {
+        e = _swix(OS_ChangeDynamicArea, _INR(0,1), 3, areasize - newsize);
+        if (e) return e;
+        newsize = areasize;
+    }
+  #else
+    if (sprarea)
+    {
+        free(sprarea);
+        sprarea = NULL;
+    }
+  #endif
+
+    return NULL;
+}
+
+_kernel_oserror *BufferSprite_TableSize(int *bufsize)
+{
+    return _swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4), sprarea, "itransbuffer", -1, -1, 0, 0, bufsize);
+}
+
+_kernel_oserror *BufferSprite_GenerateTable(void *table)
+{
+    return _swix(ColourTrans_GenerateTable, _INR(0,5), sprarea, "itransbuffer", -1, -1, table, 0);
+}
+
+_kernel_oserror *BufferSprite_PlotScaled(int x, int y, int flags, int *fac, void *table)
+{
+    return _swix(OS_SpriteOp, _INR(0,7), 256+52, sprarea,
+                                         "itransbuffer",
+                                         x, y,
+                                         flags, fac, table);
+}
+
+
