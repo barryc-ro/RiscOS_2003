@@ -138,6 +138,7 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.re ${CLXLIBDIR}.h.re ${CPFLAGS}
 	${CP} h.wholefls ${CLXLIBDIR}.h.wholefls ${CPFLAGS}
 	${CP} h.wildcard ${CLXLIBDIR}.h.wildcard ${CPFLAGS}
+	${CP} VersionNum ${CLXLIBDIR}.VersionNum ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${LIBS} dirs
