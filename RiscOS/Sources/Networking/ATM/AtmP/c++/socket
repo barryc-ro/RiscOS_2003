@@ -124,6 +124,7 @@ SocketService::SocketService (VC *          vc,
       vc (vc),
       vc_receiver (vc_receiver),
       state (Creating),
+      discarding_packet (false),
       close_op (0)
 {
 }
@@ -346,6 +347,14 @@ int  SocketService::TxData (const unsigned int *  data,
 
 
 
+int  SocketService::TxData (struct mbuf *  m,
+                            int            data_bytes)
+{
+    return boson_tx_data_mbuf (handle, m, data_bytes);
+}
+
+
+
 void  SocketService::Close ()
 {
     // Blocking close
@@ -384,12 +393,10 @@ void  SocketService::TxClose ()
 
 
 
-MessageHandlerRC  SocketService::MessageHandler (NICMessage          msg,
-                                                 const unsigned int  total_size)
+MessageHandlerRC  SocketService::MessageHandler (NICMessage    msg,
+                                                 NICExtension  ext)
 {
     MessageHandlerRC  rc = HandledMsg;
-
-    M_unused (total_size);
 
     if (msg.common.type == NIC_CommandMessage)
     {
@@ -426,11 +433,11 @@ MessageHandlerRC  SocketService::MessageHandler (NICMessage          msg,
                 break;
 
             case AS_DATA:
-                rc = RxData (msg);
+                rc = RxData (msg, ext);
                 break;
 
             case AS_DATA_END:
-                rc = RxDataEnd (msg);
+                rc = RxDataEnd (msg, ext);
                 break;
 
             case AS_DATA_ABORT:
@@ -687,46 +694,69 @@ MessageHandlerRC  SocketService::RxCloseAck (NICMessage  msg)
 
 
 
-MessageHandlerRC  SocketService::RxData (NICMessage  msg)
+MessageHandlerRC  SocketService::RxData (NICMessage    msg,
+                                         NICExtension  ext)
 {
-    MessageHandlerRC  rc;
-
-    if (vc_receiver->Data (msg.data.size))
-    {
-        rc = DiscardMsg;
-    }
-    else
-    {
-        rc = HandledMsg;
-    }
     ++irq_datas;
-    return rc;
+
+    if (msg.data.first)
+    {
+        if (vc_receiver->DataSize (
+                msg.data.ext ? ext.bits.size : msg.data.size) != 0)
+        {
+            discarding_packet = true;
+        }
+    }
+
+    if (!discarding_packet)
+    {
+        if (vc_receiver->Data (msg.data.size) != 0)
+        {
+            vc_receiver->DataAbort ();
+        }
+    }
+
+    return (discarding_packet ? DiscardMsg : HandledMsg);
 }
 
 
 
 
-MessageHandlerRC  SocketService::RxDataEnd (NICMessage  msg)
+MessageHandlerRC  SocketService::RxDataEnd (NICMessage    msg,
+                                            NICExtension  ext)
 {
-    MessageHandlerRC  rc;
-
     ++irq_data_ends;
 
-    if (!vc_receiver->Data (msg.data.size))
+    if (msg.data.first)
     {
-        if (msg.data.last)
+        if (vc_receiver->DataSize (
+                msg.data.ext ? ext.bits.size : msg.data.size) != 0)
+        {
+            discarding_packet = true;
+        }
+    }
+
+    if (!discarding_packet)
+    {
+        if (vc_receiver->Data (msg.data.size) != 0)
+        {
+            vc_receiver->DataAbort ();
+        }
+    }
+
+    if (msg.data.last)
+    {
+        if (discarding_packet)
+        {
+            discarding_packet = false;
+        }
+        else
         {
             vc_receiver->DataEnd ();
         }
-
-        rc = HandledMsg;
-    }
-    else
-    {
-        rc = DiscardMsg;
     }
 
-    return rc;
+    return (discarding_packet ? DiscardMsg : HandledMsg);
 }
 
 

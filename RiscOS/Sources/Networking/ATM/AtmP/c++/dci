@@ -360,7 +360,7 @@ int dci_readmacadr (_kernel_swi_regs *const  r)
 
 #define MAX_DUMP_BYTES  9180
 
-static void dump_pkt (u_char *  rptr, int pktlen)
+void dump_buf (u_char *  rptr, int pktlen)
 {
     static char buf[3*MAX_DUMP_BYTES+4];
     char *bp = buf;
@@ -383,7 +383,7 @@ done:
 
 
 
-static void dumpm(struct mbuf *m0, int pktlen)
+void dump_mbuf (struct mbuf *m0, int pktlen)
 {
     static char buf[3*MAX_DUMP_BYTES+4];
     char *bp = buf;
@@ -456,26 +456,20 @@ void  dci_send_chain (struct mbuf *    m,
    	    called from irq handler when we have an IP packet of some sort
 */
 
-int dci_receive (IPConnection *   connection,
-                 unsigned char *  packet,
-                 int              datalen,
-                 unsigned short   type)
+int dci_receive (IPConnection *  connection,
+                 struct mbuf *   m,
+                 unsigned short  type)
 {
-
-/************************************************************************
- * NOTE: great improvements in efficiency can be made here by using the *
- * mbufmanager routines to throw data around!!!!                        *
- ************************************************************************/
     struct dci4pi *  p;
-    struct mbuf *m, *m0;
-    RxHdr *hdr;
-    unsigned char *pp = packet;
+    struct mbuf *    m0;
+    RxHdr *          hdr;
+
 
     dprintf (("", "frame type %x\n", type));
-    /* allocate a single mbuf */
     p = (struct dci4pi *) dci_want_frame_type (type);
     if (!p)
     {
+        dprintf (("", "no claimants of frame type\n"));
         return -1;
     }
 
@@ -483,21 +477,23 @@ int dci_receive (IPConnection *   connection,
     {
         u_short  ar_hrd;
 
-        memcpy (&ar_hrd, packet, sizeof (u_short));
+        ar_hrd = *mtod (m, u_short *);
         if (ntohs (ar_hrd) == ATMARP_ar_hrd)
         {
-            arp_rx_atmarp (connection, packet, datalen);
+            arp_rx_atmarp (connection, m);
             return 0;
         }
     }
 
-    m0 = ALLOC_S (MINCONTIG, NULL);
+    // Allocate a single mbuf for the header
+    m0 = ALLOC_S (sizeof (RxHdr), NULL);
     if (!m0)
     {
+        dprintf (("", "single mbuf allocation for header failed\n"));
         return -1;
     }
 
-    /* Fill in the header data for the protocol receive handler */
+    // Fill in the header data for the protocol receive handler
     hdr = mtod (m0, RxHdr *);
     m0->m_len = sizeof (RxHdr);
 
@@ -518,31 +514,13 @@ int dci_receive (IPConnection *   connection,
     hdr->rx_error_level = 0;
 
 
-    /* allocate an mbuf chain of size datalen */
-    m0->m_next = ALLOC (datalen, NULL);
+    // Link the header to the start of the data
+    m0->m_next = m;
 
-    if (m0->m_next == NULL)
-    {
-        m_free (m0);
-        return (-1);
-    }
-
-    /*
-     * run down the mbufs, filling them in
-     */
-    for (m = m0->m_next; m; m = m->m_next)
-    {
-        m->m_type = MT_DATA;
-        memcpy (mtod (m, char *), pp, m->m_len);
-        pp += m->m_len;
-    }
-
-    #ifdef DEBUGLIB
-    dumpm (m0, datalen + sizeof (RxHdr));
-    #endif
+    //ddump_mbuf (m0, datalen + sizeof (RxHdr));
 
     callproto (&dib, m0, p->pi_handler, p->pi_handle);
-    return (0);
+    return 0;
 }
 
 
@@ -568,39 +546,13 @@ static int  broadcast (struct mbuf *    m0,
          /* is it, in fact, an ARP message? */
         if (frame_type == ETHERTYPE_ARP)
         {
-            int            datalen;
-            struct mbuf *  m;
-
             arp_count++;
-            for (datalen = 0, m = m0; m; m = m->m_next)
-            {
-                datalen += m->m_len;
-            }
-
-            /* is the message small enough to swallow whole? */
-            if (datalen <= sizeof (arpbuf))
-            {
-                unsigned char *  t = arpbuf;
-                struct mbuf *    m;
-
-                for (m = m0; m; m = m->m_next )
-                {
-                    memcpy (t, mtod(m, char *), m->m_len);
-                    t += m->m_len;
-                }
-                arplen = datalen;
-                local_arp_count++;
-                do_local_arp = 1;
-                /* if all these conditions are OK, copy the msg and set a
-                 * callback to process it */
-                setcallback();
-            }
-            else     /* the msg was too big, and will be ignored */
-            {
-                discard_arp_count++;
-                dprintf (("", "atm_transmit: discarding ARP %i\n",
-                          discard_arp_count));
-            }
+            arpbuf = m0;
+            local_arp_count++;
+            do_local_arp = 1;
+            /* if all these conditions are OK, copy the msg and set a
+             * callback to process it */
+            setcallback();
         } /* it wasn't an ARP message - ignore this broadcast */
 
         discard = 1;
@@ -654,7 +606,8 @@ int dci_transmit (_kernel_swi_regs *const  r)
                 #else
                 if (broadcast (m0, frame_type, &new_dest))
                 {
-                    goto discard;
+                    atm_transmit_in_use = 0;
+                    return 0;
                 }
                 #endif
             }
@@ -674,7 +627,7 @@ int dci_transmit (_kernel_swi_regs *const  r)
             }
             else
             {
-                //dprintf (("", "using cached connection\n"));
+                dprintf (("", "using cached connection\n"));
             }
 
             error = cached_connection->TxMBufChain (frame_type,

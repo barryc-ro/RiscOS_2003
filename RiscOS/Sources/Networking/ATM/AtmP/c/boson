@@ -693,6 +693,182 @@ int  boson_tx_data (const int             handle,
 
 
 
+int  boson_tx_data_mbuf (const int      handle,
+                         struct mbuf *  m,
+                         int            data_bytes)
+{
+    int             fifo_bytes = 0;
+    int             bytes;
+    unsigned int *  data = mtod (m, unsigned int *);
+    NICMessage      msg;
+
+    dprintf (("", "Write_Data_Msg: %d bytes\n", data_bytes));
+
+    msg.header       = 0;
+    msg.data.handle  = handle;
+    msg.data.type    = NIC_DataMessage;
+    msg.data.command = AS_DATA_END;
+    msg.data.first   = 1;
+
+    fifo_bytes = boson_fifo_space ();
+    if (data_bytes > fifo_bytes - sizeof (NICMessage))
+    {
+        NICExtension  ext;
+
+        dprintf (("", "Fragmenting data\n"));
+
+        ext.extension = 0;
+
+        // First block can do maximum of (fifo_space - 8) words (accounting for
+        // message header and extension word).
+
+        msg.data.size    = fifo_bytes - (sizeof (NICMessage) +
+                                         sizeof (NICExtension));
+        msg.data.ext     = 1;
+        ext.bits.size    = data_bytes;
+
+        dprintf (("", "block size %d\n", msg.data.size));
+
+        // Number of bytes that will remain after this block
+        data_bytes -= msg.data.size;
+
+        // Write message
+        w_Boson_CommitToARM (msg.header);
+
+        // Write extenstion word
+        w_Boson_CommitToARM (ext.extension);
+
+        // Write all but last word of packet
+        while (msg.data.size > 4)
+        {
+            bytes = M_min (m->m_len, msg.data.size - 4);
+            dprintf (("", "doing %d, mbuf len %d\n", bytes, m->m_len));
+            m->m_len -= bytes;
+            msg.data.size -= bytes;
+
+            while (bytes > 0)
+            {
+                w_Boson_CommitToARM (*data++);
+                bytes -= 4;
+            }
+
+            if (m->m_len == 0)
+            {
+                // Advance to next mbuf
+                dprintf (("", "moving to next mbuf\n"));
+                m = m->m_next;
+                data = mtod (m, unsigned int *);
+            }
+        }
+
+        // Write last word of packet and increment block counter
+        w_Boson_BlockToARM (*data++);
+
+        msg.data.first   = 0;
+        msg.data.ext     = 0;
+
+        fifo_bytes = boson_fifo_space ();
+        dprintf (("", "%d bytes free in FIFO\n", fifo_bytes));
+        while (data_bytes > fifo_bytes - sizeof (NICMessage))
+        {
+            // Middle blocks can do maximum of (fifo_space - 4) bytes
+            // (accounting for message header), and must be multiples of 48
+            // bytes.
+            msg.data.size  = fifo_bytes - sizeof (NICMessage);
+
+            dprintf (("", "%d\n", msg.data.size));
+
+            // Number of bytes that will remain after this block
+            data_bytes -= msg.data.size;
+
+            // Write message
+            w_Boson_CommitToARM (msg.header);
+
+            // Write all but last word of block
+            while (msg.data.size > 4)
+            {
+                bytes = M_min (m->m_len, msg.data.size - 4);
+                m->m_len -= bytes;
+                msg.data.size -= bytes;
+
+                while (bytes > 0)
+                {
+                    w_Boson_CommitToARM (*data++);
+                    bytes -= 4;
+                }
+
+                if (m->m_len == 0)
+                {
+                    // Advance to next mbuf
+                    m = m->m_next;
+                    data = mtod (m, unsigned int *);
+                }
+            }
+
+            // Write last word of block and increment block counter
+            w_Boson_BlockToARM (*data++);
+
+            fifo_bytes = boson_fifo_space ();
+        }
+    }
+
+    // Either sending all data in one go, or last block of multi-block message.
+    // If the latter then data size is always <= 48 bytes.
+    msg.data.last    = 1;
+    msg.data.size    = data_bytes;
+
+    dprintf (("", "%d\n", data_bytes));
+
+    // Write message */
+    w_Boson_CommitToARM (msg.header);
+
+    // Write all but last '<= 4 bytes' of block
+    while (data_bytes > 4)
+    {
+        bytes = M_min (m->m_len, ((data_bytes - 1) & ~3));
+        dprintf (("", "doing %d, mbuf len %d\n", bytes, m->m_len));
+        m->m_len -= bytes;
+        data_bytes -= bytes;
+
+        while (bytes > 0)
+        {
+            dprintf (("", "%02x %02x %02x %02x ",
+                      *((unsigned char *) data),
+                      *(((unsigned char *) data) + 1),
+                      *(((unsigned char *) data) + 2),
+                      *(((unsigned char *) data) + 3)
+                      ));
+            w_Boson_CommitToARM (*data++);
+            bytes -= 4;
+        }
+
+        if (m->m_len == 0)
+        {
+            // Advance to next mbuf
+            dprintf (("", "moving to next mbuf\n"));
+            m = m->m_next;
+            data = mtod (m, unsigned int *);
+        }
+    }
+
+    // Write last few bytes of block and increment block counter. May not
+    // actually be a whole word though, but this shouldn't matter - the NIC
+    // should ignore any junk bytes at the end if we've got our byte count
+    // correct.
+    dprintf (("", "%02x %02x %02x %02x\n",
+              *((unsigned char *) data),
+              *(((unsigned char *) data) + 1),
+              *(((unsigned char *) data) + 2),
+              *(((unsigned char *) data) + 3)
+              ));
+    w_Boson_BlockToARM (*data);
+
+    dprintf (("", "done\n\n"));
+
+    return 0;
+}
+
+
 #ifdef DEBUG_TRAIL
 
 #ifdef DEBUGLIB

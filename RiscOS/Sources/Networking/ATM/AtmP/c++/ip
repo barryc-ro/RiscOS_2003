@@ -40,21 +40,11 @@ extern "C"
 }
 
 // Local
-#include "boson.h"
 #include "defs.h"
 #include "ip.h"
 #include "mbuf.h"
 #include "socket.h"
 #include "utils.h"
-
-
-
-
-// =============================================================================
-// Class statics
-
-unsigned int  IPConnection::txbuf[M_round_word (ATM_MTU + LLC_HDR_SIZE) /
-                                  sizeof (unsigned int)];
 
 
 
@@ -162,7 +152,9 @@ IPConnection::IPConnection (const ATML_SOCKADDR *const  atm_addr,
                   origin,
                   error),
       mac_mapping (0),
-      buffer_offset (0),
+      m (0),
+      m_next (&m),
+      rx_packet_size (0),
       data_count (0),
       data_lost (0)
 {
@@ -171,6 +163,25 @@ IPConnection::IPConnection (const ATML_SOCKADDR *const  atm_addr,
         if (service == Connection::Service_IP_LLC)
         {
             llc = true;
+
+            unsigned char *  p = (unsigned char *) llc_snap_hdr;
+
+            // LLC value indicating SNAP header is present*/
+            *p++ = 0xAA;
+            *p++ = 0xAA;
+            *p++ = 0x03;
+
+            // SNAP header
+            *p++ = 0;
+            *p++ = 0;
+            *p++ = 0;
+
+            // Last two bytes change on a per-frame basis
+
+            // Allocate an unsafe mbuf for the LLC/SNAP header and set
+            // it to point to our own data.
+            llc_snap_mbuf = ALLOC_U (sizeof (llc_snap_hdr),
+                                     llc_snap_hdr);
         }
         else
         {
@@ -211,6 +222,9 @@ IPConnection::~IPConnection ()
             ip_map_remove (mac_addr);
         }
     }
+
+    llc_snap_mbuf->m_next = 0;
+    m_free (llc_snap_mbuf);
 
     dci_flush_cache (this);
 }
@@ -271,20 +285,20 @@ void  IPConnection::StateChanged (const SocketService::State  state)
 
 
 
-int  IPConnection::Data (const unsigned int  data_size)
+int  IPConnection::DataSize (unsigned int  data_size)
 {
-    unsigned int  bytes_left = sizeof (buffer) - buffer_offset;
-    int           rc = 0;
+    int  rc = 0;
 
-    if (data_size <= bytes_left)
+    dprintf (("", "allocating %d byte mbuf chain\n", data_size));
+    *m_next = ALLOC (data_size, NULL);
+    if (*m_next)
     {
-        ASM_GET_MSG (Boson_CommitFromARMAddr, buffer + buffer_offset, data_size);
-        buffer_offset += data_size;
-        data_count += data_size;
+        (*m_next)->m_type = MT_DATA;
+        (*m_next)->m_len = 0;
     }
     else
     {
-        rc = 1;
+        rc = -1;
     }
 
     return rc;
@@ -293,43 +307,90 @@ int  IPConnection::Data (const unsigned int  data_size)
 
 
 
+int  IPConnection::Data (unsigned int  data_size)
+{
+    int             bytes;
+
+    data_count += data_size;
+    rx_packet_size += data_size;
+
+    while (data_size)
+    {
+        dprintf (("", "%d bytes remaining\n", data_size));
+        // Work out how much data we can transfer in one go - either all the
+        // data will fill into current mbuf, or just fill the current mbuf.
+        dprintf (("", "data_size=%d, mbuf space=%d\n",
+                  data_size,  (*m_next)->m_inilen - (*m_next)->m_len));
+        bytes = M_min (data_size, (*m_next)->m_inilen - (*m_next)->m_len);
+        dprintf (("", "copying %d bytes\n", bytes));
+        ASM_GET_MSG (Boson_CommitFromARMAddr,
+                     mtod (*m_next, unsigned char *) + (*m_next)->m_len,
+                     bytes);
+        (*m_next)->m_len += bytes;
+
+        // If we've filled the current mbuf then move on to the next
+        if ((*m_next)->m_len == (*m_next)->m_inilen)
+        {
+            dprintf (("", "advancing to next mbuf\n"));
+            m_next = &((*m_next)->m_next);
+            if (*m_next)
+            {
+                (*m_next)->m_type = MT_DATA;
+                (*m_next)->m_len = 0;
+            }
+        }
+
+        data_size -= bytes;
+    }
+
+    return 0;
+}
+
+
+
+
 void  IPConnection::DataEnd ()
 {
-    unsigned char *  data_start;
-    unsigned int     data_size;
     int              frame_type;
 
     if (llc)
     {
-        frame_type = (buffer[6] << 8) | buffer[7];
-        data_start = buffer + LLC_HDR_SIZE;
-        data_size  = buffer_offset - LLC_HDR_SIZE;
+        // Extract frame type from LLC header and remove the entire
+        // header from the start of the data so we're just left with
+        // the IP packet.
+        unsigned char *  llc_hdr;
+        PULLUP (m, LLC_HDR_SIZE);
+        llc_hdr = mtod (m, unsigned char *);
+        frame_type = (llc_hdr[6] << 8) | llc_hdr[7];
+        TRIM (m, LLC_HDR_SIZE, NULL);
     }
     else
     {
         frame_type = ETHERTYPE_IP;
-        data_start = buffer;
-        data_size  = buffer_offset;
     }
 
-    if (dci_receive (this, data_start, data_size, frame_type) != 0)
+    if (dci_receive (this, m, frame_type) < 0)
     {
-        ++irq_ip_pkts_dropped;
-        data_lost += buffer_offset;
+        DataAbort ();
     }
     else
     {
         ++ip_rx;
     }
 
-    buffer_offset = 0;
+    m = 0;
+    m_next = &m;
+    rx_packet_size = 0;
 }
 
 
 
-void  IPConnection::DataLength (const unsigned int  length)
+void  IPConnection::DataLength (unsigned int  length)
 {
-    buffer_offset = length;
+    int  trim_length = (int) rx_packet_size - (int) length;
+
+    TRIM (m, -trim_length, NULL);
+    data_count -= trim_length;
 }
 
 
@@ -337,7 +398,11 @@ void  IPConnection::DataLength (const unsigned int  length)
 
 void  IPConnection::DataAbort ()
 {
-    buffer_offset = 0;
+    ++irq_ip_pkts_dropped;
+    data_lost += mbctl.count_bytes (&mbctl, m);
+    m_freem (m);
+    m = 0;
+    m_next = &m;
 }
 
 
@@ -358,40 +423,13 @@ const char *  IPConnection::GetTextService ()
 
 
 
-#ifdef DEBUGLIB
-
-#define MAX_DUMP_BYTES  9180
-
-static void dump_pkt (u_char *  rptr, int pktlen)
-{
-    static char buf[3*MAX_DUMP_BYTES+4];
-    char *bp = buf;
-    static const char digits[] = "0123456789abcdef";
-
-    while (pktlen--)
-    {
-        if (bp > buf + sizeof(buf) - 3)
-            goto done;
-        *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
-        *bp++ = digits[*rptr++ & 0xf];
-        *bp++ = ' ';
-    }
-
-done:
-    *bp = 0;
-    dprintf (("", "%s\n", buf));
-}
-
-#endif
-
-
-
+// Safe for this routine to return mid-way without freeing mbufs
+// as caller will free if we don't.
 
 int  IPConnection::TxMBufChain (const int       frame_type,
                                 struct mbuf *&  m0,
                                 const bool      free_mbufs)
 {
-    unsigned char *  t;
     struct mbuf *    m;
 
     if (vc->GetState () != SocketService::Connected)
@@ -414,63 +452,40 @@ int  IPConnection::TxMBufChain (const int       frame_type,
 
     if (llc)
     {
-        //dprintf (("", "inserting LLC/SNAP header\n"));
+        dprintf (("", "inserting LLC/SNAP header\n"));
 
-        t = (unsigned char *) txbuf;
-
-        /* insert LLC value indicating SNAP header is present*/
-        *t++ = 0xAA;
-        *t++ = 0xAA;
-        *t++ = 0x03;
-
-        /* insert SNAP header */
-        *t++ = 0;
-        *t++ = 0;
-        *t++ = 0;
-        *t++ = (frame_type >> 8) & 0xff;
-        *t++ = frame_type & 0xff;
+        ((unsigned char *) llc_snap_hdr)[6] = (frame_type >> 8) & 0xff;
+        ((unsigned char *) llc_snap_hdr)[7] = frame_type & 0xff;
     }
 
     int  datalen;
     do
     {
-        /* figure out how much buffer space we have */
-        for (datalen = 0, m = m0; m; m = m->m_next)
-        {
-            datalen += m->m_len;
-        }
+        datalen = (MBCTL.count_bytes) (&MBCTL, m0);
 
-        if (datalen > ATM_MTU)    /* Too much? Dump it */
+        if (datalen > ATM_MTU)    // Too much? Dump it
         {
             dprintf (("", "ATM_MTU exceeded.\n"));
             return EMSGSIZE;
         }
 
-        //dprintf (("", "%d\n", datalen));
+        dprintf (("", "size: %d\n", datalen));
 
-        t = (unsigned char *) txbuf;
         if (llc)
         {
-            t += LLC_HDR_SIZE;
+            llc_snap_mbuf->m_len = LLC_HDR_SIZE;
+            llc_snap_mbuf->m_next = m0;
+            m0 = llc_snap_mbuf;
             datalen += LLC_HDR_SIZE;
         }
 
-        for (m = m0; m; m = m->m_next )
-        {
-            memcpy (t, mtod(m, char *), m->m_len);
-            t += m->m_len;
-        }
+        //ddump_mbuf (m0, datalen);
 
-        #ifdef DEBUGLIB
-        dump_pkt ((u_char *) txbuf, datalen);
-        #endif
-
-        if (vc->TxData (txbuf, datalen) < 0)
+        if (vc->TxData (m0, datalen) < 0)
         {
             dprintf (("", "ran out of FIFO space!\n"));
-            /* Consider doing interrupt-driven write-out if not enough
-             * space straight away.
-             */
+            // Consider doing interrupt-driven write-out if not enough
+            // space straight away?
         }
         else
         {
@@ -478,8 +493,14 @@ int  IPConnection::TxMBufChain (const int       frame_type,
             used = true;
         }
 
-        m  = m0;           /* keep pointer to current mbuf chain */
-        m0 = m->m_list;    /* point to next mbuf chain in list */
+        if (llc)
+        {
+            // Unchain original, static LLC/SNAP header mbuf
+            m0 = m0->m_next;
+        }
+
+        m  = m0;           // keep pointer to current mbuf chain
+        m0 = m->m_list;    // point to next mbuf chain in list
 
         /* 1999-03-19: BAL
          * Not required because m_freem only works on MBuf chains, not lists
