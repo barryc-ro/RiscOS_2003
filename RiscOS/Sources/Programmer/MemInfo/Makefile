@@ -74,7 +74,7 @@ o.header
 #
 all: ${RMTARGET}
 	@echo ${COMPONENT}: all complete
-	
+
 #
 # RISC OS ROM build rules:
 #
@@ -94,7 +94,7 @@ clean:
         ${RM} ${RMTARGET}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
-        
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
