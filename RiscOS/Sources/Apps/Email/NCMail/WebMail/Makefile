@@ -109,7 +109,7 @@ rom:
         @echo $(COMPONENT): Module built (ROM)
 
 ram: 
-	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=ozsl
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=oz
 	@echo $(COMPONENT): Module built (RAM)
 
 install_rom: 
