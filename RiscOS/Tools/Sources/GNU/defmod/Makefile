@@ -85,7 +85,7 @@ LIBS=${CLIB}
 
 
 c.defmod: sources.y.defmod
-        ${YACC} ${YACCFLAGS} -o $@ sources.y.defmod
+        ${YACC} ${YACCFLAGS} -o c.defmod sources.y.defmod
 
 o.defmod: c.defmod
 	${CC} ${CCFLAGS} ${YACCDEFS} -o $@ c.defmod
