@@ -20,7 +20,7 @@ WIPE    = -wipe
 SHRINK  = ShrinkWrapZipCompress
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} ${THROWBACK}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -56,13 +56,14 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
 all: ${RAMTARGET}
+	@echo ${COMPONENT}: ram module built
 
 #
 # RISC OS ROM build rules:
@@ -97,11 +98,9 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link:
+rom_link: ${TARGET}
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -111,10 +110,7 @@ ${RAMTARGET}: ${OBJS} ${CLIB}
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
-# Dynamic dependencies:
+o.module: h.header
+h.header: o.header ;@
 
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	C:h.os
-o.module:	h.main
+# Dynamic dependencies:
