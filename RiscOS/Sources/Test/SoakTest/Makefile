@@ -90,28 +90,3 @@ Sprites.Test.32bpp: Sprites.Test.4bpp Tools.ChangeFSI
 
 
 # Dynamic dependencies:
-rm.Boca.SoakTest: Hdr.<MACHINE>.GetAll_MS
-rm.Boca.SoakTest: Hdr:ListOpts
-rm.Boca.SoakTest: Hdr:Macros
-rm.Boca.SoakTest: Hdr:System
-rm.Boca.SoakTest: Hdr:SWIs
-rm.Boca.SoakTest: Hdr:CPU.Generic26
-rm.Boca.SoakTest: Hdr:IO.GenericIO
-rm.Boca.SoakTest: Hdr:RISCOS
-rm.Boca.SoakTest: Hdr:Machine.<Machine>
-rm.Boca.SoakTest: Hdr:Machine.Machine
-rm.Boca.SoakTest: Hdr:IO.IOMDL
-rm.Boca.SoakTest: Hdr:CMOS
-rm.Boca.SoakTest: Hdr:ModHand
-rm.Boca.SoakTest: Hdr:Services
-rm.Boca.SoakTest: Hdr:Proc
-rm.Boca.SoakTest: Hdr:FSNumbers
-rm.Boca.SoakTest: Hdr:NewErrors
-rm.Boca.SoakTest: Hdr:MsgTrans
-rm.Boca.SoakTest: Hdr:Debug
-rm.Boca.SoakTest: Hdr:Podule
-rm.Boca.SoakTest: Hdr:PoduleReg
-rm.Boca.SoakTest: Hdr:HighFSI
-rm.Boca.SoakTest: Hdr:Sprite
-rm.Boca.SoakTest: s.Module
-rm.Boca.SoakTest: <Src$Dir>.Kernel.TestSrc.ToggleLED
