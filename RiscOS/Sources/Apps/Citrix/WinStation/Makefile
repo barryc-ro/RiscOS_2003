@@ -272,7 +272,7 @@ installncd: installd
 makepass: makepass,ff8
 
 makepass,ff8: src/app/makepass.o ${CITRIXLIB}
-	${LD} ${LDFLAGS} -o 'makepass,ff8' src/app/makepass.o ${CITRIXLIB} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
+	${LD} ${LDFLAGS} -o 'makepass,ff8' src/app/makepass.o src/lib/encrypt/encrypt.o $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
 	@ls -l '$@'
 
 

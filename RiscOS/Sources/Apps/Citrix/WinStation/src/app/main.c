@@ -235,6 +235,8 @@ static void printinfo_request(void);
 
 static void dial_start(void);
 
+static void connection_state(int event);
+
 /* --------------------------------------------------------------------------------------------- */
 
 /* External references */
@@ -292,6 +294,22 @@ static void signal_setup(void)
 }
 
 /* --------------------------------------------------------------------------------------------- */
+
+static BOOL main_open_session(void)
+{
+    if (cli_file_is_url)
+	current_session = session_open_url(cli_filename, cli_postfile);
+    else
+	current_session = session_open(cli_filename, FALSE);
+    
+    if (current_session)
+    {
+	connection_state(connection_OPENED);
+	running = TRUE;
+    }
+
+    return current_session != NULL;
+}
 
 void main_close_session(icaclient_session sess)
 {
@@ -1573,7 +1591,7 @@ static void process_args(int argc, char *argv[])
 		if (i+1 < argc && argv[i+1][0] != '-')
 		{
 	            cli_filename = strdup(argv[++i]);
-
+			
 		    if (i+1 < argc && argv[i+1][0] != '-')
 			cli_postfile = strdup(argv[++i]);
 		}
@@ -1708,19 +1726,9 @@ int main(int argc, char *argv[])
 
     initialise(argc, argv);
 
-    if (cli_filename != NULL && cli_filename[0] != '\0')
+    if (cli_filename)
     {
-	if (cli_multitask)
-	{
-	    if (cli_file_is_url)
-		current_session = session_open_url(cli_filename, cli_postfile);
-	    else
-		current_session = session_open(cli_filename, FALSE);
-
-	    if (current_session)
-		connection_state(connection_OPENED);
-	}
-	else
+	if (!cli_multitask)
 	{
 	    while (!splash_check_close())
 		;
@@ -1744,23 +1752,28 @@ int main(int argc, char *argv[])
     err_fatal(event_set_mask(event_mask));
 
     TRACE((TC_UI, TT_API1, "(1) Entering poll loop"));
-    while (running)
+    do
     {
-	int event_code;
-	WimpPollBlock poll_block;
+	if (cli_filename)
+	    main_open_session();
 
-//	LOGERR(_swix(OS_ReadMonotonicTime, _OUT(0), &t));
-//      event_poll_idle(&event_code, &poll_block, t + 100, NULL);
-        event_poll(&event_code, &poll_block, NULL);
+	while (running)
+	{
+	    int event_code;
+	    WimpPollBlock poll_block;
+
+	    event_poll(&event_code, &poll_block, NULL);
 
 #ifdef DEBUG
-	LogPoll();
+	    LogPoll();
 #endif
 
-    	if (event_code != 0)
-    	    TRACE((TC_UI, TT_API1, "(7) Poll: %d running %d quitting %d", event_code, running, quitting));
+	    if (event_code != 0)
+		TRACE((TC_UI, TT_API1, "(7) Poll: %d running %d quitting %d", event_code, running, quitting));
+	}
     }
-
+    while (cli_loop);
+    
     /* check and see if we were the startup application */
     if (!cli_suspendable && cli_modem && browser_home_is_ica())
     {
