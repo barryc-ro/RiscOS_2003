@@ -14,7 +14,7 @@
 MKDIR   = mkdir -p
 CC      = gcc
 LD      = gcc
-RM      = -rm -f
+RM      = rm -f
 WIPE    = -rm 
 CD      = cd
 TOUCH   = touch

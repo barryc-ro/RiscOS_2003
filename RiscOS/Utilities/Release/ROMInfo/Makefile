@@ -14,7 +14,7 @@ CFLAGS    = -ffa -fussy
 #
 # Generic options:
 #
-include Makefiles:StdTools
+include StdTools
 
 #
 # Rule patterns
@@ -76,4 +76,3 @@ install_dirs:
 	${MKDIR} ${LIBINSTDIR}
 
 # Dynamic dependencies:
-o.ROMinfo: c.ROMinfo C:h.swis C:h.kernel VersionNum

@@ -10,9 +10,6 @@
 #include <string.h>
 #include <stddef.h>
 
-/* From CLX */
-#include "wholefls.h"
-
 #ifdef __riscos
 #include "swis.h"
 #endif
@@ -36,9 +33,11 @@ void reados(int imageSize);
 char *modinfo(unsigned char *base, char *info, int *total_size, int size);
 void hourglass(int state);
 fpos_t *findstr(char *find);
+int findmem(char *match, void *data, size_t length, long *found_at);
 int fsize(FILE *);
 int findResourceFSBlockSize(void);
 int fastFindResourceFSBlockSize(void);
+int veryfastFindResourceFSBlockSize(void);
 
 static int flag_csv = 0;
 static int flag_loc = 0;
@@ -146,6 +145,28 @@ hourglass(int state)
 #endif
 }
 
+void getimage_nbytes(unsigned char **image, int ilen)
+{
+  /*
+   * Discard any earlier allocation (free(NULL) is permitted)
+   */
+  free(*image);
+
+  /*
+   * Alloc & read first ilen bytes of image
+   */
+  if ((*image = malloc(ilen)) == NULL)
+  {
+    fprintf(stderr, "Can't allocate %dK for image\n", (ilen)/1024);
+    exit(EXIT_FAILURE);
+  }
+  if (fread(*image, 1, ilen, imageFile) != ilen)
+  {
+    fprintf(stderr, "Can't read image file\n");
+    exit(EXIT_FAILURE);
+  }
+}
+
 void getimage(unsigned char **image, int *ilenptr)
 {
 
@@ -154,22 +175,16 @@ void getimage(unsigned char **image, int *ilenptr)
    */
   fseek(imageFile, 0L, SEEK_END);
   *ilenptr = (size_t) ftell(imageFile);
-  fseek(imageFile, 0L, SEEK_SET);
+  rewind(imageFile);
 
   /*
    * Alloc & read entire image
    */
-  if ((*image = malloc(*ilenptr)) == NULL)
-  {
-    fprintf(stderr, "Can't allocate %dK for image\n", (*ilenptr)/1024);
-    exit(EXIT_FAILURE);
-  }
-  if (fread(*image, 1, *ilenptr, imageFile) != *ilenptr)
-  {
-    fprintf(stderr, "Can't read image file\n");
-    exit(EXIT_FAILURE);
-  }
+  getimage_nbytes(image, *ilenptr);
 
+  /*
+   * Close the file now - we no longer require it.
+   */
   fclose(imageFile);
 }
 
@@ -178,33 +193,63 @@ void getimage(unsigned char **image, int *ilenptr)
  * Reads the image and prints blurb about image type etc.
  */
 void readimage(int ilen) {
-  unsigned char fileData = 0;
-  unsigned char *image;
+  unsigned char *image = 0;
+  int header_size;
+  long found_at;
 
   if (!flag_csv) {
     printf("Image size:    %d\n", ilen / 1024);
     printf("Image type:    ");
   }
 
-  fileData = fgetc(imageFile);
-  if (fileData == 0x80) {
-    printf("Non-conformant expansion card\n");
+  if (ilen > (1*1024*1024)) {
+    header_size = 1*1024*1024;
   }
-  else if (fileData & 0x10) {
+  else {
+    header_size = ilen;
+  }
+
+  /* Check for extension ROMs first - these have a header (at the end!) so are easy to detect */
+  fseek(imageFile, -8L, SEEK_END);
+  getimage_nbytes(&image, 8);
+  if (memcmp(image, "ExtnROM0", 8) == 0) {
+    /* is an extension ROM */
     if (!flag_csv) {
-      printf("RISC OS\n");
+      printf("Extension ROM\n");
     }
-    reados(ilen);
-  }
-  else if (fileData & 0x38) {
-    printf("Extension ROM\n");
     getimage(&image, &ilen);
     readexp(image, "Extn ROM 1");
   }
   else {
-    printf("Extension card\n");
-    getimage(&image, &ilen);
-    readexp(image, "Podule 1");
+    rewind(imageFile);
+    getimage_nbytes(&image, header_size);
+    rewind(imageFile);
+
+    /* Look for a HAL descriptor table */
+    if (findmem("OSIm", image, header_size, &found_at)) {
+      if (!flag_csv) {
+        printf("RISC OS (with HAL)\n");
+      }
+      reados(ilen);
+    }
+    else if (findmem("UtilityModule", image, header_size, &found_at)) {
+      if (!flag_csv) {
+        printf("RISC OS\n");
+      }
+      /* This fsetpos is useful - it means that findstr will locate the string
+       * on its first comparison.
+       */
+      fseek(imageFile, found_at, SEEK_SET);
+      reados(ilen);
+    }
+    else if (image[0] == 0x80) {
+      printf("Non-conformant expansion card\n");
+    }
+    else {
+      printf("Expansion card\n");
+      getimage(&image, &ilen);
+      readexp(image, "Podule 1");
+    }
   }
 }
 
@@ -429,7 +474,7 @@ void reados(int imageSize) {
          printf("Space utilised %dk (%d%%)\n",totalsize/1024, totalsize*100/imageSize);
          if (flag_ressize)
          {
-           resBlockSize = fastFindResourceFSBlockSize();
+           resBlockSize = veryfastFindResourceFSBlockSize();
            printf("ResourceFS block size %dk (%d%%)\n", resBlockSize, resBlockSize*100/imageSize);
          }
          free(psize);
@@ -465,7 +510,7 @@ void reados(int imageSize) {
        printf("Space utilised %dk (%d%%)\n",totalsize/1024, totalsize*100/imageSize);
        if (flag_ressize)
        {
-         resBlockSize = fastFindResourceFSBlockSize();
+         resBlockSize = veryfastFindResourceFSBlockSize();
          printf("ResourceFS block size %dk (%d%%)\n", resBlockSize/1024, resBlockSize*100/imageSize);
        }
        free(psize);
@@ -584,6 +629,27 @@ fpos_t *findstr(char *find)
   }
 }
 
+/* Finds a string of data in the given data[0..length-1].  String does NOT have be zero-terminated
+ * to constitute a matched string
+ */
+int findmem(char *match, void *data, size_t length, long *found_at)
+{
+  const size_t match_length = strlen(match);
+  char *cdata = (char *) data;
+  char *edata = cdata + length - strlen(match);
+
+  for (; cdata < edata; ++cdata) {
+    if (*cdata == *match) { /* Speed improvement - avoid function call unless the first byte matches at least */
+      if (memcmp(match, cdata, match_length) == 0) {
+        *found_at = cdata - (char *) data;
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
 /*
  * Finds size of file, returns size in bytes
  */
@@ -664,6 +730,62 @@ int fastFindResourceFSBlockSize() {
   endOfResourceFS = ftell(imageFile);
 
   resourceFSSize = (int)(endOfResourceFS - endOfModules);
+
+  return resourceFSSize;
+}
+
+/*
+ * This one will be much faster than the first one but may be less
+ * reliable as if there is an 0xFF between where the search overshoots (
+ * as it undoubtably will) and the end of the ResourceFS block this will
+ * get picked up as the end of the block instead.  I don't know how much
+ * of a worry this is.  If accuracy is a problem then use the function above
+ */
+#define VFF_SIZE (16384)
+extern void *_compile_time_assertion[-1+2*(    VFF_SIZE < 0x01000000   )];
+
+int veryfastFindResourceFSBlockSize() {
+  long endOfModules, endOfResourceFS;
+  int resourceFSSize = 0;
+  unsigned char buffer[VFF_SIZE];
+
+  /* Set file pointer back to end of modules */
+  fseek(imageFile, -4, SEEK_CUR);
+
+  endOfModules = ftell(imageFile);
+
+  /* Jump to beginning of checksum at end of file (checksum 20B long)*/
+  fseek(imageFile, -32L, SEEK_END);
+
+  /* Walk back through file to end of ResourceFS block */
+  while (ftell(imageFile) >= VFF_SIZE) {
+    unsigned long sum;
+    int idx;
+    fseek(imageFile, -VFF_SIZE, SEEK_CUR);
+    fread(buffer, 1, VFF_SIZE, imageFile);
+    fseek(imageFile, -VFF_SIZE, SEEK_CUR);
+    for (sum = 0, idx = 0; idx < VFF_SIZE; ++idx) {
+      sum += buffer[idx];
+    }
+    if (sum != (VFF_SIZE * 0xffl)) break;
+  }
+
+  if (ftell(imageFile) > VFF_SIZE) {
+    /* Then we found the block */
+    int idx;
+    for (idx = VFF_SIZE-1; idx >=0 && buffer[idx] == 0xff; --idx) ;;
+    endOfResourceFS = ftell(imageFile) + idx;
+  }
+  else {
+    endOfResourceFS = 0;
+  }
+
+  if (endOfResourceFS < endOfModules) {
+    resourceFSSize = 0;
+  }
+  else {
+    resourceFSSize = (int)(endOfResourceFS - endOfModules);
+  }
 
   return resourceFSSize;
 }
