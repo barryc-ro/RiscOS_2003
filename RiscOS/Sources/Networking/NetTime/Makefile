@@ -7,6 +7,7 @@
 # ----		---	----
 # 17-Jun-96	JRH	Created
 # 24-Nov-98	jmf	Switch to DebugLib for debugging
+# 12-Jan-99	jmf	Add support for EUROPEAN_DST_BODGE
 
 #
 # Paths
@@ -29,7 +30,7 @@ DEFMOD  = DefMod
 AR	= LibFile
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS}
+CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS} ${DSTFLAGS}
 # Falgs for debugging ...
 #CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 -Wp -Throwback -DDEBUG
 CPFLAGS = ~cfr~v
@@ -48,6 +49,11 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 
 SOCKLIB	   = TCPIPLibs:o.socklibzm
 INETLIB	   = TCPIPLibs:o.inetlibzm
+
+# Uncomment this, or pass to AMU, to enable support for setting Daylight Savings
+# automatically for Europe in the years 1998-2001.
+#
+#DSTFLAGS   = -DEUROPEAN_DST_BODGE
 
 #
 # DebugLib support.
@@ -72,7 +78,7 @@ COMPONENT = NetTime
 TARGET    = aof.NetTime
 TARGETSA  = rm.NetTime
 EXPORTS   = 
-OBJS      = mul64.o machine.o module.o header.o nt_nvram.o dns.o
+OBJS      = mul64.o machine.o module.o header.o nt_nvram.o dns.o edst.o
 
 #
 # Generic rules:
