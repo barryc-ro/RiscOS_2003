@@ -176,6 +176,6 @@ ${TARGET}: ${OBJS} ${LIBS} ${HDRS} o._dirs
 # Static dependencies:
 
 o.dem: riscos.c.dem
-    ${CC} ${CCFLAGS} -pcc -o $@ riscos.c.dem
+    ${CC} ${CCFLAGS} -Wd -o $@ riscos.c.dem
 
 # Dynamic dependencies:
