@@ -55,14 +55,6 @@ INCLUDES  = -Iriscos -IC:CLX -Iarm -Icfe -Imip -Iutil -Iccacorn -IC:
 DFLAGS    =
 
 #
-# Default procedure call standard flags
-#
-OPTIONS26 = -DPCS_DEFAULTS=0
-OPTIONS32 = -DPCS_DEFAULTS=PCS_CALLCHANGESPSR+PCS_FPE3
-
-OPTIONS  ?= ${OPTIONS32}
-
-#
 # Program specific options:
 #
 COMPONENT  = cc
