@@ -46,7 +46,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 INCLUDES = -IC:
 
-DFLAGS   =
+DFLAGS   = -DSTANDBY_INITIAL_STATE=${INITIAL_STATE}
 
 #
 # Program specific options:
