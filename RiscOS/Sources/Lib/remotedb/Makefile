@@ -34,8 +34,8 @@ INETLIB   = TCPIPLibs:o.inetlib
 
 DEBUGLIB = <Lib$Dir>.debug
 
-CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} -fah -Fn ${DFLAGS}
-CFLAGSZM = -c -depend !Depend -Wap -zps0 ${INCLUDES} -fah -Fn ${DFLAGS} -zM
+CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} ${THROWBACK} -fah -Fn ${DFLAGS}
+CFLAGSZM = -c -depend !Depend -Wap -zps0 ${INCLUDES} ${THROWBACK} -fah -Fn ${DFLAGS} -zM
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 
@@ -114,6 +114,7 @@ export_libs: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} local_dir
         ${CP} ${COMPONENTZM} ${DEBUGLIB}.o.${COMPONENTZM} ${CPFLAGS}
         ${CP} ${LCOMPONENT}   ${DEBUGLIB}.o.${LCOMPONENT}   ${CPFLAGS}
         ${CP} ${LCOMPONENTZM} ${DEBUGLIB}.o.${LCOMPONENTZM} ${CPFLAGS}
+        ${CP} VersionNum ${DEBUGLIB}.VersionNum ${CPFLAGS}
 
 
 #
