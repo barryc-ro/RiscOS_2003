@@ -6,6 +6,10 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 16-Oct-98  SJM          Created.
+# 01-Sep-98  SNB          Extracted SJM from being trapped in a timewarp :-)
+#                         Moved macros to CPPFLAGS from CPFLAGS, added -Wp
+#                         to disable non-ANSI includes warning.  Needs latest c++
+#                         wrapper.
 #
 
 #
@@ -32,8 +36,8 @@ WIPE    = -wipe
 
 CCFLAGS = -c -depend !Depend -faho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
-CPFLAGS = ~cfr~v ${INCLUDES} ${DFLAGS} ${THROWBACK}
-CPPFLAGS = -c -depend !Depend
+CPFLAGS = ~cfr~v 
+CPPFLAGS = -c -depend !Depend -Wp ${INCLUDES} ${DFLAGS} ${THROWBACK}
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
 
