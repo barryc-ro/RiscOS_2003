@@ -45,7 +45,8 @@ CMHGFLAGS= -p ${THROWBACK}
 CLIB     = C:o.stubs
 ROMCSTUBS= RISC_OSLib:o.romcstubs
 C_ABSSYM = RISC_OSLib:o.c_abssym
-LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
+LIBS     = C:MPEG.o.MPEG
+LIBSD    = C:MPEG.o.MPEG <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
 UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
 RAMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module     o.PCompos  o.RecogAC3  o.RecogMPA o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Sync  o.Video  o.WSS  o.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
@@ -130,13 +131,13 @@ debug: drm ${DOOBJS} do o h.Debug h.Registers messages-${CMDHELP} ${LIBSD} ${CLI
         ${RM} Messages
         @echo ${COMPONENT}: Debug module built (RAM)
 
-${RAM_MODULE}: rm ${RAMOBJS} o h.Debug h.Registers messages-${CMDHELP} ${CLIB}
-        ${LD} -o $@ -rmf ${RAMOBJS} ${CLIB}
+${RAM_MODULE}: rm ${RAMOBJS} o h.Debug h.Registers messages-${CMDHELP} ${LIBS} ${CLIB}
+        ${LD} -o $@ -rmf ${RAMOBJS} ${LIBS} ${CLIB}
         ${ATTR} -files +or +ow +wr -ww $@
         ${RM} Messages
 
-${ROM_MODULE}: aof ${ROMOBJS} o h.Debug h.Registers ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS}
+${ROM_MODULE}: aof ${ROMOBJS} o h.Debug h.Registers ${LIBS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${ROMOBJS} ${LIBS} ${ROMCSTUBS}
 
 rom_link:
         ${MKDIR} linked
