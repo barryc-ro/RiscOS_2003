@@ -173,8 +173,14 @@ os_error *webfonts_initialise( void )
     if ( !e )
         e = webfont_find_font( WEBFONT_TTY );
 
-    if (!e) for (i = 1; i <= WEBFONT_SIZES; i++)
-        e = webfont_find_font( WEBFONT_JAPANESE + WEBFONT_SIZE(i) );
+#ifdef STBWEB
+    if (!e && config_display_encoding != 0)
+    {
+	for (i = 1; !e && i <= WEBFONT_SIZES; i++)
+	    e = webfont_find_font( WEBFONT_JAPANESE + WEBFONT_SIZE(i) );
+	e = NULL;
+    }
+#endif
     
     return e;
 }

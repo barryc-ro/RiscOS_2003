@@ -118,7 +118,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     {
 	int i;
 	for (i = 0; i < str_len; i++)
-	    if (s[i] & 0x80)
+	    if ((s[i] & 0x80) && s[i] != 0xA0)
 	    {
 		ti->flag |= rid_flag_WIDE_FONT;
 		break;
