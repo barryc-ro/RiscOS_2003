@@ -15,8 +15,9 @@
 # 				instead of leaving the object files in the root.  Also
 #				creates directories at build time.
 # 1999-02-12	NCE		Added Printer BASIC prog
-# 1998-02-16    SBF             Added LDFLAGS to allow addition of link tool flags
-# 1998-02-23    SBF             Removed Printer and GenLib targets (BASIC files now removed)
+# 1999-02-16    SBF             Added LDFLAGS to allow addition of link tool flags
+# 1999-02-23    SBF             Removed Printer and GenLib targets (BASIC files now removed)
+# 1999-03-03    SBF             Added TCPIPLibs
 
 
 #
@@ -42,7 +43,7 @@ CD	= dir
 
 #AFLAGS  = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} ${EXT_FLAGS}
+CFLAGS  = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} ${EXT_FLAGS}
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -64,7 +65,7 @@ WIMPLIB	   = Tbox:o.wimplib
 #
 # Include files
 #
-INCLUDES = -ITbox: -IC:
+INCLUDES = -ITbox: -IC: -ITCPIPLibs:
 
 
 # Program specific options:
@@ -80,7 +81,7 @@ BASEOBJS  = ${OM}.Display ${OM}.DRAMTest ${OM}.InputTest \
             ${OM}.Modem ${OM}.Msgs ${OM}.NVRAMTest ${OM}.ROMCheck \
             ${OM}.Sound ${OM}.Support ${OM}.System ${OM}.UserDiag \
             ${OM}.CPUType ${OM}.IOControl ${OM}.MemSrcNCOS \
-            ${OM}.ROMChksum
+            ${OM}.ROMChksum TCPIPLibs:o.Unixlib TCPIPLibs:o.Inetlib TCPIPLibs:o.Socklib5
             
 Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest
 
