@@ -1,0 +1,2147 @@
+/*****************************************************************************
+* $Id$
+* $Name$
+*
+* Author(s):  Ben Avison
+* Project(s): DSL4000 Deployment (A170)
+*
+* ----------------------------------------------------------------------------
+* Copyright [2002] Pace Micro Technology PLC.  All rights reserved.
+*
+* The copyright in this material is owned by Pace Micro Technology PLC
+* ("Pace").  This material is regarded as a highly confidential trade secret
+* of Pace.  It may not be reproduced, used, sold or in any other way exploited
+* or transferred to any third party without the prior written permission of
+* Pace.
+*
+* ----------------------------------------------------------------------------
+* Purpose: Subtitle task
+*
+* ----------------------------------------------------------------------------
+* History: See source control system log
+*
+*****************************************************************************/
+
+
+/*****************************************************************************
+* Include header files
+*****************************************************************************/
+#include <stdlib.h>
+#include <stdio.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <string.h>
+#include <inttypes.h>
+#include "swis.h"
+extern const char *_clib_version(void);
+
+#include "Global/ModHand.h"
+#undef Module_Title /* clash with cmhg */
+#include "Global/RISCOS.h"
+#include "Global/UpCall.h"
+#include "VideoCtrl.h"
+#include "DebugLib/DebugLib.h"
+#include "MPEG/MPEGCtrl.h"
+#include "MPEG/MPEGVideo.h"
+#include "MPEG/TTextSubs.h"
+#include "MPEG/UpCallMPEG.h"
+#include "MPEG/mpegtime.h"
+#include "tboxlibs/event.h"
+#include "tboxlibs/wimp.h"
+#include "tboxlibs/wimplib.h"
+
+#include "defs.h"
+#include "global.h"
+#include "maintask.h"
+#include "mess.h"
+#include "modhdr.h"
+#include "packet.h"
+#include "throwerror.h"
+
+
+/*****************************************************************************
+* MACROS
+*****************************************************************************/
+
+
+/*****************************************************************************
+* New type definitions
+*****************************************************************************/
+typedef struct
+{
+  size_t size;
+  uint32_t nsprites;
+  size_t firstsprite;
+  size_t freeword;
+  struct
+  {
+    size_t next;
+    char name[12];
+    uint32_t wordsaross;
+    uint32_t height;
+    uint32_t firstbit;
+    uint32_t lastbit;
+    size_t image;
+    size_t mask;
+    uint32_t mode;
+  } sprite;
+} sprite_area_header_t;
+
+typedef struct RCS_object_list
+{
+  struct RCS_object_list *next;
+  uint16_t object_id;
+  uint32_t object_horizontal_position: 16;
+  uint32_t object_vertical_position: 16;
+  uint32_t foreground_pixel_code: 8;
+  uint32_t background_pixel_code: 8;
+  uint32_t object_type: 2;
+} RCS_object_list_t;
+
+typedef struct RCS
+{
+  struct RCS *next;
+  uint32_t id: 8;
+  uint32_t CLUT_id: 8;
+  uint32_t version_number: 4;
+  uint32_t visible: 1; /* are we showing? */
+  uint32_t clut_updated: 1; /* so it needs redrawing if already open */
+  uint32_t new_objects: 1; /* so we don't have to free the object list each new PTS */
+  uint32_t depth: 2;
+  uint32_t width: 16;
+  uint32_t height: 16;
+  sprite_area_header_t *sprite_area;
+  size_t sprite_size; /* just the sprite image, not headers */
+  int window_handle;
+  uint32_t nobjects;
+  RCS_object_list_t *objects;
+} RCS_t;
+
+typedef struct CLUT
+{
+  struct CLUT *next;
+  uint32_t id: 8;
+  uint32_t version_number: 4;
+  uint32_t palette4[4*2]; /* both flash states */
+  uint32_t palette16[16*2];
+  uint32_t palette256[256*2];
+  uint32_t transtable4[4];
+  uint32_t transtable16[16];
+  uint32_t transtable256[256];
+} CLUT_t;
+
+typedef struct
+{
+  mpeg_time_t PTS;
+  mpeg_time_t expiry_time;
+  uint32_t PTS_known: 1; /* also used to determine if "normal case" page_state PCS's are to be ignored */
+  uint32_t displayed: 1;
+  uint32_t expired: 1;
+  uint32_t version_number: 4;
+  uint32_t nregions: 9; /* 8-bit region_ids must be unique, so <= 256 regions */
+  struct
+  {
+    uint8_t region_id;
+    uint32_t region_horizontal_address: 16;
+    uint32_t region_vertical_address: 16;
+  } region[256];
+  RCS_t *RCSList;
+  CLUT_t *CLUTList;
+} PCS_t;
+
+
+/*****************************************************************************
+* Constants
+*****************************************************************************/
+#define WIMP_VERSION ((int) 310)
+#define DVB_SUBTITLING_DESCRIPTOR_TAG (0x100 | 0x59)
+
+static const uint32_t static_DefaultPalette4[4] =
+{
+  0x000000FF, 0xFFFFFF00, 0x00000000, 0x80808000
+};
+
+static const uint32_t static_DefaultPalette16[16] =
+{
+  0x000000FF, 0x0000FF00, 0x00FF0000, 0x00FFFF00,
+  0xFF000000, 0xFF00FF00, 0xFFFF0000, 0xFFFFFF00,
+  0x00000000, 0x00008000, 0x00800000, 0x00808000,
+  0x80000000, 0x80008000, 0x80800000, 0x80808000
+};
+
+static const uint32_t static_DefaultPalette256[256] =
+{
+  0x000000FF, 0x0000FFBF, 0x00FF00BF, 0x00FFFFBF,
+  0xFF0000BF, 0xFF00FFBF, 0xFFFF00BF, 0xFFFFFFBF,
+  0x00000080, 0x00005580, 0x00550080, 0x00555580,
+  0x55000080, 0x55005580, 0x55550080, 0x55555580,
+  0x0000AA00, 0x0000FF00, 0x0055AA00, 0x0055FF00,
+  0x5500AA00, 0x5500FF00, 0x5555AA00, 0x5555FF00,
+  0x0000AA80, 0x0000FF80, 0x0055AA80, 0x0055FF80,
+  0x5500AA80, 0x5500FF80, 0x5555AA80, 0x5555FF80,
+  0x00AA0000, 0x00AA5500, 0x00FF0000, 0x00FF5500,
+  0x55AA0000, 0x55AA5500, 0x55FF0000, 0x55FF5500,
+  0x00AA0080, 0x00AA5580, 0x00FF0080, 0x00FF5580,
+  0x55AA0080, 0x55AA5580, 0x55FF0080, 0x55FF5580,
+  0x00AAAA00, 0x00AAFF00, 0x00FFAA00, 0x00FFFF00,
+  0x55AAAA00, 0x55AAFF00, 0x55FFAA00, 0x55FFFF00,
+  0x00AAAA80, 0x00AAFF80, 0x00FFAA80, 0x00FFFF80,
+  0x55AAAA80, 0x55AAFF80, 0x55FFAA80, 0x55FFFF80,
+  0xAA000000, 0xAA005500, 0xAA550000, 0xAA555500,
+  0xFF000000, 0xFF005500, 0xFF550000, 0xFF555500,
+  0xAA000080, 0xAA005580, 0xAA550080, 0xAA555580,
+  0xFF000080, 0xFF005580, 0xFF550080, 0xFF555580,
+  0xAA00AA00, 0xAA00FF00, 0xAA55AA00, 0xAA55FF00,
+  0xFF00AA00, 0xFF00FF00, 0xFF55AA00, 0xFF55FF00,
+  0xAA00AA80, 0xAA00FF80, 0xAA55AA80, 0xAA55FF80,
+  0xFF00AA80, 0xFF00FF80, 0xFF55AA80, 0xFF55FF80,
+  0xAAAA0000, 0xAAAA5500, 0xAAFF0000, 0xAAFF5500,
+  0xFFAA0000, 0xFFAA5500, 0xFFFF0000, 0xFFFF5500,
+  0xAAAA0080, 0xAAAA5580, 0xAAFF0080, 0xAAFF5580,
+  0xFFAA0080, 0xFFAA5580, 0xFFFF0080, 0xFFFF5580,
+  0xAAAAAA00, 0xAAAAFF00, 0xAAFFAA00, 0xAAFFFF00,
+  0xFFAAAA00, 0xFFAAFF00, 0xFFFFAA00, 0xFFFFFF00,
+  0xAAAAAA80, 0xAAAAFF80, 0xAAFFAA80, 0xAAFFFF80,
+  0xFFAAAA80, 0xFFAAFF80, 0xFFFFAA80, 0xFFFFFF80,
+  0x80808000, 0x8080AA00, 0x80AA8000, 0x80AAAA00,
+  0xAA808000, 0xAA80AA00, 0xAAAA8000, 0xAAAAAA00,
+  0x00000000, 0x00002A00, 0x002A0000, 0x002A2A00,
+  0x2A000000, 0x2A002A00, 0x2A2A0000, 0x2A2A2A00,
+  0x8080D500, 0x8080FF00, 0x80AAD500, 0x80AAFF00,
+  0xAA80D500, 0xAA80FF00, 0xAAAAD500, 0xAAAAFF00,
+  0x00005500, 0x00008000, 0x002A5500, 0x002A8000,
+  0x2A005500, 0x2A008000, 0x2A2A5500, 0x2A2A8000,
+  0x80D58000, 0x80D5AA00, 0x80FF8000, 0x80FFAA00,
+  0xAAD58000, 0xAAD5AA00, 0xAAFF8000, 0xAAFFAA00,
+  0x00550000, 0x00552A00, 0x00800000, 0x00802A00,
+  0x2A550000, 0x2A552A00, 0x2A800000, 0x2A802A00,
+  0x80D5D500, 0x80D5FF00, 0x80FFD500, 0x80FFFF00,
+  0xAAD5D500, 0xAAD5FF00, 0xAAFFD500, 0xAAFFFF00,
+  0x00555500, 0x00558000, 0x00805500, 0x00808000,
+  0x2A555500, 0x2A558000, 0x2A805500, 0x2A808000,
+  0xD5808000, 0xD580AA00, 0xD5AA8000, 0xD5AAAA00,
+  0xFF808000, 0xFF80AA00, 0xFFAA8000, 0xFFAAAA00,
+  0x55000000, 0x55002A00, 0x552A0000, 0x552A2A00,
+  0x80000000, 0x80002A00, 0x802A0000, 0x802A2A00,
+  0xD580D500, 0xD580FF00, 0xD5AAD500, 0xD5AAFF00,
+  0xFF80D500, 0xFF80FF00, 0xFFAAD500, 0xFFAAFF00,
+  0x55005500, 0x55008000, 0x552A5500, 0x552A8000,
+  0x80005500, 0x80008000, 0x802A5500, 0x802A8000,
+  0xD5D58000, 0xD5D5AA00, 0xD5FF8000, 0xD5FFAA00,
+  0xFFD58000, 0xFFD5AA00, 0xFFFF8000, 0xFFFFAA00,
+  0x55550000, 0x55552A00, 0x55800000, 0x55802A00,
+  0x80550000, 0x80552A00, 0x80800000, 0x80802A00,
+  0xD5D5D500, 0xD5D5FF00, 0xD5FFD500, 0xD5FFFF00,
+  0xFFD5D500, 0xFFD5FF00, 0xFFFFD500, 0xFFFFFF00,
+  0x55555500, 0x55558000, 0x55805500, 0x55808000,
+  0x80555500, 0x80558000, 0x80805500, 0x80808000
+};
+
+
+/*****************************************************************************
+* File scope Global variables
+*****************************************************************************/
+static bool static_EventVClaimed = false;
+static int32_t static_XOrigin;
+static int32_t static_YOrigin;
+static jmp_buf static_RestartBuf;
+static bool static_Restartable; /* whether static_RestartBuf is valid yet */
+static uint32_t static_VideoCtrlClientHandle;
+static char static_ISO639Lang[4];
+static bool static_HardOfHearing;
+static volatile uint32_t static_ControlStreamHandle;
+static volatile uint32_t static_SubtitlePID = 0;
+static volatile uint16_t static_CompositionPage;
+static volatile uint16_t static_AncillaryPage;
+static uint32_t static_DecodePCSIndex;
+static PCS_t *static_DecodePCS;
+static PCS_t *static_DisplayPCS;
+static PCS_t static_PCS[2];
+static uint32_t static_PollWord;
+/* Magic bitstream packet descriptors that signal internal events */
+static PacketDescriptor_t static_MagicDescriptor_Reset;
+static PacketDescriptor_t static_MagicDescriptor_Exit;
+/* The main background->foreground queue */
+static PacketDescriptor_t * volatile static_PacketListHead = NULL;
+static PacketDescriptor_t * volatile static_PacketListTail = NULL;
+/* Currently decoding data block - updated as data is consumed */
+static mpeg_time_t static_DataPTS;
+static bool static_DataPTSValid;
+static const uint8_t *static_DataStart;
+static size_t static_DataLength;
+static size_t static_PESLength;
+static uint8_t static_BitsInByte = 8;
+
+
+/*****************************************************************************
+* Function prototypes - Private to this file
+*****************************************************************************/
+static void EscapeHandler(int sig);
+static void ErrorHandler(int sig);
+static void FatalErrorHandler(int sig);
+static bool DisplayErrorBox(bool fatal, bool serious);
+
+static WimpMessageHandler WimpMQuitHandler;
+static WimpMessageHandler WimpMTTextAndSubsOffHandler;
+
+static void ParseStream(void);
+static void FreeResources(PCS_t *PCS);
+static void ParsePCS(size_t length);
+static void ParseRCS(size_t length);
+static void ParseCLUT(size_t length);
+static void ParseObject(size_t length);
+static void DisplayPage(void);
+
+static void SkipToNextPESPacket(void);
+static void SkipBytes(size_t bytes);
+static uint16_t GetHalfWord(void);
+static uint8_t GetByte(void);
+static uint32_t GetBits(uint32_t bits);
+static void ByteAlign(void);
+static bool NewPacket(void);
+
+static void RecalcPollword(void);
+static void *MyAlloc(size_t size, uint8_t init_value);
+static void FindScreenOrigin(void);
+
+static void BackgroundFlush(PacketDescriptor_t *magic_packet);
+
+
+/*****************************************************************************
+* Functions
+*****************************************************************************/
+
+/*****************************************************************************
+* maintask_Main
+*
+* Entry point for task
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  command line arguments
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  pointer to error block, if initialisation failed
+*****************************************************************************/
+_kernel_oserror *maintask_Main(char *argv[5])
+{
+  /* Install our desired environment */
+  static_Restartable = false;
+  {
+    uint32_t CLibVersion;
+    sscanf(_clib_version(), "%*[^0123456789]%" SCNu32, &CLibVersion);
+    if (CLibVersion < 535)
+    {
+      /* Older CLibs don't have nice default handlers for these signals */
+      signal(SIGABRT, FatalErrorHandler);
+      signal(SIGFPE, FatalErrorHandler);
+      signal(SIGILL, FatalErrorHandler);
+      signal(SIGSEGV, FatalErrorHandler);
+      signal(SIGTERM, FatalErrorHandler);
+      signal(SIGSTAK, FatalErrorHandler);
+    }
+  }
+  signal(SIGINT, EscapeHandler);
+  signal(SIGOSERROR, ErrorHandler);
+  
+  /* Parse command line */
+  sscanf(argv[1], "%8X", &static_VideoCtrlClientHandle);
+  sscanf(argv[2], "%c%c%c", static_ISO639Lang, static_ISO639Lang + 1, static_ISO639Lang + 2);
+  sscanf(argv[3], "%u", &static_HardOfHearing);
+  
+  /* Start up Wimp task */
+  {
+    static int MessagesList[] = { Wimp_MTTextAndSubsOff, 0 };
+    const char *TaskName;
+    CHECK(mess_LookUp("MainTask", &TaskName, 0));
+    CHECK(wimp_initialise(WIMP_VERSION, (char *) TaskName, MessagesList, NULL, &global_TaskHandle));
+  }
+  
+  /* Successful acknowledge message must be sent from this task */
+  {
+    WimpMessage Message;
+    WimpTTextAndSubsOnAckMessage *OnAckMessage;
+    int OtherTask;
+    OnAckMessage = (WimpTTextAndSubsOnAckMessage *) Message.data.words;
+    sscanf(argv[4], "%8X", &OtherTask);
+    Message.hdr.size = (char *) &(OnAckMessage->errnum) - (char *) &Message;
+    sscanf(argv[5], "%8X", &Message.hdr.your_ref);
+    Message.hdr.action_code = Wimp_MTTextAndSubsOnAck;
+    OnAckMessage->flags = 0;
+    OnAckMessage->videoctrl_client_handle = static_VideoCtrlClientHandle;
+    CHECK(wimp_send_message(Wimp_EUserMessage, &Message, OtherTask, 0, NULL));
+  }
+  
+  /* Before we register any direct-call handlers into the module code, */
+  /* register an atexit function to remove them all */
+  atexit(maintask_RemoveHandlers);
+  
+  /* Try to register our subtitle descriptor handler */
+  /* To do this, we need the control stream handle; if we can't determine it (ie stream is not */
+  /* yet open) then we need to sit on UpCallV, so that we can do it when the stream does open */
+  {
+    _kernel_oserror *e;
+    uint32_t OptionsBlock[] = { vc_tags_control_handle, 1, 0, vc_tags__end };
+    inline_OS_IntOff();
+    e = _swix(VideoControl_Options, _INR(0,2),
+              VC_Options_ReadValues,
+              static_VideoCtrlClientHandle,
+              OptionsBlock);
+    if (e != NULL || OptionsBlock[2] == 0)
+    {
+      _swi(OS_Claim, _INR(0,2),
+           UpCallV,
+           upcallv_handler,
+           global_PrivateWord);
+      inline_OS_IntOn();
+    }
+    else
+    {
+      inline_OS_IntOn();
+      static_ControlStreamHandle = OptionsBlock[2];
+      _swi(MPEGControl_RegisterDescriptorHandler, _INR(0,4),
+           DHFlags_StreamSpecific,
+           DVB_SUBTITLING_DESCRIPTOR_TAG,
+           descriptor_handler,
+           global_PrivateWord,
+           static_ControlStreamHandle);
+    }
+  }
+  
+  /* Claim VSync events */
+  _swi(OS_Claim, _INR(0,2),
+       EventV,
+       eventv_handler,
+       global_PrivateWord);
+  {
+    _kernel_oserror *e;
+    e = _swix(OS_Byte, _INR(0,1),
+              14,
+              Event_VSync);
+    if (e)
+    {
+      _swix(OS_Release, _INR(0,2),
+            EventV,
+            eventv_handler,
+            global_PrivateWord);
+      inline_OS_GenerateError(e);
+    }
+  }
+  static_EventVClaimed = true;
+  
+  /* Initialise EventLib */
+  CHECK(event_initialise(NULL));
+  atexit((void(*)(void))event_finalise);
+  CHECK(event_set_mask(Wimp_Poll_NullMask |
+                       Wimp_Poll_PointerLeavingWindowMask |
+                       Wimp_Poll_PointerEnteringWindowMask |
+                       Wimp_Poll_LoseCaretMask |
+                       Wimp_Poll_GainCaretMask |
+                       Wimp_Poll_PollWord));
+  CHECK(event_register_message_handler(Wimp_MQuit, WimpMQuitHandler, 0));
+  CHECK(event_register_message_handler(Wimp_MTTextAndSubsOff, WimpMTTextAndSubsOffHandler, 0));
+  
+  /* Locate the origin for subtitle coordinates */
+  FindScreenOrigin();
+  
+  /* Parse the stream */
+  ParseStream();
+  
+  return NULL;
+}
+
+/*****************************************************************************
+* EscapeHandler
+*
+* Handles SIGINT
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  sig: signal number
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void EscapeHandler(int sig)
+{
+  signal(sig, EscapeHandler);
+}
+
+/*****************************************************************************
+* ErrorHandler
+*
+* Handles SIGOSERROR
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  sig: signal number
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ErrorHandler(int sig)
+{
+  if (DisplayErrorBox(!static_Restartable, false))
+  {
+    exit(EXIT_FAILURE);
+  }
+  else
+  {
+    signal(sig, ErrorHandler);
+    longjmp(static_RestartBuf, 1);
+  }
+}
+
+/*****************************************************************************
+* FatalErrorHandler
+*
+* Handles all signals other than SIGINT and SIGOSERROR
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  sig: signal number
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void FatalErrorHandler(int sig)
+{
+  IGNORE(sig);
+  DisplayErrorBox(true, true);
+  exit(EXIT_FAILURE);
+}
+
+/*****************************************************************************
+* DisplayErrorBox
+*
+* Common Wimp error box stuff for ErrorHandler() and FatalErrorHandler()
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  fatal:   true if the user is to be denied a "Continue" button
+*  serious: true if the error is to be flagged as a program report rather than error report
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  true if the user clicked on "Quit"
+*****************************************************************************/
+static bool DisplayErrorBox(bool fatal, bool serious)
+{
+  _kernel_oserror *e = _kernel_last_oserror();
+  char ExtraButtons[32] = "Quit";
+  char TaskName[32] = "Error";
+  MessagesFD WimpMessages;
+  bool OurMessagesBroken = false;
+  
+  if (e == NULL)
+  {
+    e = mess_GenerateError("err_UKError", 0, 0);
+  }
+  
+  /* First try to internationalise "Quit" and "Error" using the Wimp messages file */
+  if (_swix(MessageTrans_OpenFile, _INR(0,2),
+            &WimpMessages,
+            "WindowManager:Messages",
+            0) == NULL)
+  {
+    _swix(MessageTrans_Lookup, _INR(0,7),
+          &WimpMessages,
+          "Quit",
+          ExtraButtons,
+          sizeof(ExtraButtons),
+          0, 0, 0, 0);
+    _swix(MessageTrans_Lookup, _INR(0,7),
+          &WimpMessages,
+          "Error",
+          TaskName,
+          sizeof(TaskName),
+          0, 0, 0, 0);
+    _swix(MessageTrans_CloseFile, _IN(0),
+          &WimpMessages);
+  }
+  
+  /* If our own messages file works, get our task name */
+  if (_swix(MessageTrans_Lookup, _INR(0,7),
+            &global_MessageFD,
+            "MainTask",
+            TaskName,
+            sizeof(TaskName),
+            0, 0, 0, 0) != NULL)
+  {
+    OurMessagesBroken = true;
+  }
+  
+  /* Display an appropriate error box */
+  return (1 != wimp_report_error(e,
+      (fatal ? 0 : Wimp_ReportError_OK) | (OurMessagesBroken ? Wimp_ReportError_NoAppName : 0) | 1u<<8 | (serious ? 3u<<9 : 2u<<9),
+      TaskName, "switcher", 1, ExtraButtons));
+}
+
+/*****************************************************************************
+* WimpMQuitHandler
+*
+* Handles Wimp_MQuit
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  as type WimpMessageHandler
+*
+* Outputs
+*  as type WimpMessageHandler
+*
+* Returns
+*  as type WimpMessageHandler
+*****************************************************************************/
+static int WimpMQuitHandler(WimpMessage *message, void *handle)
+{
+  IGNORE(message);
+  IGNORE(handle);
+  exit(EXIT_SUCCESS);
+  /* In this case, the preveneer's exit handler will kill the instantiation too */
+  return 1;
+}
+
+/*****************************************************************************
+* WimpMTTextAndSubsOffHandler
+*
+* Handles Wimp_MTextAndSubsOff
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  as type WimpMessageHandler
+*
+* Outputs
+*  as type WimpMessageHandler
+*
+* Returns
+*  as type WimpMessageHandler
+*****************************************************************************/
+static int WimpMTTextAndSubsOffHandler(WimpMessage *message, void *handle)
+{
+  WimpTTextAndSubsOffAckMessage *OffAckMessage = (WimpTTextAndSubsOffAckMessage *) message->data.words;
+  IGNORE(handle);
+  /* Acknowledge message, then exit */
+  message->hdr.size = sizeof(message->hdr) + sizeof(*OffAckMessage);
+  message->hdr.your_ref = message->hdr.my_ref;
+  message->hdr.action_code = Wimp_MTTextAndSubsOffAck;
+  OffAckMessage->flags = 0;
+  wimp_send_message(Wimp_EUserMessage, message, message->hdr.sender, 0, NULL); /* ignore errors */
+  exit(EXIT_SUCCESS);
+  return 1;
+}
+
+/*****************************************************************************
+* ParseStream
+*
+* Top-level parser
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  DOES NOT RETURN
+*****************************************************************************/
+static void ParseStream(void)
+{
+  if (setjmp(static_RestartBuf) != 0)
+  {
+    dprintf(("", "*** Restarting ***\n"));
+  }
+  static_Restartable = true;
+  
+  FreeResources(static_PCS);
+  FreeResources(static_PCS + 1);
+  static_DecodePCSIndex = 0;
+  static_DecodePCS = static_DisplayPCS = static_PCS;
+  static_DecodePCS->PTS_known = false;
+  static_DecodePCS->displayed = true;
+  static_DecodePCS->expired = true;
+  static_DataPTSValid = false;
+  
+  while (true)
+  {
+    uint8_t sync_byte;
+    SkipToNextPESPacket();
+    if (GetByte() != 0x20 || GetByte() != 0x00)
+    {
+      /* Not DVB subtitles (!?!) */
+      continue;
+    }
+    while ((sync_byte = GetByte()) == 0x0F)
+    {
+      uint8_t segment_type;
+      uint16_t page_id;
+      uint16_t segment_length;
+      if (static_PESLength < 5)
+      {
+        /* Must be corrupt data, do a reset and seek to next acquisition point */
+        longjmp(static_RestartBuf, 1);
+      }
+      segment_type = GetByte();
+      page_id = GetHalfWord();
+      segment_length = GetHalfWord();
+      if (segment_length >= static_PESLength) /* also allow for end_of_PES_data_field_marker */
+      {
+        /* Must be corrupt data, do a reset and seek to next acquisition point */
+        longjmp(static_RestartBuf, 1);
+      }
+      if (page_id == static_CompositionPage || page_id == static_AncillaryPage)
+      {
+        switch (segment_type)
+        {
+          case 0x10:
+            ParsePCS(segment_length);
+            break;
+          case 0x11:
+            ParseRCS(segment_length);
+            break;
+          case 0x12:
+            ParseCLUT(segment_length);
+            break;
+          case 0x13:
+            ParseObject(segment_length);
+            break;
+          default:
+            SkipBytes(segment_length);
+            break;
+        }
+      }
+      else
+      {
+        SkipBytes(segment_length);
+      }
+    }
+    if (sync_byte != 0xFF)
+    {
+      /* Sync loss, do a reset and seek to next acquisition point */
+      longjmp(static_RestartBuf, 1);
+    }
+    /* end_of_PES_field_data_marker - get next PES packet */
+  }
+}
+
+/*****************************************************************************
+* FreeResources
+*
+* Releases all memory and other system resources used for a PCS struct
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  PCS: pointer to PCS struct for which to free things
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void FreeResources(PCS_t *PCS)
+{
+  RCS_t *RCS_ptr = PCS->RCSList;
+  RCS_t *RCS_next;
+  CLUT_t *CLUT_ptr = PCS->CLUTList;
+  CLUT_t *CLUT_next;
+  while (RCS_ptr != NULL)
+  {
+    RCS_next = RCS_ptr->next;
+    if (RCS_ptr->sprite_area != NULL)
+    {
+      free(RCS_ptr->sprite_area);
+    }
+    if (RCS_ptr->window_handle != NULL)
+    {
+      wimp_delete_window((WimpDeleteWindowBlock *) &RCS_ptr->window_handle);
+    }
+    free(RCS_ptr);
+    RCS_ptr = RCS_next;
+  }
+  PCS->RCSList = NULL;
+  while (CLUT_ptr != NULL)
+  {
+    CLUT_next = CLUT_ptr->next;
+    free(CLUT_ptr);
+    CLUT_ptr = CLUT_next;
+  }
+  PCS->CLUTList = NULL;
+}
+
+/*****************************************************************************
+* ParsePCS
+*
+* Parses a Page Composition Segment
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  length: number of bytes in segment
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ParsePCS(size_t length)
+{
+  dprintf(("Function", "ParsePCS\n"));
+  if (((length - 2) % 6) != 0)
+  {
+    /* Malformed segment */
+    longjmp(static_RestartBuf, 1);
+  }
+  else
+  {
+    uint8_t page_time_out = GetByte();
+    uint8_t page_version_number = GetBits(4);
+    uint8_t page_state = GetBits(2);
+    ByteAlign();
+    length -= 2;
+    dprintf(("ParsePCS", "page_state = %d\n", page_state));
+    switch (page_state)
+    {
+      case 2: /* mode change */
+        if (static_DecodePCS->version_number != page_version_number || static_DecodePCS->PTS_known == false)
+        {
+          static_DecodePCSIndex ^= 1; /* toggle bank */
+          static_DecodePCS = static_PCS + static_DecodePCSIndex;
+          break;
+        }
+        else
+        {
+          SkipBytes(length);
+          return;
+        }
+        
+      case 1: /* acquisition point */
+        if (static_DecodePCS->version_number != page_version_number || static_DecodePCS->PTS_known == false)
+        {
+          break;
+        }
+        else
+        {
+          SkipBytes(length);
+          return;
+        }
+        
+      case 0: /* normal case */
+        if (static_DecodePCS->PTS_known && static_DecodePCS->version_number != page_version_number)
+        {
+          break;
+        }
+        /* drop through... */
+      default: /* reserved */
+        SkipBytes(length);
+        return;
+    }
+    dprintf(("ParsePCS", "New page_version_number\n"));
+    static_DecodePCS->PTS.word.lo = static_DataPTS.word.lo;
+    static_DecodePCS->PTS.word.hi = static_DataPTS.word.hi;
+    static_DecodePCS->PTS_known = true;
+    {
+      mpeg_interval_t mpeg_time_out = { 0, 0 };
+      mpeg_time_out.word.lo = 90000 * page_time_out;
+      static_DecodePCS->expiry_time = mpegtime_AddInterval(static_DecodePCS->PTS, mpeg_time_out);
+    }
+    static_DecodePCS->displayed = false;
+    static_DecodePCS->expired = false;
+    static_DecodePCS->version_number = page_version_number;
+    static_DecodePCS->nregions = length / 6;
+    {
+      uint32_t region;
+      for (region = 0; region < static_DecodePCS->nregions; region++)
+      {
+        static_DecodePCS->region[region].region_id = GetByte();
+        GetByte(); /* reserved byte */
+        static_DecodePCS->region[region].region_horizontal_address = GetHalfWord();
+        static_DecodePCS->region[region].region_vertical_address = GetHalfWord();
+      }
+    }
+  }
+}
+
+/*****************************************************************************
+* ParseRCS
+*
+* Parses a Region Composition Segment
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  length: number of bytes in segment
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ParseRCS(size_t length)
+{
+  RCS_t *RCS = static_DecodePCS->RCSList;
+  RCS_t *prevRCS = NULL;
+  uint8_t region_id = GetByte();
+  length -= 1;
+  dprintf(("Function", "ParseRCS\n"));
+  while (RCS != NULL && RCS->id != region_id)
+  {
+    prevRCS = RCS;
+    RCS = RCS->next;
+  }
+  if (RCS == NULL)
+  {
+    /* A new region */
+    uint8_t fill_value;
+    RCS = MyAlloc(sizeof(RCS_t), 0);
+    if (prevRCS == NULL)
+    {
+      static_DecodePCS->RCSList = RCS;
+    }
+    else
+    {
+      prevRCS->next = RCS;
+    }
+    RCS->id = region_id;
+    RCS->version_number = GetBits(4);
+    ByteAlign(); /* ignore region_fill_flag, we always fill new regions */
+    RCS->width = GetHalfWord();
+    RCS->height = GetHalfWord();
+    GetBits(3);
+    RCS->depth = GetBits(3);
+    ByteAlign();
+    RCS->CLUT_id = GetByte();
+    {
+      uint8_t colour4bit;
+      uint8_t colour2bit;
+      fill_value = GetByte(); /* already OK if 8bpp */
+      colour4bit = GetBits(4);
+      colour2bit = GetBits(2);
+      ByteAlign();
+      length -= 9;
+      switch (RCS->depth)
+      {
+        case 1:
+          fill_value = colour2bit | (colour2bit << 2);
+          fill_value |= fill_value << 4;
+          break;
+        case 2:
+          fill_value = colour4bit | (colour4bit << 4);
+          break;
+        case 3:
+          break;
+        default:
+          free(RCS);
+          SkipBytes(length);
+          return;
+      }
+    }
+    {
+      uint32_t sprite_width_in_words = ((RCS->width << RCS->depth) + 31) / 32;
+      RCS->sprite_size = 4 * sprite_width_in_words * RCS->height;
+      RCS->sprite_area = MyAlloc(sizeof(sprite_area_header_t) + RCS->sprite_size, fill_value);
+      /* set up sprite area etc */
+    }
+    {
+      WimpWindow window =
+      {
+        { 0 },
+        0,
+        0,
+        -1,
+        WimpWindow_AutoRedraw /* not in final version */ | WimpWindow_NewFormat,
+        0xFF,
+        0,
+        0,
+        0, /* 0xFF in final version (transparent) */
+        0,
+        0,
+        0,
+        0,
+        { 0 },
+        0,
+        0,
+        0,
+        1,
+        1,
+        { 0 },
+        0
+      };
+      window.visible_area.xmax = RCS->width*2;
+      window.visible_area.ymax = RCS->height*2;
+      window.extent.ymin = -RCS->height*2;
+      window.extent.xmax = RCS->width*2;
+      CHECK(wimp_create_window(&window, &RCS->window_handle));
+    }
+  }
+  else
+  {
+    /* A region we already know about */
+    bool fill_flag;
+    {
+      uint8_t version_number = GetBits(4);
+      fill_flag = GetBits(1);
+      ByteAlign();
+      length -= 1;
+      if (version_number == RCS->version_number)
+      {
+        /* We already have this version */
+        SkipBytes(length);
+        return;
+      }
+      RCS->version_number = version_number;
+    }
+    SkipBytes(6); /* none of these are allowed to change */
+    if (fill_flag)
+    {
+      uint8_t fill_value = GetByte(); /* already OK if 8bpp */
+      uint8_t colour4bit = GetBits(4);
+      uint8_t colour2bit = GetBits(2);
+      ByteAlign();
+      switch (RCS->depth)
+      {
+        case 1:
+          fill_value = colour2bit | (colour2bit << 2);
+          fill_value |= fill_value << 4;
+          break;
+        case 2:
+          fill_value = colour4bit | (colour4bit << 4);
+          break;
+      }
+      memset(RCS->sprite_area + 1, fill_value, RCS->sprite_size);
+    }
+    else
+    {
+      SkipBytes(2);
+    }
+    length -= 8;
+  }
+  RCS->clut_updated = false;
+  RCS->new_objects = (length > 0);
+  
+  /* At this point, insert object list parser */
+  
+  SkipBytes(length);
+}
+
+/*****************************************************************************
+* ParseCLUT
+*
+* Parses a Colour LookUp Table definition segment
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  length: number of bytes in segment
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ParseCLUT(size_t length)
+{
+  dprintf(("Function", "ParseCLUT\n"));
+  SkipBytes(length);
+}
+
+/*****************************************************************************
+* ParseObject
+*
+* Parses an Object data segment
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  length: number of bytes in segment
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ParseObject(size_t length)
+{
+  dprintf(("Function", "ParseObject\n"));
+  SkipBytes(length);
+}
+
+/*****************************************************************************
+* DisplayPage
+*
+* Displays a page whose PTS has been reached; if this is the first page
+* of a new epoch, also frees resources claimed by the old epoch
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void DisplayPage(void)
+{
+  RCS_t *RCS;
+  dprintf(("Function", "DisplayPage\n"));
+  /* If we're switching epochs, free the old one */
+  if (static_DisplayPCS != static_DecodePCS)
+  {
+    FreeResources(static_DisplayPCS);
+    static_DisplayPCS = static_DecodePCS;
+  }
+  /* For each RCS that exists, determine if it's opening, closing or moving */
+  for (RCS = static_DisplayPCS->RCSList; RCS != NULL; RCS = RCS->next)
+  {
+    int8_t region = static_DisplayPCS->nregions;
+    while (--region >= 0)
+    {
+      if (static_DisplayPCS->region[region].region_id == RCS->id)
+      {
+        break;
+      }
+    }
+    if (region < 0 && RCS->visible)
+    {
+      CHECK(wimp_close_window(&RCS->window_handle));
+      RCS->visible = false;
+    }
+    else if (region >= 0)
+    {
+      WimpOpenWindowBlock openblock;
+      openblock.window_handle = RCS->window_handle;
+      openblock.visible_area.xmin = static_XOrigin + static_DisplayPCS->region[region].region_horizontal_address * 2;
+      openblock.visible_area.ymax = static_YOrigin - static_DisplayPCS->region[region].region_vertical_address * 2;
+      openblock.visible_area.xmax = openblock.visible_area.xmin + RCS->width * 2;
+      openblock.visible_area.ymin = openblock.visible_area.ymax - RCS->height * 2;
+      openblock.xscroll = openblock.yscroll = 0;
+      openblock.behind = -1;
+      CHECK(wimp_open_window(&openblock));
+      RCS->visible = true;
+    }
+    /* Reset a couple of flags in the RCS struct */
+    RCS->clut_updated = false;
+    RCS->new_objects = false;
+  }
+  static_DisplayPCS->displayed = true;
+  inline_OS_IntOff();
+  RecalcPollword();
+  inline_OS_IntOn();
+}
+
+/*****************************************************************************
+* SkipToNextPESPacket
+*
+* Keeps freeing bitstream packet descriptors until one is reached that has
+* the MPEGStart flag bit set
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void SkipToNextPESPacket(void)
+{
+  bool NewPES;
+  do
+  {
+    NewPES = NewPacket();
+  }
+  while (NewPES == false);
+}
+
+/*****************************************************************************
+* SkipBytes
+*
+* Steps forward through the current packet by a number of bytes, getting
+* new packets as they are exhausted
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  bytes: number of bytes to skip
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void SkipBytes(size_t bytes)
+{
+  while (bytes > static_DataLength)
+  {
+    bytes -= static_DataLength;
+    static_PESLength -= static_DataLength;
+    NewPacket();
+  }
+  static_DataStart += bytes;
+  static_DataLength -= bytes;
+  static_PESLength -= bytes;
+}
+
+/*****************************************************************************
+* GetHalfWord
+*
+* Reads a 16-bit number from the stream (fetching new packet(s) if necessary)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  data from the stream
+*****************************************************************************/
+static uint16_t GetHalfWord(void)
+{
+  uint16_t halfword = GetByte();
+  halfword <<= 8;
+  halfword |= GetByte();
+  return halfword;
+}
+
+/*****************************************************************************
+* GetByte
+*
+* Reads an 8-bit number from the stream (after fetching a new packet if necessary)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  data from the stream
+*****************************************************************************/
+static uint8_t GetByte(void)
+{
+  uint8_t byte;
+  while (static_DataLength == 0)
+  {
+    NewPacket();
+  }
+  byte = *static_DataStart++;
+  static_DataLength--;
+  static_PESLength--;
+  return byte;
+}
+
+/*****************************************************************************
+* GetBits
+*
+* Reads a bitfield from the stream (fetching a new packet if necessary)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  bits: number of bits to fetch (up to 32)
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  data from the stream
+*****************************************************************************/
+static uint32_t GetBits(uint32_t bits)
+{
+  uint32_t result = 0;
+  while (bits > 0)
+  {
+    uint32_t bits_this_time = MIN(bits, static_BitsInByte);
+    result <<= bits_this_time;
+    while (static_DataLength == 0)
+    {
+      NewPacket();
+    }
+    result |= (*static_DataStart >> (static_BitsInByte - bits_this_time)) & ((1 << bits_this_time) -1);
+    bits -= bits_this_time;
+    static_BitsInByte -= bits_this_time;
+    if (static_BitsInByte == 0)
+    {
+      static_DataStart++;
+      static_DataLength--;
+      static_PESLength--;
+      static_BitsInByte = 8;
+    }
+  }
+  return result;
+}
+
+/*****************************************************************************
+* ByteAlign
+*
+* Aligns the bitfield reader to a byte boundary
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ByteAlign(void)
+{
+  if (static_BitsInByte < 8)
+  {
+    static_DataStart++;
+    static_DataLength--;
+    static_PESLength--;
+    static_BitsInByte = 8;
+  }
+}
+
+/*****************************************************************************
+* NewPacket
+*
+* The hub of the whole system: this appears from the point of view of the
+* caller to return with the next bitstream packet to process. In practice,
+* it will actually Wimp_Poll if the packet list is exhausted, so all Wimp
+* events are dispatched from here. Control is returned when new data arrives
+* using a Wimp pollword, but the pollword is shared between indicating that
+* new data is available, and that a timestamp match has occurred. The packet
+* list is treated as empty if it contains data that is timestamped later than
+* the currently decoding display set (ie the display set that has started
+* decoding, but which has not been displayed yet).
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  static_DataPTS, static_DataPTSValid, static_DataStart, static_DataLength,
+*  and, if a new PES packet, static_PESLength are updated
+*
+* Returns
+*  true if the bitstream packet descriptor is at the head of a PES packet
+*****************************************************************************/
+static bool NewPacket(void)
+{
+  static PacketDescriptor_t *WorkingPacket = (PacketDescriptor_t *) -1;
+    /* ie initialise with magic value guaranteed not be be on the packet list */
+  packet_FreeHead_USR(&static_PacketListHead, &static_PacketListTail, WorkingPacket);
+  
+  while (true)
+  {
+    /* Check for data that should be decoded at this time */
+    do
+    {
+      /* Make an atomic copy of the head link, to cope with asynchronous update */
+      WorkingPacket = static_PacketListHead;
+      
+      if (WorkingPacket == NULL)
+      {
+        /* We usually get here because we've just freed the last packet on the list. */
+        /* If so, we need to clear the pollword so that Wimp_Poll doesn't immediately return. */
+        /* If the pollword would have been set due to a pending PTS match, this isn't a */
+        /* problem, because we're just about to test that ourselves. */
+        /* There is a slim chance that data may have arrived in the interval between the */
+        /* assignment and test of WorkingPacket, but even then, the pollword will be set at */
+        /* the next VSync, at the latest. */
+        static_PollWord = false;
+      }
+      else
+      {
+        /* Check packet at head of list for special actions */
+        if (WorkingPacket == &static_MagicDescriptor_Reset)
+        {
+          longjmp(static_RestartBuf, 1);
+        }
+        else if (WorkingPacket == &static_MagicDescriptor_Exit)
+        {
+          exit(EXIT_SUCCESS);
+        }
+        
+        /* Unless the data on the list is for the next PTS and we haven't */
+        /* displayed this one yet, return the next packet (if any) */
+        if (static_DecodePCS->displayed ||
+            (WorkingPacket->Flags & PacketDescriptorFlags_PTSValid) == 0 ||
+            (WorkingPacket->PTS.word.lo == static_DecodePCS->PTS.word.lo && WorkingPacket->PTS.word.hi == static_DecodePCS->PTS.word.hi) ||
+            !static_DecodePCS->PTS_known)
+        {
+          bool NewPES = (WorkingPacket->Flags & PacketDescriptorFlags_MPEGStart) != 0;
+          static_DataStart = WorkingPacket->Start;
+          static_DataLength = WorkingPacket->Length;
+          if (NewPES)
+          {
+            static_PESLength = WorkingPacket->FullLength;
+          }
+          if ((WorkingPacket->Flags & PacketDescriptorFlags_PTSValid) != 0)
+          {
+            if (static_DataPTSValid && mpegtime_Before(WorkingPacket->PTS, static_DataPTS))
+            {
+              /* Oops, time has jumped backwards */
+              /* We'd better reset ourselves */
+              longjmp(static_RestartBuf, 1);
+            }
+            static_DataPTS.word.lo = WorkingPacket->PTS.word.lo;
+            static_DataPTS.word.hi = WorkingPacket->PTS.word.hi;
+            static_DataPTSValid = true;
+          }
+          if (WorkingPacket != static_PacketListHead)
+          {
+            /* Blast, it's been freed while I wasn't looking */
+            /* The pointers I read from the descriptor may be bad, */
+            /* so we'll just have to ditch it altogether */
+            continue; /* this is effectively a goto to the do statement ;-) */
+          }
+          /* Return to our caller, which will read static_DataStart/Length */
+          return(NewPES);
+        }
+      }
+    }
+    while (false);
+    
+    /* Check if it's time to display the page */
+    if (static_DecodePCS->PTS_known && !static_DecodePCS->displayed)
+    {
+      mpeg_time_t STC = { 0, 0 };
+      _swix(MPEGControl_ReadParameters, _INR(0,1)|_OUTR(1,2),
+            3,
+            static_ControlStreamHandle,
+            &STC.word.lo,
+            (&STC.word.lo) + 1);
+      if ((STC.word.lo != 0 || STC.word.hi != 0) &&
+          !mpegtime_Before(STC, static_DecodePCS->PTS))
+      {
+        DisplayPage();
+      }
+    }
+    
+    /* Poll until something interesting happens */
+    {
+      int event_code;
+      do
+      {
+        CHECK(event_poll(&event_code, NULL, &static_PollWord));
+      }
+      while (event_code != Wimp_EPollWordNonZero);
+    }
+  } /* end while (true) */
+}
+
+/*****************************************************************************
+* RecalcPollword
+*
+* Sets the pollword appropriately when some aspect of the state has changed
+* (necessary in order to share a single pollword for waking up the task)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void RecalcPollword(void)
+{
+  /* Check for pertinent stuff on the packet list */
+  PacketDescriptor_t *HeadPacket = static_PacketListHead; /* lose volatile attribute */
+  static_PollWord = false; /* default state */
+  if (HeadPacket != NULL)
+  {
+    /* Magic packets always need acting on */
+    if (HeadPacket == &static_MagicDescriptor_Reset || HeadPacket == &static_MagicDescriptor_Exit)
+    {
+      static_PollWord = true;
+    }
+    else
+    {
+      /* If we haven't got our first PTS yet, or */
+      /* if the head packet on the list matches the current PTS, or */
+      /* if the head packet on the list has no PTS, or */
+      /* if the head packet on the list is for a later PTS and we've displayed the current page */
+      /* then we need to decode some data */
+      if (static_DecodePCS->displayed ||
+          (HeadPacket->Flags & PacketDescriptorFlags_PTSValid) == 0 ||
+          (HeadPacket->PTS.word.lo == static_DecodePCS->PTS.word.lo && HeadPacket->PTS.word.hi == static_DecodePCS->PTS.word.hi) ||
+          !static_DecodePCS->PTS_known)
+      {
+        static_PollWord = true;
+      }
+    }
+  }
+  /* Check for a time match (unless we've already established that the pollword is set!) */
+  if (static_PollWord == false && static_DecodePCS->PTS_known && !static_DecodePCS->displayed)
+  {
+    mpeg_time_t STC = { 0, 0 };
+    _swix(MPEGControl_ReadParameters, _INR(0,1)|_OUTR(1,2),
+          3,
+          static_ControlStreamHandle,
+          &STC.word.lo,
+          (&STC.word.lo) + 1);
+    if ((STC.word.lo != 0 || STC.word.hi != 0) &&
+        !mpegtime_Before(STC, static_DecodePCS->PTS))
+    {
+      static_PollWord = true;
+    }
+  }
+}
+
+/*****************************************************************************
+* MyAlloc
+*
+* Allocates a block of memory from the heap, throwing an error if it can't
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  size:       number of bytes to allocate in block
+*  init_value: byte value to initialise block with
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  pointer to block
+*****************************************************************************/
+static void *MyAlloc(size_t size, uint8_t init_value)
+{
+  void *memory = malloc(size);
+  if (memory == NULL)
+  {
+    inline_OS_GenerateError(mess_GenerateError("err_Mem", 1, 0));
+  }
+  memset(memory, init_value, size);
+  return memory;
+}
+
+/*****************************************************************************
+* maintask_RemoveHandlers
+*
+* Remove any installed direct-call handlers (prior to module death)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void maintask_RemoveHandlers(void)
+{
+  /* At least one of these will produce an error, but that's okay */
+  _swix(OS_Release, _INR(0,2),
+        UpCallV,
+        upcallv_handler,
+        global_PrivateWord);
+  _swix(MPEGControl_DeregisterDescriptorHandler, _INR(0,4),
+        DHFlags_StreamSpecific,
+        DVB_SUBTITLING_DESCRIPTOR_TAG,
+        descriptor_handler,
+        global_PrivateWord,
+        static_ControlStreamHandle);
+  if (static_SubtitlePID != 0)
+  {
+    _swix(MPEGControl_DeregisterProgramElementHandler, _INR(0,4),
+          PEHFlags_StreamIdentifiedByPID | PEHFlags_StreamSpecific,
+          static_SubtitlePID,
+          program_element_handler,
+          global_PrivateWord,
+          static_ControlStreamHandle);
+    static_SubtitlePID = 0;
+  }
+  if (static_EventVClaimed)
+  {
+    _swix(OS_Byte, _INR(0,1),
+          13,
+          Event_VSync);
+    _swix(OS_Release, _INR(0,2),
+          EventV,
+          eventv_handler,
+          global_PrivateWord);
+    static_EventVClaimed = false;
+  }
+}
+
+/*****************************************************************************
+* FindScreenOrigin
+*
+* Compensates for VIDC border
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void FindScreenOrigin(void)
+{
+  uint32_t in_block[5] = { 4, 5, 11, 12, -1 };
+  uint32_t out_block[4];
+  uint32_t width;
+  uint32_t height;
+  _swix(OS_ReadVduVariables, _INR(0,1),
+        in_block,
+        out_block);
+  width = out_block[2] << out_block[0];
+  height = out_block[3] << out_block[1];
+  static_XOrigin = (width / 2) - 720;
+  static_YOrigin = (height / 2) + 576; /* doesn't matter that it's exclusive, because so are window tops */
+}
+
+#pragma no_check_stack
+
+/*****************************************************************************
+* maintask_TearDown
+*
+* A VideoControl session is being torn down - check if it's us, and if so
+* shut ourselves down cleanly
+*
+* Assumptions
+*  May be called when another task is paged in, or from callbacks while we
+*  are the current task (eg going into standby)
+*
+* Inputs
+*  The VideoControl client handle of the session being torn down
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void maintask_TearDown(uint32_t handle)
+{
+  if (handle == static_VideoCtrlClientHandle)
+  {
+    BackgroundFlush(&static_MagicDescriptor_Exit);
+  }
+}
+
+/*****************************************************************************
+* maintask_ModeChange
+*
+* The screen mode has changed - recache VDU variables and recalculate
+* translation tables
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void maintask_ModeChange(void)
+{
+  FindScreenOrigin();
+  /* translation table stuff needs to go here */
+}
+
+/*****************************************************************************
+* maintask_UpCallVHandler
+*
+* UpCallV handler (for UpCall_MPEG)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  r:  registers on entry
+*  pw: the 'R12' value
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  0 to intercept; 1 to pass on
+*****************************************************************************/
+int maintask_UpCallVHandler(_kernel_swi_regs *r, void *pw)
+{
+  IGNORE(pw);
+  if (r->r[0] == UpCall_MPEG && r->r[3] == UpCallMPEG_OpenStream)
+  {
+    /* If we can now determine our control stream handle, then */
+    /* register a descriptor handler, and get off UpCallV */
+    _kernel_oserror *e;
+    uint32_t OptionsBlock[] = { vc_tags_control_handle, 1, 0, vc_tags__end };
+    e = _swix(VideoControl_Options, _INR(0,2),
+              VC_Options_ReadValues,
+              static_VideoCtrlClientHandle,
+              OptionsBlock);
+    if (e == NULL && OptionsBlock[2] != 0)
+    {
+      static_ControlStreamHandle = OptionsBlock[2];
+      _swix(MPEGControl_RegisterDescriptorHandler, _INR(0,4),
+            DHFlags_StreamSpecific,
+            DVB_SUBTITLING_DESCRIPTOR_TAG,
+            descriptor_handler,
+            global_PrivateWord,
+            static_ControlStreamHandle);
+      _swix(OS_Release, _INR(0,2),
+            UpCallV,
+            upcallv_handler,
+            global_PrivateWord);
+    }
+  }
+  return 1;
+}
+
+/*****************************************************************************
+* maintask_DescriptorHandler
+*
+* MPEGControl Descriptor Handler (for DVB subtitling descriptors)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  r:  registers on entry
+*  pw: the 'R12' value
+*
+* Outputs
+*  r:  updated or not, as appropriate
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
+{
+  static struct
+  {
+    uint32_t es_id; /* or 0 if not present */
+    uint8_t composition_page_hi;
+    uint8_t composition_page_lo;
+    uint8_t ancillary_page_hi;
+    uint8_t ancillary_page_lo;
+  }
+  AspectVersion[4]; /* array for collating data for all aspect ratios */
+  static uint8_t BytesLeft; /* how much data remains in this descriptor */
+  static bool Bogus; /* true if descriptor appears to be corrupt */
+  static bool Match; /* true if what we've seen so far of this loop matches our criteria */
+  static uint8_t Aspect; /* 0-3 if language/hard-of-hearing match, value = AspectVersion index */
+  IGNORE(pw);
+  switch (r->r[0])
+  {
+    case DHReason_OpenStream:
+      /* Give it an arbitrary non-null handle - we don't actually use it */
+      r->r[0] = 1;
+      break;
+      
+    case DHReason_DataTransfer:
+      /* Process the data */
+      {
+        PacketDescriptor_t *packet = (PacketDescriptor_t *) r->r[3];
+        while (packet != NULL)
+        {
+          if (packet->Flags & PacketDescriptorFlags_MPEGStart)
+          {
+            BytesLeft = packet->FullLength;
+            Bogus = ((BytesLeft & 7) != 0);
+          }
+          if (!Bogus)
+          {
+            while (packet->Length > 0)
+            {
+              uint8_t byte = *packet->Start++;
+              packet->Length--;
+              switch ((--BytesLeft) & 7)
+              {
+                case 7:
+                  Match = true;
+                  if (byte != static_ISO639Lang[0])
+                  {
+                    Match = false;
+                  }
+                  break;
+                case 6:
+                  if (byte != static_ISO639Lang[1])
+                  {
+                    Match = false;
+                  }
+                  break;
+                case 5:
+                  if (byte != static_ISO639Lang[2])
+                  {
+                    Match = false;
+                  }
+                  break;
+                case 4:
+                  Aspect = byte - (static_HardOfHearing ? 0x20 : 0x10);
+                  if (Aspect < 4u)
+                  {
+                    AspectVersion[Aspect].es_id = (uint32_t) r->r[4];
+                  }
+                  else
+                  {
+                    Match = false;
+                  }
+                  break;
+                case 3:
+                  if (Match)
+                  {
+                    AspectVersion[Aspect].composition_page_hi = byte;
+                  }
+                  break;
+                case 2:
+                  if (Match)
+                  {
+                    AspectVersion[Aspect].composition_page_lo = byte;
+                  }
+                  break;
+                case 1:
+                  if (Match)
+                  {
+                    AspectVersion[Aspect].ancillary_page_hi = byte;
+                  }
+                  break;
+                case 0:
+                  if (Match)
+                  {
+                    AspectVersion[Aspect].ancillary_page_lo = byte;
+                  }
+                  break;
+              }
+            }
+          }
+          packet_FreeHead_SVC(&packet, NULL);
+        }
+      }
+      break;
+      
+    case DHReason_CloseStream:
+      /* Deregister ourselves */
+      _swix(MPEGControl_DeregisterDescriptorHandler, _INR(0,4),
+            DHFlags_StreamSpecific,
+            DVB_SUBTITLING_DESCRIPTOR_TAG,
+            descriptor_handler,
+            global_PrivateWord,
+            static_ControlStreamHandle);
+      /* Deregister program element handler */
+      if (static_SubtitlePID != 0)
+      {
+        _swix(MPEGControl_DeregisterProgramElementHandler, _INR(0,4),
+              PEHFlags_StreamIdentifiedByPID | PEHFlags_StreamSpecific,
+              static_SubtitlePID,
+              program_element_handler,
+              global_PrivateWord,
+              static_ControlStreamHandle);
+        static_SubtitlePID = 0;
+      }
+      /* Free any packets we still have, and tell foreground to reset itself */
+      BackgroundFlush(&static_MagicDescriptor_Reset);
+      break;
+      
+    case DHReason_ResetStream:
+      /* Reset AspectVersion es_id, ready for next stream segment */
+      for (Aspect = 0; Aspect < 4; Aspect++)
+      {
+        AspectVersion[Aspect].es_id = 0;
+      }
+      /* Deregister program element handler */
+      if (static_SubtitlePID != 0)
+      {
+        _swix(MPEGControl_DeregisterProgramElementHandler, _INR(0,4),
+              PEHFlags_StreamIdentifiedByPID | PEHFlags_StreamSpecific,
+              static_SubtitlePID,
+              program_element_handler,
+              global_PrivateWord,
+              static_ControlStreamHandle);
+        static_SubtitlePID = 0;
+      }
+      /* Free any packets we still have, and tell foreground to reset itself */
+      BackgroundFlush(&static_MagicDescriptor_Reset);
+      break;
+      
+    case DHReason_EndOfTable:
+      /* Decide which descriptor we should be working from */
+      {
+        uint32_t Preferred = 0;
+        uint32_t ScalingType = 0;
+        uint32_t TVAspect = 0;
+        _swix(MPEGControl_SetVideoParameters, _INR(0,2)|_OUT(2)|_OUT(4),
+              0,
+              static_ControlStreamHandle,
+              -1,
+              &ScalingType,
+              &TVAspect);
+        if (ScalingType == 0)
+        {
+          /* Full-screen playback: prefer subtitles appropriate to TV aspect ratio */
+          if (TVAspect == VideoStructureScalingTVAspectRatio_4_3)
+          {
+            Preferred = 1;
+          }
+          else
+          {
+            Preferred = 2;
+          }
+        }
+        else
+        {
+          /* Probably windowed: prefer subtitles appropriate to active area of MPEG picture */
+          const uint32_t tags[2] = { 0x1011, -1 };
+          uint32_t result[9];
+          result[0] = 0;
+          _swix(MPEGControl_Stats, _INR(0,4),
+                0,
+                static_ControlStreamHandle,
+                tags,
+                result,
+                sizeof(result));
+          if (result[0] == 0x1011)
+          {
+            if (result[4] < 0x18E39) /* half-way between 4:3 and 16:9 */
+            {
+              Preferred = 1;
+            }
+            else if (result[4] < 0x1FE70) /* half-way between 16:9 and 2.21:1 */
+            {
+              Preferred = 2;
+            }
+            else
+            {
+              Preferred = 3;
+            }
+          }
+        }
+        if (AspectVersion[Preferred].es_id == 0)
+        {
+          Preferred = 0;
+        }
+        if ((AspectVersion[Preferred].es_id & 0x1FFF) != static_SubtitlePID)
+        {
+          /* Subtitle stream has arrived, gone away or changed PID */
+          if (static_SubtitlePID != 0)
+          {
+            _swix(MPEGControl_DeregisterProgramElementHandler, _INR(0,4),
+                  PEHFlags_StreamIdentifiedByPID | PEHFlags_StreamSpecific,
+                  static_SubtitlePID,
+                  program_element_handler,
+                  global_PrivateWord,
+                  static_ControlStreamHandle);
+            static_SubtitlePID = 0;
+          }
+          if (AspectVersion[Preferred].es_id != 0)
+          {
+            static_SubtitlePID = AspectVersion[Preferred].es_id & 0x1FFF;
+            /* I'll eat my hat if DVB subtitles ever appear in a program stream with program stream map! */
+            _swix(MPEGControl_RegisterProgramElementHandler, _INR(0,4),
+                  PEHFlags_StreamIdentifiedByPID | PEHFlags_StreamSpecific,
+                  static_SubtitlePID,
+                  program_element_handler,
+                  global_PrivateWord,
+                  static_ControlStreamHandle);
+            static_CompositionPage = (AspectVersion[Preferred].composition_page_hi << 8) + AspectVersion[Preferred].composition_page_lo;
+            static_AncillaryPage =  (AspectVersion[Preferred].ancillary_page_hi << 8) + AspectVersion[Preferred].ancillary_page_lo;
+          }
+        }
+      }
+      break;
+      
+    default:
+      /* ignore any unknown reason codes */
+      break;
+  }
+  return NULL;
+}
+
+/*****************************************************************************
+* maintask_ProgramElementHandler
+*
+* MPEGControl Program Element Handler (for DVB subtitle elementary stream)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  r:  registers on entry
+*  pw: the 'R12' value
+*
+* Outputs
+*  r:  updated or not, as appropriate
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *maintask_ProgramElementHandler(_kernel_swi_regs *r, void *pw)
+{
+  IGNORE(pw);
+  switch (r->r[0])
+  {
+    case PEHReason_OpenStream:
+      /* Give it an arbitrary non-null handle - we don't actually use it */
+      r->r[0] = 1;
+      break;
+      
+    case PEHReason_DataTransfer:
+      /* Add the data to our list */
+      {
+        PacketDescriptor_t *packet = (PacketDescriptor_t *) r->r[3];
+        if (static_PacketListHead == NULL)
+        {
+          static_PacketListHead = packet;
+          RecalcPollword();
+        }
+        else
+        {
+          static_PacketListTail->Link = packet;
+        }
+        while (packet->Link != NULL)
+        {
+          packet = packet->Link;
+        }
+        static_PacketListTail = packet;
+      }
+      break;
+      
+    default:
+      /* ignore any other reason codes */
+      break;
+  }
+  return NULL;
+}
+
+/*****************************************************************************
+* maintask_EventVHandler
+*
+* EventV handler (for Event_VSync)
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  r:  registers on entry
+*  pw: the 'R12' value
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  0 to intercept; 1 to pass on
+*****************************************************************************/
+int maintask_EventVHandler(_kernel_swi_regs *r, void *pw)
+{
+  IGNORE(r);
+  IGNORE(pw);
+  RecalcPollword();
+  return 1;
+}
+
+/*****************************************************************************
+* BackgroundFlush
+*
+* Flushes the packet queue from the background, and leaves a marker packet
+* to tell the foreground what's happened
+*
+* Assumptions
+*  Entered in SVC mode
+*
+* Inputs
+*  magic_packet: the packet to leave on the list
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void BackgroundFlush(PacketDescriptor_t *magic_packet)
+{
+  /* Free all the packets */
+  while (static_PacketListHead != NULL)
+  {
+    packet_FreeHead_SVC(&static_PacketListHead, NULL);
+  }
+  
+  /* Stick a single (magic) packet on the list */
+  static_PacketListHead = static_PacketListTail = magic_packet;
+  
+  /* Set the pollword */
+  static_PollWord = true;
+}
+
+
+/*****************************************************************************
+* END OF FILE
+*****************************************************************************/

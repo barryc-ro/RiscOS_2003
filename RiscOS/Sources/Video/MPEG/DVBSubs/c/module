@@ -1,0 +1,552 @@
+/*****************************************************************************
+* $Id$
+* $Name$
+*
+* Author(s):  Ben Avison
+* Project(s): DSL4000 Deployment (A170)
+*
+* ----------------------------------------------------------------------------
+* Copyright [2002] Pace Micro Technology PLC.  All rights reserved.
+*
+* The copyright in this material is owned by Pace Micro Technology PLC
+* ("Pace").  This material is regarded as a highly confidential trade secret
+* of Pace.  It may not be reproduced, used, sold or in any other way exploited
+* or transferred to any third party without the prior written permission of
+* Pace.
+*
+* ----------------------------------------------------------------------------
+* Purpose: Main relocatable module entry points
+*
+* ----------------------------------------------------------------------------
+* History: See source control system log
+*
+*****************************************************************************/
+
+
+/*****************************************************************************
+* Include header files
+*****************************************************************************/
+#include <stdlib.h>
+#include <stdio.h>
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include "kernel.h"
+#include "swis.h"
+
+#include "Global/ModHand.h"
+#undef Module_Title /* clash with cmhg */
+#include "Global/Services.h"
+#include "VideoCtrl.h"
+#include "DebugLib/DebugLib.h"
+#include "tboxlibs/wimplib.h"
+
+#include "basetask.h"
+#include "defs.h"
+#include "global.h"
+#include "maintask.h"
+#include "mess.h"
+#include "modhdr.h"
+#include "resmess.h"
+#include "throwerror.h"
+
+
+/*****************************************************************************
+* MACROS
+*****************************************************************************/
+
+
+/*****************************************************************************
+* New type definitions
+*****************************************************************************/
+
+
+/*****************************************************************************
+* Constants
+*****************************************************************************/
+
+
+/*****************************************************************************
+* File scope Global variables
+*****************************************************************************/
+extern int Image__RO__Base;
+
+
+/*****************************************************************************
+* Function prototypes - Private to this file
+*****************************************************************************/
+static _kernel_oserror *KillNonBaseInstantiations(void);
+
+
+/*****************************************************************************
+* Functions
+*****************************************************************************/
+
+/*****************************************************************************
+* main
+*
+* Start code
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  argc, argv: as for any other application
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  return code
+*****************************************************************************/
+int main(int argc, char *argv[])
+{
+  _kernel_oserror *e = NULL;
+  bool okaytostart = false;
+  
+  /* Decide if we can start or not */
+  switch (global_TaskHandle)
+  {
+    case -1:
+      /* OK if during desktop start */
+      okaytostart = true;
+      break;
+    case 0:
+      /* Desktop already active, don't wait for *Desktop */
+      /* Sanity checking in this case already done in preveneer */
+      okaytostart = true;
+      break;
+    default:
+      /* Task already running */
+      e = mess_GenerateError("err_TaskActive", 1, 0);
+      break;
+  }
+  
+  if (okaytostart)
+  {
+    if (global_ThisIsBaseInstantiation)
+    {
+      if (argc != 1)
+      {
+        e = mess_GenerateError("BadParm", 1, 0);
+      }
+      else
+      {
+        e = basetask_Main();
+      }
+    }
+    else
+    {
+      if (argc != 6)
+      {
+        e = mess_GenerateError("BadParm", 1, 0);
+      }
+      else
+      {
+        e = maintask_Main(argv);
+      }
+    }
+  }
+  
+  /* If we get here, and this is the base instantiation, it remains dormant until the Desktop is */
+  /* (re)entered; if it is a normal instantiation, it remains dormant indefinitely - tough. */
+  
+  CHECK(e);
+  
+  return EXIT_SUCCESS;
+}
+
+#pragma no_check_stack
+
+/*****************************************************************************
+* module_Init
+*
+* Initialisation code
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  cmd_tail:    points to the string of arguments with which the module is invoked
+*               (may be "", and is control-terminated, not zero terminated)
+*  podule_base: 0              => first invokation, not from a podule
+*               1 - 0x02FFFFFF => reincarnation number
+*               >0x03000000    => first invokation, from a podule based at this address
+*  pw:          the 'R12' value established by module initialisation
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if initialisation succeeds; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *module_Init(const char *cmd_tail, int podule_base, void *pw)
+{
+  _kernel_oserror *e = NULL;
+#ifndef ROM_MODULE
+  bool FileRegistered = false;
+#endif
+  bool MessagesOpen = false;
+  IGNORE(cmd_tail);
+  
+  debug_initialise("DVBSubtitles", "null:", "");
+  debug_atexit();
+  debug_set_taskname_prefix(false);
+  debug_set_area_level_prefix(true);
+  debug_set_area_pad_limit(0);
+  debug_set_device(DADEBUG_OUTPUT);
+  debug_set_raw_device(NULL_OUTPUT);
+  debug_set_trace_device(NULL_OUTPUT);
+  
+  global_ThisIsBaseInstantiation = (podule_base == 0 || (uint32_t) podule_base > 0x03000000);
+  global_PrivateWord = pw;
+  
+  if (!e)
+  {
+    
+#ifndef ROM_MODULE
+    if (global_ThisIsBaseInstantiation)
+    {
+      e = _swix(ResourceFS_RegisterFiles, _IN(0),
+                resmess_ResourcesFiles());
+    }
+  }
+  if (!e)
+  {
+    FileRegistered = true;
+#endif
+    
+    e = _swix(MessageTrans_OpenFile, _INR(0,2),
+              &global_MessageFD,
+              Module_MessagesFile,
+              0);
+  }
+  if (!e)
+  {
+    MessagesOpen = true;
+    
+  }
+  
+  if (e && MessagesOpen) _swix(MessageTrans_CloseFile, _IN(0),
+                               &global_MessageFD);
+#ifndef ROM_MODULE
+  if (global_ThisIsBaseInstantiation)
+  {
+    if (e && FileRegistered) _swix(ResourceFS_DeregisterFiles, _IN(0),
+                                   resmess_ResourcesFiles());
+  }
+#endif
+  return e;
+}
+
+/*****************************************************************************
+* module_Final
+*
+* Finalisation code
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  fatal, podule, pw: the values of R10, R11 and R12 (respectively) on entry
+*                     to the finalisation code
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if finalisation succeeds; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *module_Final(int fatal, int podule, void *pw)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE(fatal);
+  IGNORE(podule);
+  IGNORE(pw);
+  
+  if (global_ThisIsBaseInstantiation)
+  {
+    /* The kernel doesn't seem to allow us to kill all the other instantiations */
+    /* from here, but the base must always be present when any other instantiation */
+    /* is, because it manages ResourceFS, tidies up on Service_Reset, etc. */
+    /* So instead, we must refuse to die if other instantiations exist. */
+    e = _swix(OS_Module, _INR(0,1),
+              ModHandReason_LookupName,
+              Module_Title);
+    if (e)
+    {
+      /* No instantiations exist with our name - that's okay */
+      e = NULL;
+    }
+    else
+    {
+      e = mess_GenerateError("err_OtherInstsActive", 1, 0);
+    }
+  }
+  
+  if (!e && global_TaskHandle != 0 && global_TaskHandle != -1)
+  {
+    if (!global_ThisIsBaseInstantiation)
+    {
+      maintask_RemoveHandlers();
+    }
+    e = wimp_close_down(global_TaskHandle);
+    if (!e)
+    {
+      global_TaskHandle = 0;
+    }
+  }
+  
+  if (!e)
+  {
+    _swix(MessageTrans_CloseFile, _IN(0),
+          &global_MessageFD);
+#ifndef ROM_MODULE
+    if (global_ThisIsBaseInstantiation)
+    {
+      _swix(ResourceFS_DeregisterFiles, _IN(0),
+            resmess_ResourcesFiles());
+    }
+#endif
+  }
+  return e;
+}
+
+/*****************************************************************************
+* module_Service
+*
+* Service call handler
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  service_number: service call number
+*  r:              pointer to registers on entry
+*  pw:             the 'R12' value
+*
+* Outputs
+*  r:              updated or not, as appropriate
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+void module_Service(int service_number, _kernel_swi_regs *r, void *pw)
+{
+  IGNORE(pw);
+  switch (service_number)
+  {
+    case Service_Memory:
+      /* All our own tasks use application space */
+      if (r->r[2] == (int) Image__RO__Base)
+      {
+        r->r[1] = 0;
+      }
+      break;
+      
+    case Service_Reset:
+      if (global_ThisIsBaseInstantiation)
+      {
+        /* Before soft resets, base instantiation needs to re-zero its task handle, */
+        /* but kill the other instantiations */
+        global_TaskHandle = 0;
+        KillNonBaseInstantiations();
+      }
+      break;
+      
+    case Service_ModeChange:
+      if (!global_ThisIsBaseInstantiation)
+      {
+        maintask_ModeChange();
+      }
+      
+    case Service_StartWimp:
+      /* Entering Desktop, so start up base task if not already active */
+      if (global_ThisIsBaseInstantiation && global_TaskHandle == 0)
+      {
+        global_TaskHandle = -1;
+        r->r[0] = (int) Module_Title "%Base:Desktop_DVBSubtitles\n";
+        r->r[1] = 0;
+      }
+      break;
+      
+    case Service_StartedWimp:
+      /* Desktop entered, so zero taskhandle if base task failed to start */
+      if (global_TaskHandle == -1)
+      {
+        global_TaskHandle = 0;
+      }
+      break;
+      
+    case Service_MessageFileClosed:
+      /* We might want to use our message file descriptor from the background, */
+      /* so re-open message file now, when filing system re-entrancy isn't an issue */
+      _swix(MessageTrans_OpenFile, _INR(0,2),
+            &global_MessageFD,
+            Module_MessagesFile,
+            0);
+      break;
+      
+    case Service_VideoControl:
+      /* If the relevant session is torn down, shut ourselves down too */
+      if (!global_ThisIsBaseInstantiation)
+      {
+        if (r->r[0] == VideoControlSessionTornDown || r->r[0] == VideoControlSessionShutDown)
+        {
+          maintask_TearDown(r->r[2]);
+        }
+      }
+      break;
+      
+    default:
+      assert(false /* unserviced service call */);
+      break;
+  }
+  return;
+}
+
+/*****************************************************************************
+* module_Commands
+*
+* Command handler
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  arg_string: command tail
+*  argc:       number of parameters
+*  cmd_no:     index into cmhg's list of commands
+*  pw:         the 'R12' value
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+_kernel_oserror *module_Commands(const char *arg_string, int argc, int cmd_no, void *pw)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE(argc);
+  IGNORE(pw);
+  switch (cmd_no)
+  {
+    case CMD_Desktop_DVBSubtitles:
+      switch (global_TaskHandle)
+      {
+        case -1:
+          /* OK if during desktop start */
+          break;
+        case 0:
+          {
+            WimpSysInfo info;
+            e = wimp_read_sys_info(0, &info);
+            if (!e && info.r0 == 0)
+            {
+              /* Desktop not yet active, can't start */
+              e = mess_GenerateError("UseDesk", 1, 1, Module_Title);
+            }
+            else if (!e)
+            {
+              e = wimp_read_sys_info(5, &info);
+              if (!e && info.r0 != 0)
+              {
+                /* This task slot already Wimp_Initialised! */
+                /* We can't start a new task slot from SVC mode, so just error */
+                e = mess_GenerateError("err_OtherTaskActive", 1, 0);
+              }
+            }
+          }
+          break;
+        default:
+          /* Task already running */
+          e = mess_GenerateError("err_TaskActive", 1, 0);
+          break;
+      }
+      if (!e)
+      {
+        /* Enter the preferred instantiation (ie this one, since we're in the command handler) */
+        e = _swix(OS_Module, _INR(0,2),
+                  ModHandReason_Enter,
+                  Module_Title,
+                  arg_string);
+      }
+      break;
+      
+    default:
+      assert(false /* unserviced star command */);
+      break;
+  }
+  return e;
+}
+
+/*****************************************************************************
+* KillNonBaseInstantiations
+*
+* Kills all instantiations apart from the base instantiation
+*
+* Assumptions
+*  Called from base instantiation
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+static _kernel_oserror *KillNonBaseInstantiations(void)
+{
+  _kernel_oserror *e = NULL;
+  uint32_t ModuleNumber;
+  e = _swix(OS_Module, _INR(0,1)|_OUT(1),
+            ModHandReason_LookupName,
+            Module_Title,
+            &ModuleNumber);
+  if (!e)
+  {
+    /* Kill off all instantiations other than the base (which must be in the module chain) */
+    /* The base instantiation's private word contents continue to uniquely identify the base instantiation, */
+    /* while the instantiation numbers will change every time we kill an instantiation */
+    uint32_t InstantiationNumber = 0;
+    void *PrivateWord;
+    const char *Postfix;
+    do
+    {
+      e = _swix(OS_Module, _INR(0,2)|_OUT(2)|_OUTR(4,5),
+                ModHandReason_GetNames,
+                ModuleNumber,
+                InstantiationNumber,
+                &InstantiationNumber,
+                &PrivateWord,
+                &Postfix);
+      if (e)
+      {
+        /* We expect an error from the SWI when we've processed all instantiations */
+        e = NULL;
+        break;
+      }
+      if (PrivateWord != global_PrivateWord)
+      {
+        /* Found an instantiation other than the base one - kill it */
+        char ModuleName[MAX_MODULE_NAME_LEN];
+        sprintf(ModuleName, Module_Title "%%%s", Postfix); /* Postfix is null-terminated by kernel */
+        e = _swix(OS_Module, _INR(0,1),
+                  ModHandReason_Delete,
+                  ModuleName);
+        /* Instantiation numbers may have changed, so start the enumeration again */
+        InstantiationNumber = 0;
+      }
+    }
+    while (!e);
+  }
+  return e;
+}
+
+
+/*****************************************************************************
+* END OF FILE
+*****************************************************************************/
