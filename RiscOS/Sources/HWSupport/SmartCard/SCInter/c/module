@@ -22,7 +22,9 @@
  * 28-Aug-96  RWB,  Check for never access condition before a verifychv.
  * 29-Aug-96  RWB,  Added Status swi for polled operation.
  * 08-Oct-96  RWB,  Modified the ordering of InternalAuthenticate
- * 22 May 1997 RWB, get_atr does not check atr length
+ * 22-May-97  RWB,  get_atr does not check atr length
+ * 03-Nov-98  RML,  *SCInterInfo now shows current card type (corresponds
+ *                  to value of i in CARDS_POPULATE, in h.cards).
  *
  */
 #include <stdio.h>
@@ -36,18 +38,10 @@
 #include "irqs.h"
 #include "header.h"
 #include "scinter.h"
+#include "machine.h"
 #include "cards.h"
 #include "path.h"
-
-
-/*
- * prototypes
- */
-int  get_atr(void);
-int  open_card(void);
-int  handle_response(BYTE *card_data, int data_len, int *length, BYTE *resp);
-
-void machine(t_transitions transition, _kernel_swi_regs *r);
+#include "records.h"
 
 /*
  * table used to identify which card is present
@@ -59,6 +53,8 @@ t_card_exports *CurrExports = NULL;
  * special chimpanzee processing
  */
 int ChimpanzeeClassByte=0xa0;
+
+int current_card_type=-1;
 
 #ifdef REMOTE_DEBUG
 debug_session *db=NULL;
@@ -72,9 +68,9 @@ void   *workspace_pointer = NULL;
 static _kernel_oserror *TinyError;
 #endif
 int card_handle = -1;
-static t_card_atr ATR;
+t_card_atr ATR;
 
-#ifdef REMOTE_DEBUG
+#ifdef debug
 char *strNotifications[] = {"CardOK","CardBad","CardRemoved","Complete"};
 char *strState[] = {"WaitingOpen","WaitingATR","WaitingRemoval","Idle",
 "SelectingDir","SelectingFile","GettingResponse","GettingAuthResponse",
@@ -95,13 +91,13 @@ t_event Events[MAX_EVENTS];             /* generic event queue */
 int next_event = -1;
 int free_event = 0;
 int flag_event_pending = FALSE;
-  static t_states state = WaitingOpen;
-  static t_transitions entry_trans;
-/*
- * process the asynchronous events
- */
-_kernel_oserror *
-sc_event_handler(_kernel_swi_regs *r, void *pw)
+t_states state = WaitingOpen;
+t_transitions entry_trans;
+
+/******************************************************************************
+  process the asynchronous events
+ ******************************************************************************/
+_kernel_oserror *sc_event_handler(_kernel_swi_regs *r, void *pw)
 {
   int  this_event = 0;
   int  this_handle = 0;
@@ -121,19 +117,28 @@ sc_event_handler(_kernel_swi_regs *r, void *pw)
     {
       switch(this_event)
       {
-        case SCI_REMOVED :
-          debug_printf(db,"event Removed\n");
+        case SCI_REMOVED:
+#ifdef debug
+          printf("SCINTERFACE: event SCI_REMOVED\n");
+#endif
           machine(Removed,r);
           break;
-        case SCI_TRANS_END :
-          debug_printf(db,"trans end\n");
+
+        case SCI_TRANS_END:
+#ifdef debug
+          printf("SCINTERFACE: event SCI_TRANS_END\n");
+#endif
           machine(TransEnd,r);
           break;
+
         case SCI_CMD_DONE :
           machine(Done,r);
           break;
+
         case SCI_ERROR :
-          debug_printf(db,"event Error\n");
+#ifdef debug
+          printf("SCINTERFACE: event SCI_ERROR\n");
+#endif
           machine(Error,r);
           break;
       }
@@ -154,11 +159,10 @@ sc_event_handler(_kernel_swi_regs *r, void *pw)
   return (NULL);
 }
 
-/*
- * setup a callback to deal with the serial event.
- */
-_kernel_oserror *
-setup_event(int iHandle, int ithis_event)
+/******************************************************************************
+  setup a callback to deal with the serial event.
+ ******************************************************************************/
+_kernel_oserror *setup_event(int iHandle, int ithis_event)
 {
   _kernel_oserror *err = NULL;
   _kernel_swi_regs reg;
@@ -189,11 +193,10 @@ setup_event(int iHandle, int ithis_event)
 }
 
 
-/*
- * handle events, select ones of interest to us
- */
-int
-event_handler(_kernel_swi_regs *r, void *pw)
+/******************************************************************************
+  handle events, select ones of interest to us
+ ******************************************************************************/
+int event_handler(_kernel_swi_regs *r, void *pw)
 {
   if (r->r[0] == Event_Expansion)
   {
@@ -206,11 +209,10 @@ event_handler(_kernel_swi_regs *r, void *pw)
   return (1); /* pass on */
 }
 
-/*
- * claims vectors and enables the events as required
- */
-_kernel_oserror *
-claim_vectors(void)
+/******************************************************************************
+  claims vectors and enables the events as required
+ ******************************************************************************/
+_kernel_oserror *claim_vectors(void)
 {
   _kernel_oserror *err = NULL;
   _kernel_swi_regs reg;
@@ -233,11 +235,10 @@ claim_vectors(void)
   return (NULL);
 }
 
-/*
- * release vectors, flush any callbacks and disable events
- */
-_kernel_oserror *
-release_vectors(void)
+/******************************************************************************
+  release vectors, flush any callbacks and disable events
+ ******************************************************************************/
+_kernel_oserror *release_vectors(void)
 {
   _kernel_oserror *err = NULL;
   _kernel_swi_regs reg;
@@ -260,26 +261,28 @@ release_vectors(void)
   return (NULL);
 }
 
-/*
- * module service, only dealing with service_NCTransportStarting
- */
-void
-module_service(int service_number, _kernel_swi_regs *r, void *pw)
+/******************************************************************************
+  module service, only dealing with service_NCTransportStarting
+ ******************************************************************************/
+void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 {
-  debug_printf(db,"module service %x\n",r->r[0]);
+#ifdef debug
+  printf("SCINTERFACE: module service %x\n",r->r[0]);
+#endif
   machine(ReStart,r);
 }
 
-/*
- * broadcast a message using the SCInterface event
- */
-void
-module_notify(int reason,int param)
+/******************************************************************************
+  broadcast a message using the SCInterface event
+ ******************************************************************************/
+void module_notify(int reason,int param)
 {
   _kernel_swi_regs reg;
 
-  debug_printf(db,"notify '%s', 0x%x\n",
+#ifdef debug
+  printf("SCINTERFACE: notify '%s', 0x%x\n",
   	strNotifications[reason],param);
+#endif
 
   reg.r[0] = Event_Expansion;
   reg.r[1] = Event_Expansion_SCInterface;
@@ -288,11 +291,10 @@ module_notify(int reason,int param)
   _kernel_swi(OS_GenerateEvent,&reg,&reg);
 }
 
-/*
- * simple printf without using stdio
- */
-void
-my_printf(char *format, ...)
+/******************************************************************************
+  simple printf without using stdio
+ ******************************************************************************/
+void my_printf(char *format, ...)
 {
   _kernel_swi_regs reg;
   char strLine[80];
@@ -306,28 +308,29 @@ my_printf(char *format, ...)
   _kernel_swi(OS_Write0,&reg,&reg);
   _kernel_swi(OS_NewLine,&reg,&reg);
 }
-/*
- * cli_handler
- */
-_kernel_oserror *
-module_cli(const char *arg_string,int arg_count,int cmd_no,void *pw)
+
+/******************************************************************************
+  cli_handler
+ ******************************************************************************/
+_kernel_oserror *module_cli ( const char *arg_string, int arg_count,
+                              int cmd_no, void *pw)
 {
   switch (cmd_no)
   {
     case CMD_SCInterInfo :
       my_printf("   State       : %d",state);
       my_printf("   Entry trans : %d",entry_trans);
+      my_printf("   Card type   : %d",current_card_type);
 
       break;
   }
   return (NULL);
 }
 
-/*
- * module finalise
- */
-_kernel_oserror *
-module_finalise(int fatal, int podule, void *pw)
+/******************************************************************************
+  module finalise
+ ******************************************************************************/
+_kernel_oserror *module_finalise(int fatal, int podule, void *pw)
 {
   _kernel_oserror *err = NULL;
 
@@ -335,8 +338,12 @@ module_finalise(int fatal, int podule, void *pw)
 
   ERR_RETURN(err,release_vectors());
 
-  debug_printf(db,"(5) finalisation");
+#ifdef debug
+  printf("SCINTERFACE: finalisation");
+#endif
+#ifdef REMOTE_DEBUG
   remote_debug_close(db);
+#endif
 
 #ifdef USE_TINY
   if ( TinyError == NULL ) _swix( TinySupport_Die, 0 );
@@ -348,11 +355,11 @@ module_finalise(int fatal, int podule, void *pw)
   NOT_USED( podule );
 }
 
-/*
- * module initialise
- */
-_kernel_oserror *
-module_initialise(const char *cmd_tail, int podule_base, void *pw)
+/******************************************************************************
+  module initialise
+ ******************************************************************************/
+_kernel_oserror *module_initialise ( const char *cmd_tail, int podule_base,
+                                     void *pw)
 {
   _kernel_oserror *err = NULL;
   _kernel_swi_regs reg;
@@ -380,7 +387,9 @@ module_initialise(const char *cmd_tail, int podule_base, void *pw)
   /*
    * initialise the system
    */
+#ifdef REMOTE_DEBUG
   remote_debug_open(Module_Title,&db);
+#endif
 
   ERR_RETURN(err,claim_vectors());
 
@@ -397,11 +406,10 @@ module_initialise(const char *cmd_tail, int podule_base, void *pw)
   return (NULL);
 }
 
-/*
- * module swi handler
- */
-_kernel_oserror *
-module_swi( int swi_no, _kernel_swi_regs *r, void *pw )
+/******************************************************************************
+  module swi handler
+ ******************************************************************************/
+_kernel_oserror *module_swi( int swi_no, _kernel_swi_regs *r, void *pw )
 {
   switch (swi_no+SCInterface_00)
   {
@@ -411,760 +419,113 @@ module_swi( int swi_no, _kernel_swi_regs *r, void *pw )
       else
         machine(CreateSWI,r);
       break;
+
     case SCInterface_Delete :
       if (CurrExports->card_delete == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(DeleteSWI,r);
       break;
+
     case SCInterface_Read :
       if (CurrExports->card_read == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(ReadSWI,r);
       break;
+
     case SCInterface_Write :
       if (CurrExports->card_write == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(WriteSWI,r);
       break;
+
     case SCInterface_GetATR :
       machine(GetATRSWI,r);
       break;
+
     case SCInterface_ChangeCHV :
       if (CurrExports->card_change_chv == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(ChangeCHVSWI,r);
       break;
+
     case SCInterface_EnableCHV :
       if (CurrExports->card_enable_chv == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(EnableCHVSWI,r);
       break;
+
     case SCInterface_UnBlockCHV :
       if (CurrExports->card_unblock_chv == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(UnBlockCHVSWI,r);
       break;
+
     case SCInterface_FileInfo :
       if (CurrExports->card_get_response == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(FileInfoSWI,r);
       break;
+
     case SCInterface_InternalAuth :
       if (CurrExports->card_internal_auth == NULL)
         r->r[0] = SC_NOTIMPLEMENTED;
       else
         machine(InternalAuthSWI,r);
       break;
+
     case SCInterface_Status :
       machine(StatusSWI,r);
       break;
   }
   return (NULL);
 
-  NOT_USED( pw );
+  NOT_USED( pw);
 }
 
-/*
- * copy the values in r_old into r_new only r0-r10
- */
-static void
-_copy_regs(_kernel_swi_regs *r_new, _kernel_swi_regs *r_old)
+/******************************************************************************
+  copy the values in r_old into r_new only r0-r10
+ ******************************************************************************/
+void _copy_regs(_kernel_swi_regs *r_new, _kernel_swi_regs *r_old)
 {
   int i=9;
   do { r_new->r[i] = r_old->r[i]; } while (i--);
 }
 
-/*
- * implement the state machine
- */
-void
-machine(t_transitions transition, _kernel_swi_regs *r)
-{
-  static _kernel_swi_regs entry;
-  static int files[MAX_SUBDIRS];
-  static int num_files;
-  static int current_file;
-  static int err;
-  static int offset;
-  static int chunk_size;
-  static int status_error = 0;
-  static int doing_retry = 0;
-  BYTE file_header[25];
-  BYTE resp[2];
-  int data_length;
-  int ret = SCI_SUCCESS;
-  int access_condition;
+/******************************************************************************
+  retrieve the cards ATR and try to obtain a match against the table of known
+  ATRs
 
-  if (transition!=StatusSWI)
-    debug_printf(db,"machine (%s)\n",strTransitions[transition]);
+  sets CurrExports if ATR matched.
 
-  switch (transition)
-  {
-    case Done :
-      switch (state)
-      {
-        case WaitingOpen :
-          err = open_card();
-          switch (err)
-          {
-            case SC_SUCCESS :
-              state = WaitingATR;
-              break;
-	    case SC_UNDERSTAND :
-              state = WaitingRemoval;
-              break;
-          }
-          break;
-        case WaitingATR :
-          if (get_atr() == SC_SUCCESS)
-          {
-            state = Idle;
-            module_notify(Event_CardOK,0);
-          }
-          else
-          {
-            state = WaitingRemoval;
-            module_notify(Event_CardBad,0);
-          }
-          break;
-	case Idle :
-	  /* ingore */
-	  break;
-	case SelectingDir :
-	  err=handle_response(NULL,0,&data_length,resp);
-	  if (err==SC_SUCCESS)
-	  {
-	    if (current_file == num_files-1)   /* are we on the leaf name */
-	    {
-	      switch (entry_trans)
-	      {
-	        case CreateSWI :
-	          state = Creating;
-		  ret = (*CurrExports->card_create)(card_handle,
-		      	files[current_file++],(entry.r[0]&1<<1)?1:0,entry.r[2],
-		      	entry.r[3]);
-	          break;
-	        case ReadSWI : case WriteSWI :
-	        case DeleteSWI : case FileInfoSWI :
-    	          state = SelectingFile;
-                  ret = (*CurrExports->card_select)(card_handle,
-                      	files[current_file++]);
-                  break;
-                case ChangeCHVSWI :
-                case EnableCHVSWI : case UnBlockCHVSWI :
-	      	  ret = (*CurrExports->card_select)(card_handle,
-	      	      	files[current_file++]);
-                  break;
-              }
-	    }
-	    else if (current_file == num_files) /* leaf name was a directory */
-	    {
-	      switch (entry_trans)
-	      {
-	        case ChangeCHVSWI :
-	          state = ChangingCHV;
-  		  ret = (*CurrExports->card_change_chv)(card_handle,
-  		      	entry.r[2], (char*)entry.r[3], entry.r[4],
-  		      	(char*)entry.r[5], entry.r[6]);
-	          break;
-                case EnableCHVSWI :
-                  state = EnablingCHV;
-		  ret = (*CurrExports->card_enable_chv)(card_handle,
-		      	entry.r[2],(entry.r[0]&1<<1)?1:0,(char*)entry.r[3],
-		      	entry.r[4]);
-	          break;
-                case UnBlockCHVSWI :
-                  state = UnBlockingCHV;
-   		  ret = (*CurrExports->card_unblock_chv)(card_handle,
-   		      	entry.r[2], (char*)entry.r[3],
-   		      	entry.r[4], (char*)entry.r[5], entry.r[6]);
-                  break;
-                case FileInfoSWI :
-	    	  state = GettingResponse;
-	    	  ret = (*CurrExports->card_get_response)(card_handle,
-	    	      	(int)resp[1]);
-                  if (ret == SCI_FAIL)
-            	  {
-		    err = SC_TRANSPORT;
-              	    machine(Error,r);
-                  }
-                  break;
-              }
-            }
-	    else /* change into next directory in path */
-	    {
-	      ret = (*CurrExports->card_select)(card_handle,
-	      	    files[current_file++]);
-	    }
-            if (ret == SCI_FAIL)
-            {
-              err = SC_TRANSPORT;
-              machine(Error,r);
-            }
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-
-	case SelectingFile :
-	  err=handle_response(NULL,0,&data_length,resp);
-	  if (err==SC_SUCCESS)
-	  {
-	    /*
-	     * we have successfully selected the file, get header response
-	     */
-	    debug_printf(db,"file selected\n");
-	    state = GettingResponse;
-	    ret = (*CurrExports->card_get_response)(card_handle,(int)resp[1]);
-            if (ret == SCI_FAIL)
-            {
-              err = SC_TRANSPORT;
-              machine(Error,r);
-            }
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-
-	case GettingResponse :
-	  err=handle_response(file_header,sizeof(file_header),
-	                      &data_length,resp);
-	  debug_printf(db,"(7) got response, err = %d",err);
-	  if (err==SC_SUCCESS)
-	  {
-	    /*
-	     * we have successfully get the response message, do something
-	     */
-	    switch (entry_trans)
-	    {
-              case DeleteSWI :
-	        access_condition = file_header[9]>>4 & 0xf;
-                if (access_condition==0) /* no write access cond */
-                {
-                  state = Deleting;
-                  ret = (*CurrExports->card_delete)(card_handle,
-                        files[num_files-1]);
-                }
-                else if (access_condition==15) /* never condition */
-                {
-                  err = SC_NEVERACCESS;
-                  machine(Error,r);
-                }
-                else /* access condition to deal with */
-                {
-                  state = VerifyingCHV;
-                  ret = (*CurrExports->card_verify_chv)(card_handle,
-              	      	access_condition,(char*)entry.r[5],entry.r[6]);
-                }
-                break;
-	      case ReadSWI :
-	        access_condition = file_header[8]>>4 & 0xf;
-                if (access_condition==0) /* no read access cond */
-                {
-                  state = ReadingFile;
-                  offset = 0;
-                  chunk_size = CurrExports->chunk_size;
-                  if (chunk_size>entry.r[4]) chunk_size = entry.r[4];
-
-                  ret = (*CurrExports->card_read)(card_handle,entry.r[2],
-              	      	chunk_size);
-                }
-                else if (access_condition==15) /* never condition */
-                {
-                  err = SC_NEVERACCESS;
-                  machine(Error,r);
-                }
-                else  /* access condition to deal with */
-                {
-                  state = VerifyingCHV;
-                  ret = (*CurrExports->card_verify_chv)(card_handle,
-              	      	access_condition,(char*)entry.r[5],entry.r[6]);
-                }
-                break;
-	      case WriteSWI:
-	        access_condition = file_header[8] & 0xf;
-                if (access_condition==0) /* no write access cond */
-                {
-       	          state = WritingFile;
-                  offset = entry.r[2];
-                  chunk_size = CurrExports->chunk_size;
-                  if (chunk_size>entry.r[4]) chunk_size = entry.r[4];
-
-                  ret = (*CurrExports->card_write)(card_handle, offset,
-        	        (BYTE*)(entry.r[3]+offset-entry.r[2]), chunk_size);
-        	}
-                else if (access_condition==15) /* never condition */
-                {
-                  err = SC_NEVERACCESS;
-                  machine(Error,r);
-                }
-        	else /* access condition to deal with */
-        	{
-                  state = VerifyingCHV;
-                  ret = (*CurrExports->card_verify_chv)(card_handle,
-              	      	access_condition,(char*)entry.r[5],entry.r[6]);
-        	}
-	        break;
-	      case FileInfoSWI :
-	        debug_printf(db,"(7) FileInfoSWI");
-	      	if (entry.r[0] & 1<<1) /* bit 1 populate structure */
-	      	{
-	      	  t_sc_stat *stat_ptr = (t_sc_stat*)entry.r[2];
-
-                  stat_ptr->num_files = -1;
-                  stat_ptr->num_dirs  = -1;
-                  stat_ptr->chv1_attempts = -1;
-                  stat_ptr->unblock_chv1_attempts = -1;
-	      	  stat_ptr->file = 1;        /* default to file */
-
-	      	  if (ATR.hist[0] == 7) /* schlumberger */
-	      	  {
-	      	    debug_printf(db,"(7)   schlumberger (0x%x)",file_header[6]);
-      	            stat_ptr->size = file_header[2]<<8 | file_header[3];
-		    if (file_header[6] == 0x38 || file_header[6] == 0x02)
-		    {
-	      	      stat_ptr->file = 0;        /* directory */
-	      	      stat_ptr->chv1_enabled         = (file_header[18]==0)?0:1;
-	      	      stat_ptr->unblock_chv1_enabled = (file_header[19]==0)?0:1;
-      	              stat_ptr->num_dirs  	     = file_header[14];
-      	              stat_ptr->num_files 	     = file_header[15];
-  		      stat_ptr->chv1_attempts	     = file_header[18];
-  		      stat_ptr->unblock_chv1_attempts= file_header[19];
-		    }
-	      	  }
-	      	  else
-	      	  {
-	      	    debug_printf(db,"(7)   other card (0x%x)",file_header[6]);
-      	            stat_ptr->size = file_header[2]<<8 | file_header[3];
-	      	    if (file_header[6] != 0x04) /* not file */
-	      	    {
-	      	      stat_ptr->file = 0;        /* directory */
-	      	      stat_ptr->chv1_enabled         = file_header[18]>>7;
-	      	      stat_ptr->unblock_chv1_enabled = file_header[19]>>7;
-      	              stat_ptr->num_dirs  	     = file_header[14];
-      	              stat_ptr->num_files 	     = file_header[15];
-  		      stat_ptr->chv1_attempts	     = file_header[18] & 0xf;
-  		      stat_ptr->unblock_chv1_attempts= file_header[19] & 0xf;
-	      	    }
-	      	  }
-	      	}
-	      	else
-	      	{
-  	          if (entry.r[3]>sizeof(file_header))
-  	            memcpy((char*)entry.r[2],file_header,sizeof(file_header));
-  	          else
-  	            memcpy((char*)entry.r[2],file_header,entry.r[3]);
-                }
-                sctransport_end_trans(card_handle);
-	    	state = Idle;
-	    	module_notify(Event_Complete,SC_SUCCESS);
-	        break;
-	    }
-
-            if (ret == SCI_FAIL)
-            {
-              err = SC_TRANSPORT;
-              machine(Error,r);
-            }
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-
-	case GettingAuthResponse :
-          err=handle_response((BYTE*)entry.r[5],entry.r[6],&data_length,resp);
-	  if (err==SC_SUCCESS)
-   	  {
-            sctransport_end_trans(card_handle);
-	    state = Idle;
-            module_notify(Event_Complete,SC_SUCCESS);
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-
-	case VerifyingCHV :
-	  err=handle_response(NULL,0,&data_length,resp);
-	  if (err==SC_SUCCESS || (resp[0]==0x98 && resp[1]==0x08))
-	  {
-	    debug_printf(db,"verified CHV\n");
-	    /*
-	     * we have successfully verified the CHV, do something
-	     */
-	    switch (entry_trans)
-	    {
-              case DeleteSWI :
-                state = Deleting;
-                ret = (*CurrExports->card_delete)(card_handle,
-                      files[num_files-1]);
-	      case ReadSWI :
-	        state = ReadingFile;
-	        offset = 0;
-	        chunk_size = CurrExports->chunk_size;
-	        if (chunk_size>entry.r[4]) chunk_size = entry.r[4];
-
-	        ret = (*CurrExports->card_read)(card_handle,entry.r[2],
-	              chunk_size);
-	        break;
-	      case WriteSWI :
-	        state = WritingFile;
-	        offset = entry.r[2];
-	        chunk_size = CurrExports->chunk_size;
-	        if (chunk_size>entry.r[4]) chunk_size = entry.r[4];
-
-	        ret = (*CurrExports->card_write)(card_handle, offset,
-	               (BYTE*)(entry.r[3]+offset-entry.r[2]), chunk_size);
-	        break;
-	    }
-            if (ret == SCI_FAIL)
-            {
-              err = SC_TRANSPORT;
-              machine(Error,r);
-            }
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-
-	case Creating : case Deleting :
-	case ChangingCHV : case EnablingCHV : case UnBlockingCHV :
-	  err=handle_response(NULL,0,&data_length,resp);
-	  if (err==SC_SUCCESS)
-	  {
-            sctransport_end_trans(card_handle);
-	    state = Idle;
-	    module_notify(Event_Complete,SC_SUCCESS);
-	  }
-	  else
-	    machine(Error,r);
-
-	  break;
-
-	case ReadingFile :
-	  err=handle_response((BYTE*)(entry.r[3]+offset),chunk_size,
-	     &data_length,resp);
-	  if (err == SC_SUCCESS)
-	  {
-	    offset+=chunk_size;
-	    if (offset>=entry.r[4])  /* have we finished reading yet */
-	    {
-              sctransport_end_trans(card_handle);
-	      state = Idle;
-	      module_notify(Event_Complete,SC_SUCCESS);
-	    }
-	    else
-	    {
-	      chunk_size = CurrExports->chunk_size;
-	      if (entry.r[4]-offset<chunk_size) chunk_size = entry.r[4]-offset;
-
-	      ret = (*CurrExports->card_read)(card_handle,entry.r[2]+offset,
-	      	    chunk_size);
-              if (ret == SCI_FAIL)
-              {
-                err = SC_TRANSPORT;
-                machine(Error,r);
-              }
-	    }
-  	  }
-  	  else
-  	    machine(Error,r);
-	  break;
-	case WritingFile :
-	  err=handle_response(NULL,0,&data_length,resp);
-	  if (err==SC_SUCCESS)
-	  {
-	    offset+=chunk_size;
-	    if (offset>=entry.r[4])  /* have we finished writing yet */
-	    {
-              sctransport_end_trans(card_handle);
-	      state = Idle;
-	      module_notify(Event_Complete,SC_SUCCESS);
-	    }
-	    else
-	    {
-	      chunk_size = CurrExports->chunk_size;
-	      if (offset+chunk_size>entry.r[4]) chunk_size = entry.r[4]-offset;
-	      ret = (*CurrExports->card_write)(card_handle, offset,
-	            (BYTE*)(entry.r[3]+offset-entry.r[2]), chunk_size);
-              if (ret == SCI_FAIL)
-              {
-                err = SC_TRANSPORT;
-                machine(Error,r);
-              }
-	    }
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-	case WaitingInternalAuth :
-	  err=handle_response(NULL,0,&data_length,resp);
-	  if (err==SC_SUCCESS)
-	  {
-	    /*
-	     * authentication complete, now need to fetch the stuff
-	     */
- 	    state = GettingAuthResponse;
-	    ret = (*CurrExports->card_get_response)(card_handle,(int)resp[1]);
-            if (ret == SCI_FAIL)
-            {
-              err = SC_TRANSPORT;
-              machine(Error,r);
-            }
-	  }
-	  else
-	    machine(Error,r);
-	  break;
-        default :
-          debug_printf(db,"Ilegal state (%s) in Done\n",strState[state]);
-	  state = Idle;
-          break;
-      }
-      break;
-    /*
-     * end of Done
-     */
-    case Error :
-      /*
-       * special chimpanzee error handling
-       */
-      if ((err==SC_WRONGCLASS) && (ATR.hist[0]==0x7))
-      {
-        debug_printf(db,"Chimpanzee processing !!!!");
-        switch (entry_trans)
-        {
-          case ChangeCHVSWI :
-            debug_printf(db,"   change chv re-direction");
-            state = ChangingCHV;
-            ChimpanzeeClassByte = 0xf0;
-            ret = (*CurrExports->card_change_chv)(card_handle,entry.r[2],
-              (char*)entry.r[3], entry.r[4],(char*)entry.r[5], entry.r[6]);
-            ChimpanzeeClassByte = 0xa0;
-            break;
-          case UnBlockCHVSWI :
-            debug_printf(db,"   unblock chv re-direction");
-            state = UnBlockingCHV;
-            ChimpanzeeClassByte = 0xf0;
-  	    ret = (*CurrExports->card_unblock_chv)(card_handle,entry.r[2],
-  	      (char*)entry.r[3], entry.r[4], (char*)entry.r[5], entry.r[6]);
-            ChimpanzeeClassByte = 0xa0;
-            break;
-        }
-        if (ret == SCI_FAIL)
-        {
-          err = SC_TRANSPORT;
-          machine(Error,r);
-        }
-        break;
-      }
-      /*
-       * otherwise
-       */
-      if (err == 0)
-      {
-        err = SC_TRANSPORT;
-        ret = sctransport_error(card_handle);
-      }
-
-      status_error = err;
-      sctransport_end_trans(card_handle);
-      sctransport_close(card_handle);
-      debug_printf(db,"error 0x%x state (%s) entry (%s) ret %d\n",
-      	    err,strState[state],strTransitions[entry_trans],ret);
-
-      module_notify(Event_Complete,err);
-      state = WaitingOpen;
-      machine(Done,r);
-      break;
-
-    case Removed :
-      module_notify(Event_CardRemoved,0);
-      sctransport_close(card_handle);
-      card_handle = -1;
-      state = WaitingOpen;
-      machine(Done,r);
-      break;
-
-    case ReStart :
-      module_notify(Event_CardRemoved,0);
-      card_handle = -1;
-      state = WaitingOpen;
-      machine(Done,r);
-      break;
-
-    case TransEnd :
-      switch (state)
-      {
-        case WaitingTrans :
-          state = Idle;
-          doing_retry = 1;
-          machine(entry_trans,&entry);
-          break;
-      }
-      break;
-    case GetATRSWI :
-      debug_printf(db,"(7) state = %d",state);
-      switch (state)
-      {
-        case WaitingOpen : case WaitingATR :
-      	  r->r[0] = SC_NOCARD;
-      	  r->r[1] = 0;
-      	  break;
-      	default :
-      	  debug_printf(db,"(7) returning atr, atr len = %d",ATR.len);
-      	  if (ATR.len>0)
-      	  {
-      	    int i;
-      	    for (i=0; i<ATR.len; i++)
-      	      debug_printf(db,"(7)    ATR[%d] : 0x%x\n",i,ATR.hist[i]);
-      	  }
-      	  r->r[0] = SC_SUCCESS;
-      	  r->r[1] = (int)&ATR;
-      }
-      break;
-    case CreateSWI : case DeleteSWI : case ReadSWI :  case WriteSWI :
-    case EnableCHVSWI : case UnBlockCHVSWI : case FileInfoSWI :
-    case ChangeCHVSWI :
-      switch (state)
-      {
-        case Idle :
-	  debug_printf(db,"entered via %s",strTransitions[transition]);
-          entry_trans = transition; /* remember transition for later */
-          if (!doing_retry)
-            err = path_process((char*)r->r[1],files,&num_files);
-          else
-            err = SC_SUCCESS;
-
-          doing_retry = 0;
-          if (err == SC_SUCCESS)
-          {
-            _copy_regs(&entry,r);
-            state = SelectingDir;
-            ret = sctransport_start_trans(card_handle);
-            if (ret == SCI_SUCCESS)
-            {
-              current_file = 0;
-              ret = (*CurrExports->card_select_root)(card_handle);
-              if (ret == SCI_FAIL)
-              {
-                err = SC_TRANSPORT;
-                machine(Error,r);
-              }
-            }
-            else
-            {
-              ret = sctransport_error(card_handle);
-              if (ret == SCI_E_TRANS)
-              {
-                /* card locked against transactions, back off */
-                state = WaitingTrans;
-              }
-            }
-          }
-          break;
-        case WaitingOpen : case WaitingATR :
-      	  err = SC_NOCARD;
-      	  break;
-        case WaitingRemoval :
-      	  err = SC_UNDERSTAND;
-      	  break;
-        default :
-          err = SC_BUSY;
-          break;
-      }
-      r->r[0] = err;
-      break;
-
-    case InternalAuthSWI :
-      switch (state)
-      {
-        case Idle :
-          entry_trans = transition; /* remember transition for later */
-          doing_retry = 0;
-          if (err == SC_SUCCESS)
-          {
-            _copy_regs(&entry,r);
-            state = WaitingInternalAuth;
-            ret = sctransport_start_trans(card_handle);
-            if (ret == SCI_SUCCESS)
-            {
-      	      ret = (*CurrExports->card_internal_auth)(card_handle,
-      	      entry.r[2], (BYTE*)entry.r[3], entry.r[4]);
-              if (ret == SCI_FAIL)
-              {
-                err = SC_TRANSPORT;
-                machine(Error,r);
-              }
-            }
-            else
-            {
-              ret = sctransport_error(card_handle);
-              if (ret == SCI_E_TRANS)
-              {
-                /* card locked against transactions, back off */
-                state = WaitingTrans;
-              }
-            }
-          }
-          break;
-        case WaitingOpen : case WaitingATR :
-      	  err = SC_NOCARD;
-      	  break;
-        case WaitingRemoval :
-      	  err = SC_UNDERSTAND;
-      	  break;
-        default :
-          err = SC_BUSY;
-          break;
-      }
-      r->r[0] = err;
-      break;
-    case StatusSWI :
-      if (status_error!=0)
-        r->r[0] = StatusError;
-      else
-      {
-        switch (state)
-        {
-          case WaitingOpen : case WaitingATR :
-            r->r[0] = StatusNoCard;
-            break;
-          case Idle :
-            r->r[0] = StatusIdle;
-            break;
-          default :
-            r->r[0] = StatusBusy;
-        }
-      }
-      r->r[1] = status_error;
-      status_error=0;
-      break;
-  }
-}
-
-/*
- * retrieve the cards ATR and try to obtain a match against the table of known
- * ATRs
- *
- * sets CurrExports if ATR matched.
- *
- * will return SC_SUCCESS if ATR matches, SCFS otherwise
- */
-int
-get_atr(void)
+  will return SC_SUCCESS if ATR matches, SCFS otherwise
+ ******************************************************************************/
+int get_atr(void)
 {
   int iCard,i;
   int iMisMatch;
   int ret;
 
   ret=sctransport_retrieve_atr(card_handle,ATR.hist,sizeof(ATR.hist),&ATR.len);
-  debug_printf(db,"(7) ATR length %d\n",ATR.len);
+#ifdef debug
+  printf("SCINTERFACE: ATR length %d\n",ATR.len);
+#endif
+#ifdef MINIJIS_CARD
+  /* if theres no atr then its a minijis :-) */
+  if ( ATR.len >=0)
+  {
+    iCard =3;
+    CurrExports = CardExports[iCard];
+    current_card_type = iCard;
+    return (SC_SUCCESS);
+  }
+#endif
   if (ret == SCI_SUCCESS)
   {
     for (iCard=0; iCard<SUPPORTED_CARDS; iCard++)
@@ -1181,6 +542,7 @@ get_atr(void)
       if (iMisMatch == 0)
       {
         CurrExports = CardExports[iCard];
+        current_card_type = iCard;
         return (SC_SUCCESS);
       }
     }
@@ -1188,34 +550,55 @@ get_atr(void)
   return (SC_UNDERSTAND);
 }
 
+/******************************************************************************
+  attempt to open a smart card connection
 
-/*
- * attempt to open a smart card connection
- *
- * will return SC_SUCCESS for success, SC_TRANSPORT for SCTransport errors,
- * SC_UNDERSTAND for unrecognised card.
- */
-int
-open_card(void)
+  will return SC_SUCCESS for success, SC_TRANSPORT for SCTransport errors,
+  SC_UNDERSTAND for unrecognised card.
+ ******************************************************************************/
+int open_card(void)
 {
   int ret;
   int err;
 
+  current_card_type = -1;
   CurrExports = NULL;
 
   ret = sctransport_open(1,&card_handle);
+#ifdef debug
+  printf("SCINTERFACE: open card channel result %d\n", ret);
+#endif
+  if (ret==SCI_FAIL)
+  {
+    err = sctransport_error(card_handle);
+#ifdef debug
+    printf("SCINTERFACE: open card channel returned error %d\n", err);
+#endif
+    if (err==SCI_FAIL)
+      return (SC_TRANSPORT);
+  }
+
+#ifdef debug
+  printf("SCINTERFACE: opened card channel %d\n",card_handle);
+#endif
+#ifdef wibble
+  ret =sctransport_start_trans( card_handle);
   if (ret==SCI_FAIL)
   {
     err = sctransport_error(card_handle);
     if (err==SCI_FAIL)
       return (SC_TRANSPORT);
   }
-
-  debug_printf(db,"opened card channel %d\n",card_handle);
+#endif
+#ifdef debug
+  printf("SCINTERFACE: started transport (ret:%d)\n", ret);
+#endif
 
   if (ret==SCI_FAIL && err!=SCI_E_OUT)
   {
-    debug_printf(db,"don't understand card\n");
+#ifdef debug
+    printf("SCINTERFACE: don't understand card\n");
+#endif
     card_handle = -1;
     return (SC_UNDERSTAND);
   }
@@ -1223,13 +606,12 @@ open_card(void)
   return (SC_SUCCESS);
 }
 
-/*
- * does a read response into the given data area and checks the response
- * codes against the ones given. Returns success if response codes match.
- * response code should be -1 to ignore.
- */
-int
-handle_response(BYTE *card_data, int data_len, int *length, BYTE resp[2])
+/******************************************************************************
+  does a read response into the given data area and checks the response
+  codes against the ones given. Returns success if response codes match.
+  response code should be -1 to ignore.
+ ******************************************************************************/
+int handle_response(BYTE *card_data, int data_len, int *length, BYTE resp[2])
 {
   int ret;
   int i,j;
@@ -1241,12 +623,17 @@ handle_response(BYTE *card_data, int data_len, int *length, BYTE resp[2])
   if (ret != SCI_SUCCESS)
   {
     ret = sctransport_error(card_handle);
-    debug_printf(db,"(7) sctransport_error %d (0x%x)",ret,ret);
+#ifdef debug
+    printf("SCINTERFACE: sctransport_error %d (0x%x)",ret,ret);
+#endif
     if (ret != SCI_E_TRUNC) /* ignore truncation errors */
       return (SC_TRANSPORT);
   }
 
-  debug_printf(db,"(7) received response %02x %02x\n",resp[0],resp[1]);
+#ifdef debug
+  printf("SCINTERFACE: received response %02x %02x\n",resp[0],resp[1]);
+#endif
+  /* printf("  Received response %02x %02x\n", resp[0], resp[1]); */
 
   swA = resp[0]<<8 | resp[1];
 
@@ -1268,7 +655,10 @@ handle_response(BYTE *card_data, int data_len, int *length, BYTE resp[2])
     if (match >= req_match)
       return (CurrExports->card_responses[i].err);
   }
-  debug_printf(db,"(7) response 0x%x unknown\n",swA);
+#ifdef debug
+  printf("SCINTERFACE: response 0x%x unknown\n",swA);
+#endif
+  /* printf("  Unknown response.\n"); */
 
   return (SC_UNKNOWNRESP);
 }
