@@ -102,6 +102,8 @@ o.filewatch: Documents.def.filewatch
 	${RM} viafile
 	${WIPE} Defmod ~cr
 
+o.main o.handlers: h.modhdr
+
 #
 # RISC OS ROM build rules:
 #
