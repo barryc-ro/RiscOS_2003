@@ -699,9 +699,9 @@ peepgen: peepgen.c jopcode.h mcdpriv.h
 	$(CC) -o peepgen peepgen.c
 
 clean:
-	-rm ${OBJALL}
-	-rm ${TARGET} peepgen genhdrs
-	-rm $(DERIVED)
+	-rm -f ${OBJALL}
+	-rm -f ${TARGET} peepgen genhdrs
+	-rm -f $(DERIVED)
 	@echo cleaned ${TARGET}
 
 realclean: clean

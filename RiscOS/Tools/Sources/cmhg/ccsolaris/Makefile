@@ -42,10 +42,10 @@ ${COMPONENT}: $(EXTLIB1)
 	@echo "Made ${COMPONENT}"
 
 clean:
-	-rm ${OBJALL}
-	-rm ${COMPONENT}
-	-rm $(DERIVED)
-	-rm $(DERIVED_SRC)
+	-rm -f ${OBJALL}
+	-rm -f ${COMPONENT}
+	-rm -f $(DERIVED)
+	-rm -f $(DERIVED_SRC)
 	@echo cleaned ${COMPONENT}
 
 realclean: clean
