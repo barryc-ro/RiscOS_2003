@@ -58,9 +58,9 @@ ABSSYM		= RISC_OSLib:o.AbsSym
 
 LIBS            = ${FLEXLIB} ${RLIB}
 
-DEPEND		= -depend !Depend ${THROWBACK}
+DEPEND          = -depend !Depend ${THROWBACK}
 DBGFLAGS        = -DTRACE
-DEFINES         = -DTEST_RELEASE
+DEFINES         = -DTEST_RELEASE -DINCLUDES_AS_INCLUDES
 
 ASFLAGS		= ${DEPEND}
 CFLAGS		= -c -ffah -Wc -zM -zps0 ${INCLUDES} ${DEFINES} ${DEPEND}

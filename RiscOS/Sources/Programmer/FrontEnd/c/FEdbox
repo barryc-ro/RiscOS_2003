@@ -19,6 +19,8 @@
  *           19-Dec-94: IDJ: AQU-00596 - quit frontend task on cancel click on dbox
  *
  *           11-May-01: ADH: corrected single typo in comment :-)
+ *           15-Jun-01: ADH: lots of fixes, extensions, etc., including adjust-click
+ *                           on Cancel leaving dbox open
  */
 
 #include <stdlib.h>
@@ -269,27 +271,64 @@ static void FEdbox__cancel(void)
       {
          /* --- restore saved buffer --- */
          if (icon->save_buffer != 0)
-            dbox_setfield(application.setup->d, icon->number, icon->save_buffer);
+         {
+            char *temp = FEmem_alloc(wi->data.indirecttext.bufflen);
+
+            dbox_getfield(application.setup->d, icon->number, temp, wi->data.indirecttext.bufflen);
+
+            if (strcmp(temp, icon->save_buffer))
+            {
+               FEmem_free(temp);
+               dbox_setfield(application.setup->d, icon->number, icon->save_buffer);
+            }
+            else FEmem_free(temp);
+         }
       }
       /* --- click/autorepeat --- */
       else if (is_click(wi) || is_autorepeat(wi))
       {
          if ((icon->flags & (IF_ARROWUP | IF_ARROWDOWN)) == 0)
          {
-             int old_flag = icon->flags & IF_SELECTED;
+            /* Must be careful when restoring flags. We can't just overwrite the flags
+             * with the saved flags as that'll leave the front end's idea of what is
+             * going on inconsistent - e.g. a selection lower down the icon list
+             * has greyed out stuff higher up, this gets cancelled, but we've already
+             * set the flags to say thost earlier items are not greyed (whether or not
+             * they really are) so the anti-flicker code doesn't update the display.
+             *
+             * Hence we rely on knowing the only flag modifications from the front end
+             * are for selection and fading, and deal with those directly; fading can
+             * only be done by selections, thus by running the selection rules as
+             * required the fading should take care of itself (just as if the user
+             * clicked on the relevant buttons in the front end manually, to restore it
+             * to its initial state).
+             */
 
-             /* --- restore saved flags --- */
-             icon->flags = icon->save_flags;
-             if (icon->flags & IF_SELECTED)
-             {
-                dbox_setnumeric(application.setup->d, icon->number, 1);
-                if (old_flag == 0) do_on_actions((void *)icon, IS_ICON);
-             }
-             else
-             {
-                dbox_setnumeric(application.setup->d, icon->number, 0);
-                if (old_flag != 0) do_off_actions((void *)icon, IS_ICON);
-             }
+            if (icon->flags != icon->save_flags)
+            {
+               int old_flag = icon->flags & IF_SELECTED;
+
+               if ((icon->save_flags & IF_SELECTED) != 0)
+               {
+                  dbox_setnumeric(application.setup->d, icon->number, 1);
+
+                  if (old_flag == 0)
+                  {
+                     icon->flags |= IF_SELECTED;
+                     do_on_actions((void *)icon, IS_ICON);
+                  }
+               }
+               else
+               {
+                  dbox_setnumeric(application.setup->d, icon->number, 0);
+
+                  if (old_flag != 0)
+                  {
+                     icon->flags &= ~IF_SELECTED;
+                     do_off_actions((void *)icon, IS_ICON);
+                  }
+               }
+            }
          }
       }
       icon = icon->next;
@@ -338,9 +377,12 @@ static void FEdbox__initial_state(void)
 
    icon = application.setup->icons;
 
+   /* --- now run default values through --- */
+
+   icon = application.setup->icons;
+
    while (icon != 0)
    {
-      /* --- see what sort of icon it is in the template --- */
       wi = icon_num_to_pointer("SetUp", icon->number);
 
       /* --- indirect text - writeable --- */
@@ -375,26 +417,84 @@ static void FEdbox__initial_state(void)
          {
             int dft_value;
 
-            if (!(application.flags & AF_MAKE))
-               dft_value = icon->dft_value.integer;
-            else
-               dft_value = icon->make_dft_value.integer;
-
-            /* --- since we assume all icons 'off' by default, IF_DEFAULT_GIVEN *must* be set
-                      if dft_value is non-zero, so this will always run 'on' rules; it will,
-                      however, only run 'off' rules if an explicit 'off' default was listed
-                      in the defaults section.
-            */
             if ((icon->flags & IF_DEFAULT_GIVEN) != 0)
             {
-               dbox_setnumeric(application.setup->d, icon->number, dft_value);
-
-               if (dft_value == 1)
-               {
-                  icon->flags |= IF_SELECTED;
-                  do_on_actions(icon, IS_ICON);
-               }
+               if (!(application.flags & AF_MAKE))
+                  dft_value = icon->dft_value.integer;
                else
+                  dft_value = icon->make_dft_value.integer;
+            }
+            else dft_value = 0;
+
+            dbox_setnumeric(application.setup->d, icon->number, dft_value);
+
+            if (dft_value == 1)
+            {
+               icon->flags |= IF_SELECTED;
+               do_on_actions(icon, IS_ICON);
+            }
+            else
+            {
+               BOOL skip_rules = FALSE;
+
+               if ((icon->flags & IF_SELECTED) == 0)
+               {
+                  Frontend_deselection * desel = icon->deselections;
+
+                  /* Running 'off' rules is complex. Suppose the icon is part of a radio group,
+                   * for example, and items in this radio group when selected grey out other
+                   * items. To run the 'off' rules we first must unwind the 'on' rules for
+                   * inclusions and exclusions, which would ungrey (include) the items that the
+                   * radio would have excluded (greyed). However, should we do this for each
+                   * 'off' item in the radio group, we'll skew the ungrey count for the items
+                   * heavily and they would never get greyed out again. We need to recognise a
+                   * radio group and only run 'on' rules, then. To do this, consider each item
+                   * in the 'on' rule deselection list. For each of those items, do they also
+                   * have an 'on' rule deselection that deselects *this* icon? If so, clearly
+                   * only one of those icons may be 'on' at a time => radio group.
+                   */
+
+                  while (desel != NULL && skip_rules == FALSE)
+                  {
+                     /* --- is this an icon? --- */
+
+                     if (desel->menu_or_icon == IS_ICON)
+                     {
+                        Frontend_icon * icurrent = find_icon(desel->deselect);
+
+                        if (icurrent != NULL)
+                        {
+                           Frontend_deselection * dcurrent = icurrent->deselections;
+
+                           while (dcurrent != NULL)
+                           {
+                              /* --- does this item list an icon with the same number? --- */
+
+                              if (dcurrent->menu_or_icon == IS_ICON)
+                              {
+                                 Frontend_icon * dicurrent = find_icon(dcurrent->deselect);
+
+                                 if (dicurrent != NULL && dicurrent->number == icon->number)
+                                 {
+                                    skip_rules = TRUE;
+                                    break;
+                                 }
+                              }
+
+                              dcurrent = dcurrent->next;
+                           }
+                        }
+                     }
+
+                     /* --- examine next thing in the 'on' deselections list --- */
+
+                     desel = desel->next;
+                  }
+               }
+
+               /* --- so, run the 'off' rules? --- */
+
+               if (skip_rules == FALSE)
                {
                   icon->flags &= ~IF_SELECTED;
                   do_off_actions(icon, IS_ICON);
@@ -453,7 +553,7 @@ static void FEdbox__events(dbox d, void *handle)
         /* --- revert to previous options and close box --- */
         FEdbox__cancel();
         FEmenus_setup_cancel();
-        dbox_hide(d);
+        if (!dbox_persist()) dbox_hide(d);
         /* IDJ: 19-Dec-94: bug-fix AQU-00596 */
         if (application.flags & AF_MAKE) exit(EXIT_SUCCESS);  /* !!! close dbox from make, we must exit */
         break;
