@@ -165,10 +165,6 @@ static struct
 #define ErrorNumber_BuffOverflow 0x1E5
 #endif
 
-#ifdef GENERIC
-#define ST3520Video_PRISMID 0x03009001
-#endif
-
 /********************/
 /* Public functions */
 /********************/
@@ -392,13 +388,12 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
       static prism_function_table_clock_to_decoder_t my_table;
       if (!my_table_initialised++)
       {
-//        my_table =
-//        {
-//          .SpeedChange = static_Veneers->static_SpeedChange
-//        }
-        my_table.SpeedChange = static_Veneers->static_SpeedChange;
+        my_table = (prism_function_table_clock_to_decoder_t)
+        {
+          .SpeedChange = static_Veneers->static_SpeedChange
+        };
       }
-      _swix (PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 0, ST3520Video_PRISMID, &Stream, Stream.clock_handle, &my_table, 0, &Stream.clock);
+      _swix (PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 0, ST3520Video_PRISMID, &Stream, Stream.clock_handle, &my_table, 50, &Stream.clock);
     }
   }
   if (!e)
@@ -484,6 +479,14 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, mpeg_stream_handle_t 
       {
         Stream.video.prefill_state = ps_searching_for_first_sequence_header;
         dprintf (("Video", "SWIFullPackets: video.prefill_state = searching_for_first_sequence_header\n"));
+        static const unsigned char sequence_header_payload [] = { 0, 0, 1, 0xb3 };
+        Stream.sequence_header_packet = (const bitstream_packet_t)
+        {
+          .start = sequence_header_payload,
+          .length = sizeof sequence_header_payload,
+          .mpeg_start = true,
+          .full_length_unknown = true
+        };
         Stream.seqhdrsearch_stage = unlocked;
       }
       else
@@ -512,6 +515,14 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, mpeg_stream_handle_t 
       }
       if (packets->length == 0)
       {
+        if (packets->PTS_valid)
+        {
+          /* Transfer the timestamp(s) to the sequence header packet */
+          Stream.sequence_header_packet.PTS_valid = true;
+          Stream.sequence_header_packet.DTS_valid = packets->DTS_valid;
+          Stream.sequence_header_packet.PTS = packets->PTS;
+          Stream.sequence_header_packet.DTS = packets->DTS;
+        }
         packets = MiscAsm_FreePacket (packets);
       }
       if (Stream.seqhdrsearch_stage == b3)
@@ -519,12 +530,8 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, mpeg_stream_handle_t 
         /* We've found the sequence header */
         /* To compensate for the fact that we've skipped the real sequence header start code, */
         /* now insert a dedicated packet that contains only a sequence header start code      */
-        static bitstream_packet_t sequence_header_packet; /* initialises to zero */
-        static const unsigned char sequence_header_payload [4] = { 0, 0, 1, 0xb3 };
-        sequence_header_packet.start = sequence_header_payload;
-        sequence_header_packet.length = 4;
-        sequence_header_packet.link = Stream.video.packet_list_head;
-        Stream.video.packet_list_head = Stream.video.packet_list_tail = &sequence_header_packet;
+        Stream.sequence_header_packet.link = Stream.video.packet_list_head;
+        Stream.video.packet_list_head = Stream.video.packet_list_tail = &Stream.sequence_header_packet;
         /* Update state machine */
         Stream.video.prefill_state = ps_initialising;
         dprintf (("Video", "SWIFullPackets: video.prefill_state = initialising\n"));
@@ -1513,6 +1520,10 @@ static _kernel_oserror *static_VideoStart (void)
   }
   Stream.video.first_PTS.msb = 0x80; /* flag that no PTS has been found yet */
   Stream.video.first_PTS.lsw = 0;
+#ifdef GENERIC
+  Stream.video.first_DTS.msb = 0x80;
+  Stream.video.first_DTS.lsw = 0;
+#endif
   Stream.prev_picture_structure = ps_frame_picture;
   Stream.current_picture_structure = ps_frame_picture_extension; /* magic value should start off all types of clips correctly */
   Stream.vid_flags.default_intra_quantizer_matrix_loaded = false;
@@ -1536,6 +1547,9 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.vid_flags.eos_callback_requested = false;
 #if SkipDataAfterDiscontinuity
   Stream.vid_flags.skipping_data_after_discontinuity = false;
+#endif
+#ifdef GENERIC
+  Stream.vid_flags.clock_session_begun = false;
 #endif
   Stream.fields_till_next_AU = -1; /* can't accidentally take value +1 before display is properly initialised */
   Stream.consecutive_pipeline_stalls = 0;
@@ -1592,19 +1606,6 @@ static _kernel_oserror *static_VideoStart (void)
   /* Claim interrupts */
   IRQ_EnableCommonIRQs ();
   IRQ_EnableVideoPrefillIRQs ();
-  
-#ifdef GENERIC
-  if (Module_UseGenericAudio)
-  {
-    union
-    {
-      program_element_structure_t *stream;
-      stream_handle_t handle;
-    } work_round_not_being_able_to_cast_from_address_of_struct_to_struct
-    = { &Stream };
-    e = Stream.clock->BeginSession (1, ST3520Video_PRISMID, work_round_not_being_able_to_cast_from_address_of_struct_to_struct.handle, Stream.clock_handle, 0 /* should be vbv_delay!!! */);
-  }
-#endif
   
   return e;
 }

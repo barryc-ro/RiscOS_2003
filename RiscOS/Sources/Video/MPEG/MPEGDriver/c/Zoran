@@ -39,6 +39,7 @@ Date		Who	Change
 #include "PCompos.h"
 #include "RecogMPA.h"
 #include "RecogAC3.h"
+#include "Stuffing.h"
 #include "Zoran.h"
 #include "ZoranPara.h"
 #include "ZoranUcode.h"
@@ -117,11 +118,60 @@ static void (*CallEvery_Veneer) (void);
 #define ZCMD_SETSTC       ((7<<10) | (0x17<<5) |  (0<<0))
 #define ZCMD_PLLTAB       ((6<<10) | (0x18<<5) |  (0<<0))
 #define ZCMD_PLLCFG       ((1<<10) | (0x19<<5) |  (1<<0))
-#define ZCMD_GETPTC       ((0<<10) | (0x1A<<5) |  (0<<0))
+#define ZCMD_GETPTC       ((0<<10) | (0x1A<<5) |  (8<<0))
 
 /********************/
 /* Public functions */
 /********************/
+
+void Zoran_CheckTime(unsigned int *ptc, unsigned int *stc);
+void Zoran_CheckTime(unsigned int *ptc, unsigned int *stc)
+{
+  zoran_interface_t *zoran = Interfaces;
+  char response[8];
+  zoran->command(ZCMD_GETPTC, 0, response);
+  *ptc = (response[0] << 24) | (response[1] << 16) | (response[2] << 8) | response[3];
+  *stc = (response[4] << 24) | (response[5] << 16) | (response[6] << 8) | response[7];
+}
+
+_kernel_oserror *Zoran_BodgePlay(uint32_t flags, uint32_t event_handle);
+_kernel_oserror *Zoran_BodgePlay(uint32_t flags, uint32_t event_handle)
+{
+  IGNORE(flags);
+  zoran_interface_t *zoran = (zoran_interface_t *) event_handle;
+  _kernel_oserror *e = Zoran_Start(0, zoran);
+  typedef struct
+  {
+    unsigned int magic;
+    
+    control_stream_handle_t csh;
+    stream_handle_t clock_handle;
+    stream_flags_t s_flags;
+    reset_stream_flags_t rs_flags;
+    audio_parameters_structure_t audio_parms;
+    a_v_state_t audio;
+    struct {
+      unsigned muted: 1;
+      unsigned eos_callback_requested: 1;
+      unsigned suppress_sync_to_stream: 1;
+    } aud_flags;
+    unsigned int volume;
+    int audio_resync_delay;
+    int discarded_audio_bit_buffer_data; /* for use in ResetStream */
+    int audio_buffer_prefill;
+    int audio_buffer_low_water_mark;
+    int audio_buffer_high_water_mark;
+    
+    unsigned int current_data_type;
+    bool commenced;
+    protocol_fns_t *decoder;
+    void *decoder_session_id;
+  }
+  audio_structure_t;
+  audio_structure_t *stream = (audio_structure_t *) zoran->toplevelhandle;
+  if (!e) stream->audio.state = stream_open;
+  return e;
+}
 
 /******	Zoran_Init() *******************************************************
 
@@ -188,8 +238,6 @@ _kernel_oserror *Zoran_Init (zoran_interface_t *zoran)
     };
     char SETIO_Params [4] = { 0x23, 0x23, 0x23, 0x03 };
     char result [4]; /* general result buffer */
-    
-    zoran->completeop (false);
     
     /* The BOOT command does not work from the parallel interface!! */
     /* We have developed the following set of pokes to replace it */
@@ -429,21 +477,16 @@ _kernel_oserror *Zoran_EstablishMPA (unsigned int flags, stream_handle_t clock_h
     static prism_function_table_clock_to_decoder_t my_table;
     if (!my_table_initialised++)
     {
-//      my_table =
-//      {
-//        zoran->veneers->ClockCorrection,
-//        zoran->veneers->SpeedChange,
-//        zoran->veneers->ActivateSyncControl,
-//        zoran->veneers->GetBufferLength,
-//        zoran->veneers->AdjustRate
-//      };
-      my_table.ClockCorrection = zoran->veneers->ClockCorrection;
-      my_table.SpeedChange = zoran->veneers->SpeedChange;
-      my_table.ActivateSyncControl = zoran->veneers->ActivateSyncControl;
-      my_table.GetBufferLength = zoran->veneers->GetBufferLength;
-      my_table.AdjustRate = zoran->veneers->AdjustRate;
+      my_table = (prism_function_table_clock_to_decoder_t)
+      {
+        zoran->veneers->ClockCorrection,
+        zoran->veneers->SpeedChange,
+        zoran->veneers->ActivateSyncControl,
+        zoran->veneers->GetBufferLength,
+        zoran->veneers->AdjustRate
+      };
     }
-    _swix(PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 1, zoran->prism_id, zoran, clock_handle, &my_table, 10, &zoran->clock);
+    e = _swix(PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 1, zoran->prism_id, zoran, clock_handle, &my_table, 10, &zoran->clock);
   }
   return e;
 }
@@ -477,21 +520,16 @@ _kernel_oserror *Zoran_EstablishAC3 (unsigned int flags, stream_handle_t clock_h
     static prism_function_table_clock_to_decoder_t my_table;
     if (!my_table_initialised++)
     {
-//      my_table =
-//      {
-//        zoran->veneers->ClockCorrection,
-//        zoran->veneers->SpeedChange,
-//        zoran->veneers->ActivateSyncControl,
-//        zoran->veneers->GetBufferLength,
-//        zoran->veneers->AdjustRate
-//      };
-      my_table.ClockCorrection = zoran->veneers->ClockCorrection;
-      my_table.SpeedChange = zoran->veneers->SpeedChange;
-      my_table.ActivateSyncControl = zoran->veneers->ActivateSyncControl;
-      my_table.GetBufferLength = zoran->veneers->GetBufferLength;
-      my_table.AdjustRate = zoran->veneers->AdjustRate;
+      my_table = (prism_function_table_clock_to_decoder_t)
+      {
+        zoran->veneers->ClockCorrection,
+        zoran->veneers->SpeedChange,
+        zoran->veneers->ActivateSyncControl,
+        zoran->veneers->GetBufferLength,
+        zoran->veneers->AdjustRate
+      };
     }
-    _swix(PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 1, zoran->prism_id, zoran, clock_handle, &my_table, 5, &zoran->clock);
+    e = _swix(PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 1, zoran->prism_id, zoran, clock_handle, &my_table, 5, &zoran->clock);
   }
   return e;
 }
@@ -550,14 +588,11 @@ _kernel_oserror *Zoran_Commence (unsigned int flags, void *session_id)
   e = zoran->characteriser->commence (flags, zoran->characteriserhandle);
   if (!e)
   {
-    e = zoran->clock->BeginSession (0, zoran->prism_id, *(stream_handle_t *) &zoran, zoran->clockhandle, 0);
-  }
-  if (!e)
-  {
     zoran->howmuchdata = static_HowMuchData;
     zoran->givemedata = static_GiveMeData;
     zoran->flag_characterising = true;
     zoran->flag_receivingcharacterisationdata = false;
+    zoran->flag_clocksessionbegun = false;
     zoran->block_queue_head = NULL;
     zoran->block_queue_tail = NULL;
   }
@@ -576,7 +611,10 @@ _kernel_oserror *Zoran_Discontinue (unsigned int flags, void *session_id)
 {
   zoran_interface_t *zoran = session_id;
   _kernel_oserror *e = NULL;
-  e = zoran->clock->EndSession (0, zoran->prism_id, *(stream_handle_t *) &zoran, zoran->clockhandle);
+  if (zoran->flag_clocksessionbegun)
+  {
+    e = zoran->clock->EndSession (0, zoran->prism_id, *(stream_handle_t *) &zoran, zoran->clockhandle);
+  }
   if (!e)
   {
     e = zoran->characteriser->discontinue (flags, zoran->characteriserhandle);
@@ -618,8 +656,6 @@ _kernel_oserror *Zoran_DataAvailable (unsigned int flags, void *session_id)
       unsigned int samplerate = 32000; /* default in case of error */
       zoran->characteriser->readstreaminfo (zoran->characteriserhandle, 2, &samplerate);
       
-      zoran->completeop (false);
-      
       static_SetSPDIF (zoran, samplerate);
       
 {
@@ -628,6 +664,7 @@ _kernel_oserror *Zoran_DataAvailable (unsigned int flags, void *session_id)
   char TVOL_Params [4] = { 2, 0x07, 0xFF, 0xFF };
   char TENABLE_Params [4] = { 0, 0, 0, 0x30 };
   char SPDIFENABLE_Params [4] = { 0, 0, 0, 0x87 }; /* 85=PCM 87=AC3 */
+  /* bodge */ SPDIFENABLE_Params[3] = 0x8F;
 ////  zoran->command (ZCMD_PARAM_1, DVOL_Params, 0);
 //  zoran->command (ZCMD_PARAM_2, PVOL_Params, 0);
 //  zoran->command (ZCMD_PARAM_1, TVOL_Params, 0);
@@ -641,9 +678,36 @@ _kernel_oserror *Zoran_DataAvailable (unsigned int flags, void *session_id)
       
       if (zoran->flag_started)
       {
-char scratch;
-        zoran->command (ZCMD_PLAY+1, 0, &scratch);
-        zoran->command (ZCMD_UNMUTE, 0, &scratch);
+    mpeg_time_t stc;
+    zoran->clock->StreamInfo(12, zoran->clockhandle, &stc);
+    static struct
+    {
+      unsigned : 5;           unsigned SCU: 1;        unsigned AVS: 1;        unsigned : 1;
+      unsigned STC_31_24: 8;
+      unsigned STC_23_16: 8;
+      unsigned STC_15_8: 8;
+      unsigned STC_7_0: 8;
+      unsigned VDY_15_8: 8;
+      unsigned VDY_7_0: 8;
+    }
+    SETSTC_Params =
+    {
+      1, 0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    };
+    SETSTC_Params.STC_31_24 = stc.word.lo >> 24;
+    SETSTC_Params.STC_23_16 = stc.word.lo >> 16;
+    SETSTC_Params.STC_15_8 = stc.word.lo >> 8;
+    SETSTC_Params.STC_7_0 = stc.word.lo;
+    zoran->command (ZCMD_SETSTC, (const char *) &SETSTC_Params, 0);
+        zoran->command (ZCMD_PLAY, 0, 0);
+        zoran->command (ZCMD_UNMUTE, 0, 0);
+        _swix (OS_CallEvery, _INR(0,2), 1, CallEvery_Veneer, zoran); /* eventually use this for polling underrun state */
       }
     }
   }
@@ -670,10 +734,33 @@ _kernel_oserror *Zoran_ConsumeData (unsigned int flags, void *session_id, const 
   if ((length != 14 && length != 9) /* won't have 19-byte PES headers (PTS+DTS) for audio */
     || start[0] != 0 || start[1] != 0 || start[2] != 1)
   {
-    zoran->characteriser->consumedata (0, zoran->characteriserhandle, start, length, &not_consumed_by_characteriser);
+    e = zoran->characteriser->consumedata (0, zoran->characteriserhandle, start, length, &not_consumed_by_characteriser);
+  }
+  else
+  {
+    if (!zoran->flag_clocksessionbegun)
+    {
+      bool pts_present = (length == 14);
+      mpeg_time_t pts;
+      if (pts_present)
+      {
+        const PES_header_t *hdr = (const PES_header_t *) start;
+        pts.word.lo = hdr->PTS_6_0 | (hdr->PTS_14_7 << 7) | (hdr->PTS_21_15 << 15) | (hdr->PTS_29_22 << 22) | (hdr->PTS_32_30 << 30);
+        pts.word.hi = hdr->PTS_32_30 >> 2;
+      }
+      e = zoran->clock->BeginSession (0, zoran->prism_id, *(stream_handle_t *) &zoran, zoran->clockhandle, 0, pts_present ? &pts : 0);
+/* BODGE */
+  static uint32_t delay = 60000;
+  zoran->clock->SetEvent(1, zoran->prism_id, (uint32_t) zoran, zoran->clockhandle, zoran->veneers->BodgePlay, &delay);
+/* END BODGE*/
+      if (!e)
+      {
+        zoran->flag_clocksessionbegun = true;
+      }
+    }
   }
   
-  if (zoran->flag_characterising)
+  if (!e && zoran->flag_characterising)
   {
     /* Still need more data - queue this block locally */
     block_header_t *newblock = malloc (sizeof (block_header_t) + length);
@@ -696,7 +783,7 @@ _kernel_oserror *Zoran_ConsumeData (unsigned int flags, void *session_id, const 
     }
     *not_consumed = 0;
   }
-  else
+  else if (!e)
   {
     /* Don't send me any more - leave current block queued at buffer manager */
     *not_consumed = length;
@@ -971,10 +1058,36 @@ _kernel_oserror *Zoran_Start (unsigned int flags, void *session_id)
   _kernel_oserror *e = NULL;
   if (!zoran->flag_characterising) /* else we have to wait! */
   {
-    zoran->completeop (false);
+    mpeg_time_t stc;
+    zoran->clock->StreamInfo(12, zoran->clockhandle, &stc);
+    static struct
+    {
+      unsigned : 5;           unsigned SCU: 1;        unsigned AVS: 1;        unsigned : 1;
+      unsigned STC_31_24: 8;
+      unsigned STC_23_16: 8;
+      unsigned STC_15_8: 8;
+      unsigned STC_7_0: 8;
+      unsigned VDY_15_8: 8;
+      unsigned VDY_7_0: 8;
+    }
+    SETSTC_Params =
+    {
+      1, 0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    };
+    SETSTC_Params.STC_31_24 = stc.word.lo >> 24;
+    SETSTC_Params.STC_23_16 = stc.word.lo >> 16;
+    SETSTC_Params.STC_15_8 = stc.word.lo >> 8;
+    SETSTC_Params.STC_7_0 = stc.word.lo;
+    zoran->command (ZCMD_SETSTC, (const char *) &SETSTC_Params, 0);
     zoran->command (ZCMD_PLAY, 0, 0);
     zoran->command (ZCMD_UNMUTE, 0, 0);
-    _swix (OS_CallEvery, _INR(0,2), 1, CallEvery_Veneer, zoran);
+    _swix (OS_CallEvery, _INR(0,2), 1, CallEvery_Veneer, zoran); /* eventually use this for polling underrun state */
   }
   zoran->flag_started = true;
   return e;
@@ -994,7 +1107,6 @@ _kernel_oserror *Zoran_Stop (unsigned int flags, void *session_id)
   zoran_interface_t *zoran = session_id;
   _kernel_oserror *e = NULL;
   _swix (OS_RemoveTickerEvent, _INR(0,1), CallEvery_Veneer, zoran);
-  zoran->completeop (true);
   zoran->command (ZCMD_STOPF, 0, 0);
   zoran->flag_started = false;
   return e;
@@ -1083,7 +1195,6 @@ _kernel_oserror *Zoran_Peek (const char *arg_string, zoran_interface_t *zoran)
   }
   if (!e)
   {
-    zoran->completeop (false);
     PEEK_Params [0] = address >> 16;
     PEEK_Params [1] = address >> 8;
     PEEK_Params [2] = address >> 0;
@@ -1118,7 +1229,6 @@ _kernel_oserror *Zoran_Poke (const char *arg_string, zoran_interface_t *zoran)
   }
   if (!e)
   {
-    zoran->completeop (false);
     POKE_Params [0] = address >> 16;
     POKE_Params [1] = address >> 8;
     POKE_Params [2] = address >> 0;
@@ -1163,7 +1273,6 @@ _kernel_oserror *Zoran_VCXO (const char *arg_string, zoran_interface_t *zoran)
 printf ("Lo, Hi = %08X, %08X\n", lo, hi);
   if (!e)
   {
-    zoran->completeop (false);
     VCXO_Params.LO_MSB = lo >> 8;
     VCXO_Params.LO_LSB = lo;
     VCXO_Params.HI_MSB = hi >> 8;

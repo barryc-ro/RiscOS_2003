@@ -201,6 +201,9 @@ Date		Who	Change
 #include "Registers.h"
 #include "STi3520L.h"
 #include "Types.h"
+#ifdef GENERIC
+#include "Video.h"
+#endif
 #include "WSS.h"
 
 #include "Debug.h"
@@ -484,6 +487,13 @@ void IRQ_HandleVideoIRQ (void)
   }
   threaded++;
 #endif
+  
+  uint8_t old_IRQMSKA = *(uint8_t *) (IOC + IOCIRQMSKA);
+  uint8_t old_IRQMSKB = *(uint8_t *) (IOC + IOCIRQMSKB);
+  *(uint8_t *) (IOC + IOCIRQMSKA) = IOMDr_printer_IRQ_bit;
+  *(uint8_t *) (IOC + IOCIRQMSKB) = 0;
+  _kernel_irqs_on();
+  
   do
   {
     video_ints = VID_ITS;
@@ -585,6 +595,11 @@ void IRQ_HandleVideoIRQ (void)
   /* triggered, but already serviced within an interrupt handler (having been */
   /* detected by using reads from VID_STA rather than VID_ITS). */
   while (video_ints != 0);
+  
+  _kernel_irqs_off();
+  *(uint8_t *) (IOC + IOCIRQMSKA) = old_IRQMSKA;
+  *(uint8_t *) (IOC + IOCIRQMSKB) = old_IRQMSKB;
+  
 #if Debugging==1 && DebugReentrancy==1
   _kernel_irqs_off(); /* in case they've been enabled! */
   threaded--;
@@ -1066,7 +1081,16 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
   dprintf (("IRQ", "INT_VS%c\n", field ? 'T' : 'B'));
   
   /* Latch STC as soon as possible after receipt of VSync interrupt */
-  Stream.video.latched_STC = Clk_ReadRawSTC ();
+#ifdef GENERIC
+  if (Module_UseGenericAudio)
+  {
+    Stream.clock->StreamInfo(12, Stream.clock_handle, (mpeg_time_t *) &Stream.video.latched_STC);
+  }
+  else
+#endif
+  {
+    Stream.video.latched_STC = Clk_ReadRawSTC ();
+  }
   
 #ifdef DEBUGLIB
   {
@@ -1223,23 +1247,28 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
           AUD_PLY = 0;
         }
       }
-      /* If video speed has changed since the last PU, restart the audio slow-motion state machine */
-      if (Stream.fields_into_this_PU == 0)
+#ifdef GENERIC
+      if (!Module_UseGenericAudio)
+#endif
       {
-        if (Stream.video.speed_indicator != Stream.audio.speed_indicator)
+        /* If video speed has changed since the last PU, restart the audio slow-motion state machine */
+        if (Stream.fields_into_this_PU == 0)
         {
-          /* First adjust the reference timestamps so that we get a smooth transition between speeds */
-          clk new_reference_PCR = Clk_ConvertSTCtoPCR (Stream.video.latched_STC);
-          Stream.reference_PCR = new_reference_PCR;
-          Stream.reference_STC = Stream.video.latched_STC;
-          /* Then actually change the audio state */
-          Stream.audio.speed_indicator = Stream.video.speed_indicator;
-          Stream.audio_slowmo_field_count = 0;
-          if (!Stream.aud_flags.recovering_from_underrun)
+          if (Stream.video.speed_indicator != Stream.audio.speed_indicator)
           {
-            AUD_PLY = 1;
+            /* First adjust the reference timestamps so that we get a smooth transition between speeds */
+            clk new_reference_PCR = Clk_ConvertSTCtoPCR (Stream.video.latched_STC);
+            Stream.reference_PCR = new_reference_PCR;
+            Stream.reference_STC = Stream.video.latched_STC;
+            /* Then actually change the audio state */
+            Stream.audio.speed_indicator = Stream.video.speed_indicator;
+            Stream.audio_slowmo_field_count = 0;
+            if (!Stream.aud_flags.recovering_from_underrun)
+            {
+              AUD_PLY = 1;
+            }
+            IRQ_UpdateMuteState ();
           }
-          IRQ_UpdateMuteState ();
         }
       }
     }
@@ -1310,8 +1339,8 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
           /* Check to see if lipsync has to be done - only if there's audio in the stream, */
           /* and we're playing at normal speed, and a skip/repeat isn't already pending    */
 #ifdef GENERIC
-          if (!Module_UseGenericAudio
-              && Stream.rs_flags.audio_present && Stream.video.fast_slow_state == fss_normal_speed
+          if ((Module_UseGenericAudio || Stream.rs_flags.audio_present)
+              && Stream.video.fast_slow_state == fss_normal_speed
               && Stream.display_frames->PTS_valid && !Stream.s_flags.no_lip_sync)
 #else
           if (Stream.rs_flags.audio_present && Stream.video.fast_slow_state == fss_normal_speed
@@ -1320,7 +1349,11 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
           {
             /* Check PTS of display frame, to see if we need to set a pending skip or repeat */
             presentation_error old_presentation_error = Stream.video_presentation_error;
-            Stream.video_PTS_error = Clk_Subtract (Clk_ConvertSTCtoPCR (Stream.video.latched_STC), Stream.display_frames->PTS);
+            Stream.video_PTS_error = Clk_Subtract (
+#ifdef GENERIC
+                Module_UseGenericAudio ? Stream.video.latched_STC :
+#endif
+                Clk_ConvertSTCtoPCR (Stream.video.latched_STC), Stream.display_frames->PTS);
             dprintf (("IRQ", "INT_VS: PTS_error = %c%08X\n", Stream.video_PTS_error.msb ? '1' : '0', Stream.video_PTS_error.lsw));
             if (Clk_Greater (Stream.video_PTS_error, one_frame_time))
             {
@@ -2300,6 +2333,41 @@ static void static_ProcessVideoPictureHdr (void)
   Stream.last_video_header_layer_decoded = lvhld_picture;
   Stream.vid_flags.sequence_header_received_since_picture_header = false;
   Stream.vid_flags.gop_header_received_since_picture_header = false;
+  
+#ifdef GENERIC
+  if (Module_UseGenericAudio && !Stream.vid_flags.clock_session_begun)
+  {
+    union
+    {
+      program_element_structure_t *stream;
+      stream_handle_t handle;
+    } work_round_not_being_able_to_cast_from_address_of_struct_to_struct
+    = { &Stream };
+    uint32_t delay;
+    if (Stream.decode_frames->lastpic->vbv_delay == 0xFFFF)
+    {
+      if (Stream.decode_frames->seq.bit_rate == 0)
+      {
+        delay = 0;
+      }
+      else
+      {
+        delay = Stream.decode_frames->seq.vbv_buffer_size / Stream.decode_frames->seq.bit_rate;
+      }
+    }
+    else
+    {
+      delay = Stream.decode_frames->lastpic->vbv_delay;
+    }
+    mpeg_time_t *first_dts = (mpeg_time_t *) &Stream.video.first_DTS;
+    if (Stream.video.first_DTS.msb == 0x80)
+    {
+      first_dts = NULL;
+    }
+    Stream.clock->BeginSession (1, ST3520Video_PRISMID, work_round_not_being_able_to_cast_from_address_of_struct_to_struct.handle, Stream.clock_handle, delay, first_dts);
+    Stream.vid_flags.clock_session_begun = true;
+  }
+#endif
 }
 
 /******	static_ProcessVideoPictureCodingExt() ******************************
