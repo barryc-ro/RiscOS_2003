@@ -1,0 +1,438 @@
+/*---------------------------------------------------------------------------*/
+/* File:    c.pinboard                                                       */
+/* Purpose: Non WIMP, but Pinboard specific code                             */
+/* Author:  Richard Leggett                                                  */
+/* History: 31-Oct-97: RML: Begun.                                           */
+/*                                                                           */
+/* Copyright © 1997 Acorn Computers Ltd., Cambridge, UK.                     */
+/*---------------------------------------------------------------------------*/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+#include "toolbox.h"
+#include "sprite.h"
+#include "common.h"
+#include "gadgets.h"
+#include "defines.h"
+
+#define JPEG_FileInfo         0x49981
+#define JPEG_PlotFileScaled   0x49983
+
+/*---------------------------------------------------------------------------*
+ * texture_into_sprite                                                       *
+ *                                                                           *
+ * Plot a texture sprite into a sprite in the client sprite area of the app. *
+ *                                                                           *
+ * In: client_sprite_are -> application's client_sprite_area                 *
+ *     filename -> texture filename                                          *
+ *     sprite_into -> name of sprite in client sprite area we're plotting    *
+ *                    into.                                                  *
+ *---------------------------------------------------------------------------*/
+
+_kernel_oserror* texture_into_sprite(int* client_sprite_area, char* filename, char* name, char* sprite_into)
+{
+    _kernel_oserror *e;
+    int             *tile;
+    char            *dest_sprite;
+    char            *tile_sprite;
+    char            *ctrans;
+    int              areasize, x, y, xeig, yeig;
+    int              tile_w, tile_h, into_w, into_h;
+
+    _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 4, &xeig);
+    _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 5, &yeig);
+
+    e = sprite_size_of_spritearea(filename, &areasize);
+    if (e) return e;
+    
+    tile = malloc(areasize);
+    if (!tile) return common_error(messages_lookup("NotEnoughMemory"));
+
+    e = sprite_init_and_load(filename, tile, areasize);
+
+    if (!e)
+    {
+        if (name==0) tile_sprite = (char*)tile + 16;
+        else e = sprite_find_address_of(tile, name, &tile_sprite);
+    }
+    
+    if (!e) e = sprite_return_size((char*)tile, tile_sprite, &tile_w, &tile_h);
+    if (!e) e = sprite_find_address_of(client_sprite_area, sprite_into, &dest_sprite);
+    if (!e) e = sprite_return_size(client_sprite_area, dest_sprite, &into_w, &into_h);
+    if (!e) e = sprite_generate_colourtrans32((char*)tile, tile_sprite, &ctrans);
+    if (!e) e = sprite_output_to_sprite(client_sprite_area, dest_sprite);
+
+    if (e)
+    {
+        if (ctrans) free(ctrans);
+        free(tile);
+        return e;
+    }
+
+    /* Tile the tile (!) into the sprite */
+    for (y=0; y<into_h; y+=tile_h)
+    {
+        for (x=0; x<into_w; x+=tile_w)
+        {
+            error_trap(_swix(OS_SpriteOp, _INR(0,7),
+                                          512+Sprite_PutScaled,
+                                          (char*)tile, tile_sprite,
+                                          x<<xeig, y<<yeig, 32, 0, ctrans) ,0);
+        }
+    }
+
+    error_trap(sprite_output_back_to_screen(), 0);
+
+    free(ctrans);
+    free(tile);
+
+    return NULL;
+}
+    
+
+/*---------------------------------------------------------------------------*
+ * do_custom_image_sprite                                                    *
+ *                                                                           *
+ * Plots a copy of the user's custom image (if a sprite) into a sprite. It   *
+ * will also tile, scale, centre etc.                                        *
+ *                                                                           *
+ * In: client_sprite_area -> application's client sprite area.               *
+ *     custom_filename -> filename of the custom image.                      *
+ *     type = type of backdrop (scaled, tiled, centred).                     *
+ *     bgcol = colour of background chosen.                                  *
+ *---------------------------------------------------------------------------*/
+
+_kernel_oserror* do_custom_image_sprite(int* client_sprite_area, char* custom_filename, int type, int bgcol)
+{
+    _kernel_oserror *e;
+    int             *tile;
+    char            *dest_sprite;
+    char            *ctrans;
+    int             *sprite_data;
+    int              areasize;
+    int              tile_w, tile_h, into_w, into_h, i;
+    int              scale_factor[4];
+
+    /* If the user hasn't yet dragged on a file, then we do nothing */
+    if (custom_filename[0] == 0) return NULL;
+
+    /* Claim memory needed for spritefile */
+    e = sprite_size_of_spritearea(custom_filename, &areasize);
+    if (e) return e;
+    tile = malloc(areasize);
+    if (!tile) return common_error(messages_lookup("NotEnoughMemory"));
+
+    /* Load the file, find the size of the two sprites we're dealing with, */
+    /* generate a colourtrans table and direct output to the destination sprite */
+    e = sprite_init_and_load(custom_filename, tile, areasize);
+    if (!e) e = sprite_return_size((char*)tile, (char*)tile+16, &tile_w, &tile_h);
+    if (!e) e = sprite_find_address_of(client_sprite_area, "cust_tile", &dest_sprite);
+    if (!e) e = sprite_return_size(client_sprite_area, dest_sprite, &into_w, &into_h);
+    if (!e) e = sprite_generate_colourtrans32((char*)tile, (char*)tile + 16, &ctrans);
+    if (!e) e = sprite_output_to_sprite(client_sprite_area, dest_sprite);
+
+    if (e)
+    {
+        if (ctrans) free(ctrans);
+        free(tile);
+        return e;
+    }
+
+    /* If tiling the backdrop... */
+    if (type == TiledRadioButton)
+    {
+        int x, y, xeig, yeig;
+        
+        e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 4, &xeig);
+        e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 5, &yeig);
+
+        for (y=0; y<into_h; y+=tile_h)
+        {
+            for (x=0; x<into_w; x+=tile_w)
+            {
+                error_trap(_swix(OS_SpriteOp, _INR(0,7),
+                                              512+Sprite_PutScaled,
+                                              (char*)tile, (char*)tile + 16,
+                                              x<<xeig, y<<yeig, 32, 0, ctrans) ,0);
+            }
+        }
+    }
+
+    /* If scaling the backdrop... */
+    else if (type == ScaledRadioButton)
+    {
+        scale_factor[0] = into_w;
+        scale_factor[1] = into_h;
+        scale_factor[2] = tile_w;
+        scale_factor[3] = tile_h;
+        error_trap(_swix(OS_SpriteOp, _INR(0,7),
+                                      512+Sprite_PutScaled,
+                                      (char*)tile, (char*)tile + 16,
+                                      0, 0, 32, scale_factor, ctrans) ,0);
+    }
+
+    /* If centred image on backdrop... */
+    else if (type == CentredRadioButton)
+    {
+        /* Fill in the background of the sprite */        
+        sprite_data = (int*) (dest_sprite + 44);
+        for (i=0; i < (into_w*into_h); i++) sprite_data[i] = bgcol>>8;
+        
+        /* Plot the image in the centre of the sprite, scaled to leave a small border */
+        scale_factor[0] = into_w-16;
+        scale_factor[1] = into_h-16;
+        scale_factor[2] = tile_w;
+        scale_factor[3] = tile_h;
+        error_trap(_swix(OS_SpriteOp, _INR(0,7),
+                                      512+Sprite_PutScaled,
+                                      (char*)tile, (char*)tile + 16,
+                                      16, 16, 32, scale_factor, ctrans) ,0);
+
+    }
+
+    /* Direct output back to screen and free memory */
+    error_trap(sprite_output_back_to_screen(), 0);
+    free(ctrans);
+    free(tile);
+
+    return NULL;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * do_custom_image_jpeg                                                      *
+ *                                                                           *
+ * Plots a copy of the user's custom image (if a JPEG) into a sprite. It     *
+ * will also tile, scale, centre etc.                                        *
+ *                                                                           *
+ * In: client_sprite_area -> application's client sprite area.               *
+ *     custom_filename -> filename of the custom image.                      *
+ *     type = type of backdrop (scaled, tiled, centred).                     *
+ *     bgcol = colour of background chosen.                                  *
+ *---------------------------------------------------------------------------*/
+
+_kernel_oserror* do_custom_image_jpeg(int* client_sprite_area, char* custom_filename, int type, int bgcol)
+{
+    _kernel_oserror *e;
+    char *dest_sprite;
+    int  *sprite_data;
+    int   into_w, into_h, tile_w, tile_h, i;
+    int   scale_factor[4];
+    
+    /* If the user hasn't yet dragged on a file, then we do nothing */
+    if (custom_filename[0] == 0) return NULL;
+
+    e = sprite_find_address_of(client_sprite_area, "cust_tile", &dest_sprite);
+    if (!e) e = sprite_return_size(client_sprite_area, dest_sprite, &into_w, &into_h);
+    if (!e) e = _swix(JPEG_FileInfo, _INR(0,1)|_OUTR(2,3), 1, custom_filename, &tile_w, &tile_h);
+    if (!e) e = sprite_output_to_sprite(client_sprite_area, dest_sprite);
+    if (e) return e;
+
+    /* If tiling the backdrop... */
+    if (type == TiledRadioButton)
+    {
+        int x, y, xeig, yeig;
+        
+        e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 4, &xeig);
+        e = _swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 5, &yeig);
+
+        for (y=0; y<into_h; y+=tile_h)
+        {
+            for (x=0; x<into_w; x+=tile_w)
+            {
+                error_trap(_swix(JPEG_PlotFileScaled, _INR(0,4), custom_filename, x<<xeig, y<<yeig, 0, 0), 0);
+            }
+        }
+    }
+
+    /* If scaling the backdrop... */
+    else if (type == ScaledRadioButton)
+    {
+        scale_factor[0] = into_w;
+        scale_factor[1] = into_h;
+        scale_factor[2] = tile_w;
+        scale_factor[3] = tile_h;
+        error_trap(_swix(JPEG_PlotFileScaled, _INR(0,4), custom_filename, 0, 0, scale_factor, 0), 0);
+    }
+
+    /* If centred image on backdrop... */
+    else if (type == CentredRadioButton)
+    {
+        /* Fill in the background of the sprite */
+        sprite_data = (int*) (dest_sprite + 44);
+        for (i=0; i < (into_w*into_h); i++) sprite_data[i]=bgcol>>8;
+        
+        /* Plot the image in the centre of the sprite, scaled to leave a small border */
+        scale_factor[0] = into_w-16;
+        scale_factor[1] = into_h-16;
+        scale_factor[2] = tile_w;
+        scale_factor[3] = tile_h;
+        error_trap(_swix(JPEG_PlotFileScaled, _INR(0,4), custom_filename, 16, 16, scale_factor, 0), 0);
+    }
+
+    error_trap(sprite_output_back_to_screen(), 0);
+
+    return NULL;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * tile_filename                                                             *
+ *                                                                           *
+ * Produce the filename of the tile specified by number 'num' and flag       *
+ * 'lighter'. If the lighter is 1, but the lighter version of the tile       *
+ * doesn't exist, the darker version will be used and vice versa.            *
+ *                                                                           *
+ * In: num = tile number                                                     *
+ *     lighter = 1 if lighter version required, 0 otherwise                  *
+ *                                                                           *
+ * On exit: filename -> filename of tile sprite                              *
+ * Returns: 1 if succesful, 0 if tile not found.                             *
+ *---------------------------------------------------------------------------*/
+ 
+int tile_filename(int num, int lighter, char* filename)
+{
+    char buffer[256];
+    char darker_string[64];
+    char lighter_string[64];
+    int  darker_exists, lighter_exists, read;
+    
+    error_trap(_swix(OS_ReadVarVal, _INR(0,4)|_OUT(2), "Boot$Dir", buffer, 255, 0, 0, &read), 0);
+    strcpy(buffer + read, ".Resources.Configure.Textures.T");
+
+    sprintf(darker_string, "%s%d", buffer, num);
+    sprintf(lighter_string, "%s%dL", buffer, num);
+    error_trap(_swix(OS_File, _INR(0,1)|_OUT(0), 17, darker_string, &darker_exists), 0);
+    error_trap(_swix(OS_File, _INR(0,1)|_OUT(0), 17, lighter_string, &lighter_exists), 0);
+
+    if ((!lighter_exists) && (!darker_exists)) return 0;
+
+    if ((lighter) && (!lighter_exists)) lighter=0;
+    if ((!lighter) && (!darker_exists)) lighter=1;
+
+    if (lighter) strcpy(filename, lighter_string);
+    else strcpy(filename, darker_string);
+    
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * ignore_string                                                             *
+ *                                                                           *
+ * Decide if a string in the choices file should be ignored (because we're   *
+ * going to output an updated version)                                       *
+ *                                                                           *
+ * In: string -> the string                                                  *
+ *                                                                           *
+ * Returns: 1 if ignore, 0 not to ignore                                     *
+ *---------------------------------------------------------------------------*/
+
+static int ignore_string(char *string)
+{
+    if (strncmpa(string, "backdrop", 8)==0) return 1;
+    if (strncmpa(string, "pinboard", 8)==0) return 1;
+    
+    return 0;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * write_pinboard_choices                                                    *
+ *                                                                           *
+ * Given a *Backdrop command and a *Pinboard command, ammend the choices     *
+ * file to have these commands.                                              *
+ *                                                                           *
+ * In: backdrop_command -> *Backdrop string.                                 *
+ *     pinboard_command -> *Pinboard string.                                 *
+ *---------------------------------------------------------------------------*/
+ 
+_kernel_oserror* write_pinboard_choices(char* backdrop_command, char* pinboard_command)
+{
+    FILE *source_fp;
+    FILE *dest_fp;
+    char  string[1024];
+    int   more = 1;
+    
+    source_fp = fopen(ChoicesFile, "r");
+    dest_fp = fopen(ScrapFile, "w");
+    if (!dest_fp) return common_error(messages_lookup("ChoicesFileNotOpen"));
+        
+    /* Write the new *Pinboard and *Backdrop commands into the choices file */
+    if (strlen(pinboard_command) >9)
+    {
+        fputs(pinboard_command, dest_fp);
+        fputc(NewLine, dest_fp);
+    }
+    if (strlen(backdrop_command) >9)
+    {
+        fputs(backdrop_command, dest_fp);
+        fputc(NewLine, dest_fp);
+    }
+
+    if (source_fp)
+    {
+        /* Write out any other commands that were in the file */
+        while(more)
+        {
+            more = (int)fgets(string, 1024, source_fp);
+            if (more)
+            {
+                if (!ignore_string(string)) fputs(string, dest_fp);
+            }
+        }
+
+        fclose(source_fp);
+    }
+
+    fclose(dest_fp);
+    
+    /* Set filetype of the new file */
+    error_trap(_swix(OS_File, _INR(0, 2), 18, ScrapFile, 0xFEB), 0);
+
+    sprintf(string,"Copy %s %s A~CDF~L~N~P~Q~R~S~T~V", ScrapFile, ChoicesFile);
+    error_trap(_swix(OS_CLI, _IN(0), string), 0);
+    _swix(OS_File, _INR(0,1), 6, ScrapFile);
+
+    sprintf(string, "Filer_Run %s", ChoicesFile);
+    error_trap(_swix(OS_CLI, _IN(0), string), 0);
+
+    return NULL;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * path_is_a_standard_texture                                                *
+ *                                                                           *
+ * Given a pathname, decide if it is one of the standard textures.           *
+ *                                                                           *
+ * In: path -> pathname.                                                     *
+ *                                                                           *
+ * Returns: 1 if a standard texture, 0 otherwise.                            *
+ *                                                                           *
+ * On exit: texture_no -> number of this texture (if a standard texture)     *
+ *          is_lighter -> value of lighter (1 or 0) if this is a st. texture *
+ *---------------------------------------------------------------------------*/
+
+int path_is_a_standard_texture(char *path, int *texture_no, int *is_lighter)
+{
+    char buffer[256];
+    char *ptr;
+    int   n;
+    char  l, read;
+
+    error_trap(_swix(OS_ReadVarVal, _INR(0,4)|_OUT(2), "Boot$Dir", buffer, 255, 0, 0, &read), 0);
+    strcpy(buffer + read, ".Resources.Configure.Textures.T");
+
+    if (strncmpa(path, buffer, strlen(buffer))!=0) return 0;
+    ptr = path + (strlen(buffer));
+    sscanf(ptr, "%d%c", &n, &l);
+
+    *texture_no = n;
+    if (l == 'L') *is_lighter = 1;
+    else *is_lighter = 0;
+
+    return 1;
+}
