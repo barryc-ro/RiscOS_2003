@@ -24,7 +24,7 @@ CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit -To $@ -From
-ARMASMFLAGS = -depend !Depend -APCS 3/nofp/noswst/reent -g ${THROWBACK} -o $@
+ARMASMFLAGS = -depend !Depend -g -APCS 3/nofp/noswst -cpu 4T ${THROWBACK}
 CPFLAGS = ~cfr~v
 
 TOKENISE = tokenise
@@ -33,10 +33,15 @@ TOKENS   = Hdr:Tokens
 #
 # Program specific options:
 #
-COMPONENT = HAL
-SOURCE    = s.HAL
-TARGET    = HAL
+COMPONENT = L7200
+TARGET    = bin.L7200
+DBGTARGET = aif.L7200
+GPATARGET = gpa.L7200
 EXPORTS   = 
+
+OBJECTS   = o.Boot o.Timers o.IIC o.NVMemory o.MachineID o.Interrupts
+
+.s.o:;	${ARMASM} ${ARMASMFLAGS} $< $@
 
 #
 # Generic rules:
@@ -44,13 +49,19 @@ EXPORTS   =
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
+debug: ${GPATARGET}
+        @echo ${COMPONENT}: debug module built
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+	${RM} ROM
         ${RM} ${TARGET}
-	Wipe o.* ~C~V
+	-Wipe o.* ~C~V
+	-Wipe aif.* ~C~V
+	-Wipe gpa.* ~C~V
         @echo ${COMPONENT}: cleaned
 
 export: ${EXPORTS}
@@ -74,14 +85,16 @@ resources-: resources_common
         TokenCheck LocalRes:Messages
         print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
-${TARGET}: o.HAL
-	Link -bin -o $@ o.HAL
-        Link -bin -aif -d -entry 0 -o $@d o.HAL
-	asd2gpa $@d $@gpa
+${TARGET}: ${OBJECTS}
+	Link -bin -o $@ ${OBJECTS}
 
-o.HAL: ${SOURCE}
-	${ARMASM} ${ARMASMFLAGS} s.HAL
+${DBGTARGET}: ${OBJECTS}
+        Link -bin -aif -d -o $@ ${OBJECTS}
 
+${GPATARGET}: ${DBGTARGET}
+	ToGPA -s ${DBGTARGET} $@
 
 # Dynamic dependencies:
-o.HAL: s.HAL
+o.Boot: s.Boot Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS hdr.Hardware
+o.Interrupts: s.Interrupts Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:OSEntries hdr.StaticWS hdr.Hardware
+o.Timers: s.Timers Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:OSEntries Hdr:HALEntries hdr.StaticWS hdr.Hardware
