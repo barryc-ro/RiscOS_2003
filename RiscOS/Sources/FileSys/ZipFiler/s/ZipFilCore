@@ -9,7 +9,9 @@
 ; This code is designed to be compiled under AAsm 2.00, NOT ObjAsm.
 ; As a result, you will need "s.Registers" and "s.SWIs" to be with this file.
 
-	GET	s.AcornHdr			; Use if Acorn is building
+	GET	s.AcornHdr
+
+; Load in some of the Zip driver specific parameters
 
 ; Macros
 
@@ -46,6 +48,10 @@ LastDiscBlock	#	52					; This is the previous discs's boot block
 ZipDiscName	#	12					; This is the disc name currently in the drive
 ZipSpriteName	#	12					; The Zip sprite name ("s<spname>")
 MessageMemory	#	4					; This is a pointer to the message memory
+EjectCount	#	4					; This is the previous eject count (used to find out about discs being ejected)
+DiscPointer	#	4					; This is the pointer to the disc name
+OldPercent	#	1					; This is the previous percentage
+Dummy		#	3					; Dummy bytes
 IconBlock	#	0					; Used to create the icon
 MenuBlock	#	28*3+24*12+256				; 3 menus, 12 items, 256 bytes for indirected data
 TempBlock	#	512					; Scratch memory (including a sector)
@@ -60,6 +66,8 @@ status_nodrive	*	1
 status_nodisc	*	2
 status_disc	*	3
 status_noformat	*	4
+status_printer	*	5
+status_format	*	6
 
 ; Now the module itself
 
@@ -110,9 +118,9 @@ init	STMFD	r13!,{r14}
 init_l1	STR	r0,[r2],#4					; Clear the allocated RMA space
 	SUBS	r3,r3,#4					; Decrement count
 	BGT	init_l1						; Until it's all gone
- [ standalonemessages
+
 	BL	init_resfs
- ]
+
 	LDMFD	r13!,{lr}					; Exit...
 	BICS	pc,lr,#1<<28					; ...without causing an error
 
@@ -136,9 +144,8 @@ final	STMFD	r13!,{r14}
 
 	SWI	XZipFS_Unlock
 
- [ standalonemessages
 	BL	close_resfs
- ]
+
 	LDMFD	r13!,{lr}
 	BICS	pc,lr,#1<<28					; Exit cleanly...
 
@@ -148,12 +155,22 @@ service	TEQ	r1,#&27						; Is it a reset?
 	TEQNE	r1,#&4f						; Or FilerDying?
 	MOVNES	pc,lr						; Exit if any of these aren't occurring
 
+	LDR	r12,[r12]
+
 	TEQ	r1,#&27
 	BEQ	service_reset					; If it's reset, do it
 	TEQ	r1,#&4b
 	BEQ	service_filerstarting				; If the filer's starting, do it
 	TEQ	r1,#&4f
 	BEQ	service_filerdying				; If the filer's dying, do it
+
+service_filerstarted
+	STMFD	r13!,{r14}
+	LDR	r14,TaskHandle
+	CMP	r14,#-1
+	MOVEQ	r14,#0
+	STREQ	r14,TaskHandle
+	LDMFD	r13!,{pc}^
 
 service_filerstarting
 	STMFD	r13!,{lr}
@@ -188,7 +205,7 @@ start	LDR	r12,[r12]
 	SWIVS	XOS_Exit
 	STR	r1,TaskHandle					; Store our task handle
 
-	ADRL	r13,ZipStack+256					; Point to end of stack
+	ADRL	r13,ZipStack+256				; Point to end of stack
 
 	ADR	r0,zipfsvarname
 	SUB	r1,r13,#256					; The stack hasn't been used yet, so we'll be quite happy here!
@@ -209,8 +226,12 @@ start	LDR	r12,[r12]
 	MOVVS	r1,#0
 	ADRVS	r2,zipfsvarname
 	SWIVS	XWimp_ReportError
+	ADR	r0,zipfsiconsprites
+	SWI	XOS_CLI
 	B	zipfsvar_exists
 
+zipfsiconsprites
+	=	"IconSprites Resources:Resources.IZipFS.!Sprites",0
 zipfsvarname
 	=	"IZipFSResources$Path",0
 zipfsvardefault
@@ -219,9 +240,8 @@ zipfsvarend
 	ALIGN
 
 zipfsvar_exists
- [ standalonemessages
 	BL	init_resfs					; Initialise our ResourceFS memory
- ]
+
 	ADR	r0,zipsprite
 	ADR	r1,ZipSpriteName
 	LDMIA	r0,{r2-r6}
@@ -301,13 +321,18 @@ poll_loop
 	B	exit_program
 
 message_discchanged
+	MOV	r0,#2
+	SWI	XZipFS_DiscStatus
+	MOV	r0,#0
+	SWI	XZipFS_DiscStatus
 	MOV	r0,#0
 	STR	r0,LastDiscBlock
 	STR	r0,LastDiscBlock+20
 	STR	r0,LastDiscBlock+24
 	BL	check_discname
 	MOV	r1,#-2
-	ADR	r0,LastDiscBlock+22
+;	ADR	r0,LastDiscBlock+22
+	LDR	r0,DiscPointer
 	BL	set_icon
 	B	poll_loop
 
@@ -317,7 +342,7 @@ error_exit
 	SWI	XWimp_ReportError				; Report the error
 
 exit_program
-	BL	dismount_disc
+	SWI	XZipFS_DismountAndEject
 ;	ADRL	r0,dismount_string
 ;	SWI	XOS_CLI
 
@@ -337,10 +362,11 @@ exit_program
 	MOV	r2,#0
 	STR	r2,MessageMemory
 
-	SWI	XZipFS_Unlock
- [ standalonemessages
+;	SWI	XZipFS_Unlock
+
 	BL	close_resfs
- ]
+
+	SWI	XZipFS_DismountAndEject
 	SWI	XOS_Exit					; ...and die
 
 zipname
@@ -389,26 +415,22 @@ zipfs_string
 
 check_discname
 	STMFD	r13!,{r1-r5,lr}
-	ADR	r0,zipfs_name
-	ADR	r1,TempBlock+64
-	SWI	XZipFS_DescribeDisc				; Get the disc name
-	MOVVS	r0,#-1
-	LDMVSFD	r13!,{r1-r5,pc}
+	MOV	r0,#0
+	SWI	XZipFS_DiscStatus
+	STR	r3,DiscPointer
+	TEQ	r1,#2
+	MOVEQ	r0,#0
+	TEQ	r0,#2
+	MOVNE	r0,#-1
+	LDMNEFD	r13!,{r1-r5,pc}
 
-	ADR	r0,LastDiscBlock
-	ADR	r1,TempBlock+64
-	MOV	r2,#52
-	MOV	r5,#0
+	LDR	r2,EjectCount
+	TEQ	r4,r2
+	MOVEQ	r0,#0
+	LDMEQFD	r13!,{r1-r5,pc}
 
-chkdisc	LDR	r3,[r1],#4
-	LDR	r4,[r0]
-	STR	r3,[r0],#4
-	EOR	r4,r4,r3
-	ORR	r5,r5,r4
-	SUBS	r2,r2,#4
-	BGT	chkdisc
-
-	MOV	r0,r5
+	STR	r4,EjectCount
+	MOV	r0,#1
 	LDMFD	r13!,{r1-r5,pc}^
 
 set_icon
@@ -430,6 +452,9 @@ seticnl	LDRB	r3,[r0,r2]
 	STRB	r3,[r1,r2]
 	ADDGT	r2,r2,#1
 	BGT	seticnl
+
+;	TEQ	r5,#0
+;	LDMEQFD	r13!,{r0-r9,pc}^
 
 	STMFD	r13!,{r0-r9}
 	LDR	r9,OldZipStatus
@@ -502,10 +527,15 @@ icon_click
 	TEQ	r0,#status_disc
 	BEQ	icon_hd
 
+icon_notready
 	CMP	r0,#status_nodisc
 	ADREQ	r1,nodisc_str
 	ADRLT	r1,nodrive_str
 	ADRGT	r1,unform_str
+	TEQ	r0,#status_printer
+	ADREQ	r1,printer_str
+	TEQ	r0,#status_format
+	ADREQ	r1,format_str
 
 	ADR	r0,MessageBlock
 	MOV	r2,#0
@@ -525,28 +555,38 @@ nodrive_str
 	=	"CNoDrive",0
 unform_str
 	=	"CUnform",0
+printer_str
+	=	"CPrinter",0
+format_str
+	=	"CFormat",0
 	ALIGN
 
 icon_hd
+	SWI	XZipFS_DiscFormat
+	CMP	r0,#-1
+	MOVEQ	r0,#status_noformat
+	BEQ	icon_notready
+
 	BL	check_discname
 
-	TEQ	r0,#0						; It returns 0 for discs being named the same
-	BLNE	dismount_disc
+;	TEQ	r0,#0						; It returns 0 for discs being named the same
+;	BLNE	dismount_disc
 ;	ADRNEL	r0,dismount_string
 ;	SWINE	XOS_CLI						; Dismount the disc as it's a new disc
 
-	ADR	r0,zipfs_name
-	ADR	r1,TempBlock+64
-	SWI	XZipFS_DescribeDisc				; Get the disc details (name, etc).
-	BVS	error_pollcancel				; If there's an error, reply it, and then return
+;	ADR	r0,zipfs_name
+;	ADR	r1,TempBlock+64
+;	SWI	XZipFS_DescribeDisc				; Get the disc details (name, etc).
+;	BVS	error_pollcancel				; If there's an error, reply it, and then return
 
 	ADR	r2,TempBlock
 	ADR	r0,zipfs_root
 	MOV	r3,#255
 	BL	strcpy						; Copy the string
-	ADRL	r0,TempBlock+22+64
-	MOV	r3,#10
-	BL	strcpy2						; And the disc name
+	LDR	r0,DiscPointer
+;	ADRL	r0,TempBlock+22+64
+;	MOV	r3,#10
+	BL	strcpy						; And the disc name
 	ADRL	r0,zipfs_string
 	MOV	r3,#255
 	BL	strcpy						; And the path name
@@ -561,13 +601,13 @@ service_reset
 	STR	r14,TaskHandle					; All's fair when the machine's reset
 	LDMFD	r13!,{pc}
 
-service_filerstarted
-	STMFD	r13!,{lr}
-	LDR	r14,TaskHandle
-	CMP	r14,#-1						; Have we tried to register?
-	MOVEQ	r14,#0
-	STREQ	r14,TaskHandle					; Yes - so it must have failed
-	LDMFD	r13!,{pc}
+;service_filerstarted
+;	STMFD	r13!,{lr}
+;	LDR	r14,TaskHandle
+;	CMP	r14,#-1						; Have we tried to register?
+;	MOVEQ	r14,#0
+;	STREQ	r14,TaskHandle					; Yes - so it must have failed
+;	LDMFD	r13!,{pc}
 
 service_filerdying
 	STMFD	r13!,{r0-r1,lr}
@@ -577,6 +617,7 @@ service_filerdying
 	SWIGT	XWimp_CloseDown					; a la final code
 	MOV	r0,#0
 	STR	r0,TaskHandle					; Clear TaskHandle as we're no longer registered
+	SWI	XZipFS_DismountAndEject				; Dismount the disc while we're at it...
 	LDMFD	r13!,{r0-r1,pc}
 
 strcpy
@@ -717,17 +758,26 @@ menu_handle
 	B	exit_program
 
 dismount
-	BL	dismount_discclear
+;	ADRL	r0,filer_closestring				; Dismount the disc
+;	SWI	XOS_CLI
+;	MOV	r0,#0
+;	ADRL	r1,TaskBlock
+;	SWI	XWimp_Poll
 ;	ADRL	r0,dismount_string				; Dismount the disc
 ;	SWI	XOS_CLI
-	BVS	error_pollcancel				; Whoops
-	SWI	XZipFS_Eject					; And eject it
-	BVS	error_pollcancel
-	MOV	r1,#status_nodisc
-	BL	zip_setstatus
-	SWI	XOS_ReadMonotonicTime
-	ADD	r0,r0,#200
-	STR	r0,NextPollTime
+;	MOV	r0,#0
+;	ADRL	r1,TaskBlock
+;	SWI	XWimp_Poll
+;	BL	dismount_discclear
+;	BVS	error_pollcancel				; Whoops
+;	SWI	XZipFS_Eject					; And eject it
+;	BVS	error_pollcancel
+;	MOV	r1,#status_nodisc
+;	BL	zip_setstatus
+;	SWI	XOS_ReadMonotonicTime
+;	ADD	r0,r0,#200
+;	STR	r0,NextPollTime
+	SWI	XZipFS_DismountAndEject
 	B	menu_end
 
 menu_end
@@ -815,7 +865,8 @@ namedisk
 	BVS	error_pollcancelHG
 
 	BL	check_discname
-	ADR	r0,LastDiscBlock+22
+	LDR	r0,DiscPointer
+;	ADR	r0,LastDiscBlock+22
 	MOV	r1,#-2
 	BL	set_icon
 
@@ -981,66 +1032,55 @@ ms_data	DCD	&08000000
 	ALIGN
 
 zip_status
-;	ADR	r0,gs_command
-;	MOV	r1,#6
-;	ADR	r2,TempBlock
-;	MOV	r3,#255
-;	SWI	XPPADriver_SCSICommand
-;	TEQ	r0,#0
-;	MOVNE	r1,#status_nodrive
-;	BNE	zip_st
+	MOV	r0,#1
+	SWI	XZipFS_DiscStatus
+	TEQ	r1,#2
+	MOVEQ	r0,#3
+	TEQ	r1,#8
+	MOVEQ	r0,#4
+	STR	r3,DiscPointer
+;	MOV	r4,r1
 
-	ADR	r0,rs_command
-	ADR	r2,TempBlock
-	MOV	r1,#6
-	MOV	r3,#255
-	SWI	XPPADriver_SCSICommand
+;	TEQ	r4,#0
+;	TEQNE	r4,#1
+;	BNE	poll_loop
+
+; r0 is 0 for no device
+;	1 for no disc
+;	2 for disc present
+
 	TEQ	r0,#0
-	TEQNE	r0,#2
-	MOVNE	r1,#status_nodrive
-	BNE	zip_st
-
-	LDRB	r0,TempBlock+2
+	MOVEQ	r1,#status_nodrive
 	TEQ	r0,#1
-	BNE	not_ejecting
-
-	BL	dismount_discclear
-;	ADRL	r0,dismount_string
-;	SWI	XOS_CLI
-	SWI	XZipFS_DiscFormat
-
-	TEQ	r0,#1
-	SWIEQ	XOS_CLI					; If it's DOS format, dismount it AGAIN
-
-	SWI	XZipFS_Unlock
-	MOV	r1,#status_nodisc
-	B	zip_st
-
-not_ejecting
-	ADR	r0,ms_command
-	MOV	r1,#6
-	ADR	r2,ms_data
-	MOV	r3,#18
-	SWI	XPPADriver_SCSICommandRetries
-
-	LDRB	r0,TempBlock+3
+	MOVEQ	r1,#status_nodisc
 	TEQ	r0,#2
 	MOVEQ	r1,#status_disc
-	MOVNE	r1,#status_nodisc
+	TEQ	r0,#3
+	MOVEQ	r1,#status_printer
+	TEQ	r0,#4
+	MOVEQ	r1,#status_format
 
 zip_st	BL	zip_setstatus
 	B	poll_loop
+
+zss_closestring
+	=	"Filer_CloseDir IZipFS::",0
+	ALIGN
 
 zip_setstatus
 	STMFD	r13!,{lr}
 	SWI	XHourglass_On
 
-	TEQ	r1,#1
+	ADR	r0,zip_disc
+
+	TEQ	r1,#status_nodrive
+	TEQNE	r1,#status_printer
+	TEQNE	r1,#status_format
 	ADREQ	r0,zip_nodrive
-	TEQ	r1,#2
+	TEQ	r1,#status_nodisc
 	ADREQ	r0,zip_nodisc
-	TEQ	r1,#3
-	ADREQ	r0,zip_disc
+;	TEQ	r1,#status_disc
+;	ADREQ	r0,zip_disc
 	MOV	r9,r1
 
 ;	BNE	zss_nochangecheck
@@ -1053,14 +1093,43 @@ zip_setstatus
 ;	BNE	zip_statusset0
 
 zss_nochangecheck
+	TEQ	r1,#status_format
+	BEQ	zss_makeformat
+
 	LDR	r8,OldZipStatus
 	TEQ	r8,r1
 	BEQ	zip_statusset2
 
 	STR	r1,OldZipStatus
 
-	TEQ	r1,#status_disc
-	SWIEQ	XZipFS_Lock
+	TEQ	r1,#status_printer
+	BNE	zss_notprinter
+
+	STMFD	r13!,{r0-r5}
+	ADR	r0,zss_closestring
+	ADR	r2,TempBlock
+	MOV	r3,#255
+	BL	strcpy
+	LDR	r0,DiscPointer
+	MOV	r3,#255
+	BL	strcpy
+	ADRL	r0,zipfs_string
+	MOV	r3,#255
+	BL	strcpy
+	ADR	r0,TempBlock
+	SWI	XOS_CLI
+;	ADRL	r0,dismount_string
+;	SWI	XOS_CLI
+;	MOV	r0,#2
+;	SWI	XZipFS_DiscStatus
+	LDMFD	r13!,{r0-r5}
+
+zss_notprinter
+
+;	SWI	&20100+7
+
+;	TEQ	r1,#status_disc
+;	SWIEQ	XZipFS_Lock
 
  [ EnableAutoBoot = 1
 	TEQ	r8,#status_disc
@@ -1138,7 +1207,8 @@ zip_statusset
 	MOV	r0,#0
 	SWI	XZipFS_BootChanged
 	TEQ	r9,#status_disc
-	ADREQ	r0,LastDiscBlock+22
+	LDREQ	r0,DiscPointer
+;	ADREQ	r0,LastDiscBlock+22
 	BNE	zss_noname
 	LDRB	r1,[r0]
 	CMP	r1,#32					; Is okay as a name?
@@ -1147,9 +1217,13 @@ zip_statusset
 	MOV	r9,#status_noformat
 zss_noname
 	CMP	r9,#status_nodisc
-	ADRLT	r1,nodrive_text
-	ADREQ	r1,nodisc_text
-	ADRGT	r1,unformatted_text
+	ADRLTL	r1,nodrive_text
+	ADREQL	r1,nodisc_text
+	ADRGTL	r1,unformatted_text
+	TEQ	r9,#status_printer
+	ADREQL	r1,printer_text
+	TEQ	r9,#status_format
+	BEQ	zss_makeformat
 	ADR	r0,MessageBlock
 	MOV	r2,#0
 	MOV	r3,#0
@@ -1161,20 +1235,65 @@ zss_noname
 	MOV	r0,r2
 zss_hasname
 	BL	set_icon
+	B	zip_statusset2
+
+zss_makeformat
+	MOV	r0,#0
+	SWI	XZipFS_DiscStatus
+	MOV	r0,#100					; We want it in %ge terms
+	MUL	r0,r2,r0
+	ADD	r0,r0,#32768
+	MOV	r0,r0,LSR#16				; Right shift to make the value from 0 to 100.
+;	MOV	r0,r2
+	LDRB	r1,OldPercent
+	ADD	r2,r0,#100
+	TEQ	r2,r1
+	STRB	r2,OldPercent
+	BEQ	zip_isformatting
+	LDRB	r1,OldZipStatus
+	TEQ	r1,#status_format
+	MOV	r1,#status_format
+	STRB	r1,OldZipStatus
+	BEQ	zip_changeformat
+	ADRL	r1,TempBlock
+	MOV	r2,#512
+	SWI	XOS_ConvertInteger1
+	MOV	r0,#'%'
+	STRB	r0,[r1],#1
+	MOV	r0,#0
+	STRB	r0,[r1],#1
+	ADRL	r0,TempBlock
+	BL	set_icon
+	MOV	r0,#2
+	SWI	XZipFS_DiscStatus
+zip_isformatting
 
 zip_statusset2
 	SWI	XOS_ReadMonotonicTime
-	TEQ	r9,#status_disc
-	TEQNE	r9,#status_noformat
-	ADDEQ	r0,r0,#300				; 3 seconds for disc in drive
-	TEQ	r9,#status_nodisc
-	ADDEQ	r0,r0,#50				; 0.5 seconds for no disc
-	TEQ	r9,#status_nodrive
-	ADDEQ	r0,r0,#500				; 5 seconds for no drive
+	ADD	r0,r0,#25
 	STR	r0,NextPollTime
 
 	SWI	XHourglass_Off
 	LDMFD	r13!,{pc}
+
+zip_changeformat
+	ADRL	r1,ZipDiscName
+	MOV	r2,#512
+	SWI	XOS_ConvertInteger1
+	MOV	r0,#'%'
+	STRB	r0,[r1],#1
+	MOV	r0,#0
+	STRB	r0,[r1],#1
+	ADRL	r1,TempBlock
+	MOV	r0,#-2
+	STR	r0,[r1,#0]
+	LDR	r0,IconHandle
+	STR	r0,[r1,#4]
+	MOV	r0,#0
+	STR	r0,[r1,#8]
+	STR	r0,[r1,#8]
+	SWI	XWimp_SetIconState
+	B	zip_isformatting
 
 zipmnumb
 	DCD	ZipSWIChunk+1				; &4dd81 is Message_IZipFSStatusChanged
@@ -1185,6 +1304,8 @@ nodisc_text
 	=	"NoDisc",0
 unformatted_text
 	=	"Unformatted",0
+printer_text
+	=	"Busy",0
 
 zipbootfile
 	=	"IZipFS::0.$.__AutoBoot",0
@@ -1203,6 +1324,10 @@ free	ADR	r3,reopenblock
 reopenblock
 	DCD	20,0,0,0,&4dd83
 
+filer_closestring
+	=	"Filer_CloseDir IZipFS::0.$",0
+	ALIGN
+
 dismount_string
 	=	"-IZipFS-Dismount :0",0
 	ALIGN
@@ -1217,6 +1342,8 @@ dismount_discclear
 ddcloop	STR	r2,[r0],#4
 	SUBS	r1,r1,#4
 	BGT	ddcloop
+	MOV	r0,#2
+	SWI	XZipFS_DiscStatus
 	LDMFD	r13!,{r1-r2}
 
 ; dismount_disc just dismounts the disc (removes the icon from the iconbar)
@@ -1244,26 +1371,24 @@ showfree
 	ALIGN
 
 message_discstatus
-	LDR	r9,OldZipStatus
-	STR	r9,TaskBlock+20
-	ADR	r0,ZipDiscName
-	ADRL	r1,TaskBlock+24
-	LDMIA	r0,{r2-r7}
-	STMIA	r1,{r2-r7}
-	MOV	r0,#40
-	STR	r0,TaskBlock
-	MOV	r0,#0
-	STR	r0,TaskBlock+8
-	STR	r0,TaskBlock+12
-	LDR	r0,zipmnumb
-	STR	r0,TaskBlock+16
-	ADRL	r1,TaskBlock
-	LDR	r2,[r1,#4]
-	MOV	r0,#17
-	SWI	XWimp_SendMessage			; Send a message to say that we've changed status!
+;	LDR	r9,OldZipStatus
+;	STR	r9,TaskBlock+20
+;	ADR	r0,ZipDiscName
+;	ADRL	r1,TaskBlock+24
+;	LDMIA	r0,{r2-r7}
+;	STMIA	r1,{r2-r7}
+;	MOV	r0,#40
+;	STR	r0,TaskBlock
+;	MOV	r0,#0
+;	STR	r0,TaskBlock+8
+;	STR	r0,TaskBlock+12
+;	LDR	r0,zipmnumb
+;	STR	r0,TaskBlock+16
+;	ADRL	r1,TaskBlock
+;	LDR	r2,[r1,#4]
+;	MOV	r0,#17
+;	SWI	XWimp_SendMessage			; Send a message to say that we've changed status!
 	B	poll_loop
-
- [ standalonemessages
 
 ; ResourceFS stuff
 
@@ -1309,6 +1434,32 @@ so_basic
 eo_basic
 	ALIGN
 resfs_next2
+	DCD	resfs_next3-resfs_next2
+	DCD	&fffff947
+	DCD	&3aec562f
+	DCD	eo_spr1-so_spr1
+	DCD	3
+	=	"Resources.IZipFS.!Sprites",0
+	ALIGN
+	DCD	eo_spr1-so_spr1+4
+so_spr1
+	BIN	Resources.!Sprites
+eo_spr1
+	ALIGN
+resfs_next3
+	DCD	resfs_next4-resfs_next3
+	DCD	&fffff947
+	DCD	&3aec562f
+	DCD	eo_spr2-so_spr2
+	DCD	3
+	=	"Resources.IZipFS.!Sprites22",0
+	ALIGN
+	DCD	eo_spr2-so_spr2+4
+so_spr2
+	BIN	Resources.!Sprites22
+eo_spr2
+	ALIGN
+resfs_next4
 	DCD	0
- ]
+
 	END
