@@ -10,8 +10,8 @@
 #
 # Program specific options:
 #
-COMPONENT  = Circles !Settings
-APP        = !Settings
+COMPONENT  = Circles setup
+APP        = !SvrSetup
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 

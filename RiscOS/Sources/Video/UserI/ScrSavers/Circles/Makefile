@@ -47,9 +47,7 @@ INCLUDES = -Itbox:,C:
 
 
 FILES =\
- ${RDIR}.!Boot \
  ${RDIR}.!Run \
- ${RDIR}.!Sprites22 \
  ${RDIR}.!RunImage \
  ${LDIR}.Messages \
  ${LDIR}.Res
@@ -77,9 +75,7 @@ install: ${FILES}
          @echo
          @echo ${COMPONENT}: Creating application ${APP}
          ${MKDIR} ${INSTDIR}.${APP}
-         ${CP} ${RDIR}.!Boot      ${INSTDIR}.${APP}.!Boot      ${CPFLAGS}
          ${CP} ${RDIR}.!Run       ${INSTDIR}.${APP}.!Run       ${CPFLAGS}
-         ${CP} ${RDIR}.!Sprites22 ${INSTDIR}.${APP}.!Sprites22 ${CPFLAGS}
          ${CP} ${RDIR}.!RunImage  ${INSTDIR}.${APP}.!RunImage  ${CPFLAGS} 
          ${CP} ${LDIR}.Messages   ${INSTDIR}.${APP}.Messages   ${CPFLAGS}
          ${CP} ${LDIR}.Res        ${INSTDIR}.${APP}.Res        ${CPFLAGS}
