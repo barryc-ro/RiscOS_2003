@@ -5,61 +5,13 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 07-Mar-01  SNB          Recreated
 #
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
 COMPONENT = Desktop
-SOURCE    = s.Desktop
-TARGET    = rm.Desktop
+RESOURCEEXTRA = resources_templates
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages   ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        ${CP} LocalRes:Templates  ${RESDIR}.${COMPONENT}.Templates  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-        TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
