@@ -6,6 +6,9 @@
 #
 # 1998-08-26: BAL
 # Created
+# 1998-10-02: RDW
+# EXP_SUB_DIR added to create <LIB$DIR>.Email directory before creating Common
+# directory within it
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -13,7 +16,8 @@
 
 EXP_HDR		= <export$dir>
 LIBDIR		= <Lib$Dir>
-EXP_DIR		= <Lib$Dir>.Email.Common
+EXP_SUB_DIR	= <Lib$Dir>.Email
+EXP_DIR		= $(EXP_SUB_DIR).Common
 
 
 # ------------------------------------------------------------------------------
@@ -112,6 +116,7 @@ export_hdrs: dirs
 
 dirs:
 	$(MKDIR) $(LIBDIR)
+	$(MKDIR) $(EXP_SUB_DIR)
 	$(MKDIR) $(EXP_DIR)
 	$(MKDIR) $(EXP_DIR).h
 
