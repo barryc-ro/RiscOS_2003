@@ -66,6 +66,7 @@
 
 #include "debug.h"
 #include "module.h"
+#include "swiveneers.h"
 
 #define SIN(s) ((struct sockaddr_in *)s)
 #define SDL(s) ((struct sockaddr_dl *)s)
@@ -89,6 +90,9 @@ static	void arptfree(struct llinfo_arp *);
 static	void arptimer(void *);
 static	struct llinfo_arp *arplookup(u_long, int, int);
 static	void in_arpinput(struct mbuf *);
+#ifdef __riscos
+static	void broadcastarpreply(void *p);
+#endif
 
 #ifdef __riscos
 struct	llinfo_arp llinfo_arp;
@@ -563,10 +567,14 @@ in_arpinput(m)
 	if (isaddr.s_addr == myaddr.s_addr) {
 #ifdef __riscos
 		char buffer[80];
-		sprintf(buffer,
-			"Duplicate IP address %s! sent from ethernet address: %s",
-			inet_ntoa(isaddr), ether_sprintf(ea->arp_sha));
-		panic(buffer);
+		untimeout(broadcastarpreply, ac);
+		if (service_internetstatus_duplicate_ip_address(
+		      ac->ac_if.if_name, ac->ac_if.if_dib, isaddr, ea->arp_sha)) {
+			sprintf(buffer,
+			  "Duplicate IP address %s! sent from ethernet address: %s",
+			  inet_ntoa(isaddr), ether_sprintf(ea->arp_sha));
+			panic(buffer);
+		}
 #else
 		log(LOG_ERR,
 		    "duplicate IP address %s! sent from ethernet address: %s\n",
@@ -598,6 +606,11 @@ in_arpinput(m)
 		}
 	}
 reply:
+#ifdef __riscos
+	/* Don't respond to ARP requests if not actually up! */
+	if (ac->ac_if.if_flags & IFF_NEED_IPADDR)
+		goto out;
+#endif
 	if (op != ARPOP_REQUEST) {
 	out:
 		m_freem(m);
@@ -738,7 +751,58 @@ arp_ifinit(ac, ifa)
 	struct ifaddr *ifa;
 {
 	ac->ac_ipaddr = IA_SIN(ifa)->sin_addr;
+#ifdef __riscos
+	if (ac->ac_if.if_flags & IFF_NEED_IPADDR) {
+		/* Initial tentative probe with source IP set to 0 - as
+		 * recommended in DHCP spec. */
+		 u_long sip = 0;
+		 arprequest(ac, &sip, &ac->ac_ipaddr.s_addr, ac->ac_enaddr);
+		 /* If no response after 1 second, broadcast a definite
+		  * ARP reply to announce our presence to the world.
+		  */
+		 timeout(broadcastarpreply, ac, hz);
+	}
+	else
+#else
 	arpwhohas(ac, &ac->ac_ipaddr);
+#endif
 	ifa->ifa_rtrequest = arp_rtrequest;
 	ifa->ifa_flags |= RTF_CLONING;
 }
+
+#ifdef __riscos
+static void
+broadcastarpreply(void *p)
+{
+	struct arpcom *ac = (struct arpcom *) p;
+
+	struct mbuf *m;
+	struct ether_header *eh;
+	struct ether_arp *ea;
+	struct sockaddr sa;
+
+	if ((m = m_gethdr(M_DONTWAIT, MT_DATA)) == NULL)
+		return;
+	m->m_len = sizeof *ea;
+	m->m_pkthdr.len = sizeof(*ea);
+	MH_ALIGN(m, sizeof(*ea));
+	ea = mtod(m, struct ether_arp *);
+	eh = (struct ether_header *)sa.sa_data;
+	bzero((caddr_t)ea, sizeof (*ea));
+	(void)memcpy(eh->ether_dhost, etherbroadcastaddr, sizeof(eh->ether_dhost));
+	eh->ether_type = ETHERTYPE_ARP;		/* if_output will swap */
+	ea->arp_hrd = htons(ARPHRD_ETHER);
+	ea->arp_pro = htons(ETHERTYPE_IP);
+	ea->arp_hln = sizeof(ea->arp_sha);	/* hardware address length */
+	ea->arp_pln = sizeof(ea->arp_spa);	/* protocol address length */
+	ea->arp_op = htons(ARPOP_REPLY);
+	(void)memcpy(ea->arp_sha, ac->ac_enaddr, sizeof(ea->arp_sha));
+	(void)memcpy(ea->arp_spa, &ac->ac_ipaddr.s_addr, sizeof(ea->arp_spa));
+	(void)memcpy(ea->arp_tha, ac->ac_enaddr, sizeof(ea->arp_tha));
+	(void)memcpy(ea->arp_tpa, &ac->ac_ipaddr.s_addr, sizeof(ea->arp_tpa));
+	sa.sa_family = AF_UNSPEC;
+	sa.sa_len = sizeof(sa);
+	(*ac->ac_if.if_output)(&ac->ac_if, m, &sa, (struct rtentry *)0);
+
+}
+#endif
