@@ -1,11 +1,45 @@
-/*
- * Title       : module.c
- * Author      :
- * Date        :
- * Description :
- * History     :
- *  20/09/95 RWB, Added STBStateOn command.
- */
+/*	MODULE.C
+
+Project : Falcon II (STBOS 4.3)
+Module: STBState
+
+Purpose:
+
+
+History:
+
+Date      Who     Description of change
+===========================================
+ ??        ??      File created
+
+20/09/95   RWB     Added STBStateOn command.
+
+12/8/97    CP      Added standard control header
+
+                   Changed behaviour of Standby SWI.  Basically this is to
+                   get over a serious bug in the overall operation of the
+                   STBOS.  Previously, this module stopped the processor when
+                   standby SWI was received, then restarted the code from 0
+                   (0 pushed into PC - see s.Reset).  However, during boot,
+                   there is a chance that an IRQ is received - and since the
+                   DRAM is no longer valid because the processor was stopped,
+                   it cannot be handled and the whole thing gets very
+                   confused, and locks.  This has been fixed (for now) by
+                   making the module simply switch the screen off.
+
+                   Added debug printfs to show visually whether TV was
+                   supposed to be 'on' or 'off' instead of actually switching
+                   the relays (#define FX to turn these on).
+
+                   Added functions to fade screen in and out (based on Basic
+                   proglets screenon and screenoff).
+
+                   Changed the way module handles consecutive standby SWIs
+                   (busy day today :-) ).  This allows greater flexibility.
+
+***************************************************************************/
+
+#undef FX /* visual TV on/off reports :-) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +67,8 @@
 #define Service_PreReset	0x45
 #define Service_Sleeping	0xb1
 
+#define PaletteV  0x23 /* for OS_CallAVector */
+#define GAMMA_CORRECTION 9 /* used for PaletteV */
 
 /*
  * Other people's things
@@ -75,6 +111,19 @@
 typedef unsigned char byte;
 typedef enum { LED_OFF, LED_ON, LED_FLASH } led_t;
 typedef enum { DOG_ON=0, DOG_OFF=DOG_BIT } dog_t;
+
+/*
+State info?  As guessed CP 30/7/97.
+Based on STBState module functional spec Issue 0.09, 11 Jan 1996
+(NFS::spinner.$.Func-Spec.Software.Falcon.State009)
+
+OFF_PT   Off, pass-through
+OFF_LP   Off, low power
+FATAL    Fatal error
+INIT     Establishing session
+ON       Online
+NONE     help!! Undefined
+*/
 typedef enum { OFF_PT = 0, OFF_LP = 1,
                FATAL = 2, INIT = 4,
                ON = 6,
@@ -84,7 +133,7 @@ typedef enum { SWI_ON, SWI_OFF, SWI_FATAL, SWI_BUSY, SWI_STANDBY, SWI_STATE,
 
 
 /*
- * Globals (dontcha love em)
+ * Globals (dontcha love em) (No!  CP, 12/8/97)
  */
 volatile byte *io_port = (byte *) 0x320000C;	/* Morris 8-bit I/O port      */
 volatile byte *susp_reg = (byte *) 0x320001C;	/* Morris SUSPENDMODE register*/
@@ -127,6 +176,63 @@ void go_lp(void);
 void go_pt(void);
 void go_fatal(void);
 
+
+
+/******* fadein ************************************************************
+
+Purpose: fades the screen in by changing the gamma correction table.
+         Table is set to 0-255
+
+Inputs: none
+
+Outputs: none
+
+***************************************************************************/
+
+void fadein(void)
+{
+  int count;
+  unsigned char GammaCorrectionTable[256];
+
+  for (count = 0; count < 256; count++)
+  {
+    GammaCorrectionTable[count] = count;
+  }
+
+  regs.r[0] = (int)GammaCorrectionTable;
+  regs.r[1] = (int)GammaCorrectionTable;
+  regs.r[2] = (int)GammaCorrectionTable;
+  regs.r[4] = GAMMA_CORRECTION; /* reason code */
+  regs.r[9] = PaletteV; /* vector */
+
+  _kernel_swi(OS_CallAVector, &regs, &regs);
+}
+
+/******* fadeout ***********************************************************
+
+Purpose: fades the screen to black by changing the gamma correction table.
+         Table is set to all-0
+
+Inputs: none
+
+Outputs: none
+
+***************************************************************************/
+
+void fadeout(void)
+{
+  unsigned char GammaCorrectionTable[256];
+
+  memset(GammaCorrectionTable, 0, 256);
+
+  regs.r[0] = (int)GammaCorrectionTable;
+  regs.r[1] = (int)GammaCorrectionTable;
+  regs.r[2] = (int)GammaCorrectionTable;
+  regs.r[4] = GAMMA_CORRECTION; /* reason code */
+  regs.r[9] = PaletteV; /* vector */
+
+  _kernel_swi(OS_CallAVector, &regs, &regs);
+}
 
 /*
  * Start here
@@ -296,6 +402,11 @@ extern int STBState_callevery_handler(_kernel_swi_regs *r, void *pw)
  */
 _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
 {
+  char dummy;
+
+  printf("STBState SWI %i received\n", swi_no);
+  gets(&dummy);
+
   switch (swi_no)
   {
   case SWI_ON:
@@ -313,32 +424,51 @@ _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
     break;
 
   case SWI_BUSY:
-    if (state == ON)
-      go_busy(r->r[0]);
-    break;
+    go_busy(r->r[0]);
+  break;
 
-  case SWI_STANDBY:
-    switch (state)
-    {
-    case OFF_PT:
-      go_on();
-      break;
+  case SWI_STANDBY: /* toggles on/off state */
+//  6/8/97:CP
+//    Whole chunk of module code disabled because it doesn't work properly.
+//    Replaced with code which simply turns screen off, nothing else.
+//
+//     switch (state)
+//     {
+//     case OFF_PT: /* if off, turn on */
+//       go_on();
+//       break;
+//
+//     case FATAL:
+//     case INIT:
+//       cmospowerdown = TRUE;
+//       go_off();
+//
+//       /* If this fails the only sensible thing to do is to go off */
+//
+//       /* note fallthrough */
+//     case ON:
+// #ifndef DONT_GO_OFF
+//       go_off();
+// #endif
+//
+//       break;
+//     }
+// end QDF
 
-    case FATAL:
-    case INIT:
-      cmospowerdown = TRUE;
-      go_off();
+// new functionality :
 
-      /* If this fails the only sensible thing to do is to go off */
+     if ( (state == ON) || (state == INIT) || (state == FATAL) )
+     {
+        go_off();
+     }
 
-      /* note fallthrough */
-    case ON:
-#ifndef DONT_GO_OFF
-      go_off();
-#endif
-      break;
-    }
-    break;
+     else
+     {
+        go_on();
+     }
+
+
+  break;
 
   case SWI_STATE:
     r->r[0] = state;
@@ -420,18 +550,55 @@ void tv_off(int stop)
 }
 
 
-/*
- * Go to On state
- */
+/******* go_on *************************************************************
+
+Purpose: Go to on state:
+
+         Send Upcall_Online
+
+         if(Upcall_Online claimed) or STB initialising
+         {
+           unblank screen
+         }
+         else
+         {
+           OS_Reset
+         }
+
+
+Inputs: none
+
+Outputs: none
+
+***************************************************************************/
+
 void go_on(void)
 {
   regs.r[0] = UpCall_Online;
   _kernel_swi(OS_UpCall, &regs, &regs);
-  tv_on();
 
-  state = ON;
-  busy_level = 0;
-  set_io_port(LED_OFF, LED_ON, DOG_ON);
+  if( (regs.r[0] != UpCall_Online) || (state == INIT) )
+  {
+    /* Upcall claimed - something doesn't want the STB to be reset fully */
+#ifdef FX
+     printf("<fx:click> TV_ON\n");
+#else
+     tv_on();
+
+     /* fade screen back in */
+     fadein();
+#endif
+
+     state = ON;
+     busy_level = 0;
+     set_io_port(LED_OFF, LED_ON, DOG_ON);
+  }
+
+  else
+  {
+    /* hard reset */
+    _kernel_swi(OS_Reset, &regs, &regs);
+  }
 }
 
 
@@ -477,200 +644,230 @@ void go_fatal(void)
 
 /*
  * Go to an off state
+  6/8/97:CP:function rewritten to simply switch screen off.  (Kludge to get
+  STB to appear to shutdown cleanly).
  */
 void go_off(void)
 {
-  byte save_atodicr, save_vidcr;
+   regs.r[0] = UpCall_Standby;
+   _kernel_swi (OS_UpCall, &regs, &regs);
 
-  if (state != OFF_PT)
-  {
-    regs.r[0] = UpCall_Standby;
-    _kernel_swi (OS_UpCall, &regs, &regs);
+   if ( regs.r[0] != 0 ) /* if r.r[0] == 0, UpCall was claimed; don't shut down */
+   {
+     set_io_port(LED_ON, LED_OFF, DOG_OFF);
 
-    if (regs.r[0] == 0)
-      return;			/* UpCall was claimed */
-
-    tv_off(FALSE);
-  }
-
-  if (cmospowerdown)
-  {
-    /*
-     * CMOS says Power Down mode
-     */
-    regs.r[1] = Service_PreReset;
-    _kernel_swi (OS_ServiceCall, &regs, &regs);
-
-    set_io_port(LED_ON, LED_OFF, DOG_OFF);
-
-    /* Stop MPEG chips */
-    tv_off(TRUE);
-
-    /* Go into stop mode prior to reset */
-    do_reset();
-    /* Never gets here */
-  }
-  else
-  {
-    /*
-     * CMOS says Pass Through mode
-     */
-
-    clock_t tick;
-    int sound_rate;
-
-    do
-    {
-#ifdef DEBUG
-      printf("%d", state);
-#endif
-      regs.r[0] = state;
-      regs.r[1] = Service_Sleeping;
-      _kernel_swi (OS_ServiceCall, &regs, &regs);
-
-      if (regs.r[1] != Service_Sleeping)
-      {
-        /*
-         * Sleeping claimed -> Pass Through mode
-         *
-	 * Wake things up if we're in low-power mode
-	 */
-	if (state == OFF_LP)
-	{
-	  byte block[1];
-
-	  *atodicr = save_atodicr;
-          *vidcr = save_vidcr;
-
-  	  /* restore sound sample rate */
-          regs.r[0] = 3;
-          regs.r[1] = sound_rate;
-          _kernel_swi (Sound_SampleRate, &regs, &regs);
-
-          /* Reint the joystick module which uses the A2D */
-          regs.r[0] = 3;
-          regs.r[1] = (int) "Joystick";
-          _kernel_swi (OS_Module, &regs, &regs);
-
-#if 0     /* FIXME to support RTC as well as / instead of E2ROM */
-          /* Update the RTC soft copy from the hard copy */
-          /* Read the RTC time. This will fail if no RTC fitted */
-          block[0] = 1;			/* Address to read from */
-          regs.r[0] = 0xA0;		/* Write address */
-          regs.r[1] = (int) block;
-          regs.r[2] = 1;
-          if (! _kernel_swi (IIC_Control, &regs, &regs))
-          {
-            regs.r[0] = 0xA1;		/* Read */
-            regs.r[2] = 6;		/* We want 6 bytes */
-            if (! _kernel_swi (IIC_Control, &regs, &regs))
-            {
-              /* Write RTC time */
-
-              /* Reint the RTCAdjust module which will be sadly confused */
-              regs.r[0] = 3;
-              regs.r[1] = (int) "RTCAdjust";
-             _kernel_swi (OS_Module, &regs, &regs);
-            }
-          }
-#endif
-	}
-
-        /*
-         * Sleeping claimed -> Pass Through mode
-         */
-        state = OFF_PT;
-
-#ifdef DEBUG
-        printf("PT\n");
+     /* Stop MPEG chips */
+#ifdef FX
+  printf("<fx:click> TV_OFF\n");
+#else
+     fadeout();
+     tv_off(TRUE);
 #endif
 
-        /* Get screen mode */
-	regs.r[0] = 1;
-	_kernel_swi (OS_ScreenMode, &regs, &regs);
-
-        /* Set screen mode */
-	regs.r[0] = 0;
-	_kernel_swi (OS_ScreenMode, &regs, &regs);
-
-        set_io_port(LED_ON, LED_OFF, DOG_OFF);
-        *irqmska |= TIMER_BITS;		/* Restore Timers */
-#ifdef DEBUG
-        printf("STBState_Off returns\n");
-#endif
-        return;
-
-      } /* (regs.r[1] != Service_Sleeping) */
-
-      /*
-       * Sleeping not claimed -> do Low Power stuff if we havn't done it before
-       */
-      if (state != OFF_LP)
-      {
-
-#ifdef DEBUG
-        printf("LP\n");
-#endif
-        state = OFF_LP;
-        set_io_port(LED_ON, LED_OFF, DOG_OFF);
-
-        /* Stop MPEG chips */
-        tv_off(TRUE);
-
-        /* Save the current sound sample rate and set it to some bogus value */
-        regs.r[0] = 1;
-        _kernel_swi (Sound_SampleRate, &regs, &regs);
-        sound_rate = regs.r[1];
-
-	/* Hack to change sound clock */
-        regs.r[0] = 3;
-        if ((sound_rate == 7) || (sound_rate == 14) || (sound_rate == 20))
-          regs.r[1] = 1;
-	else
-          regs.r[1] = 7;
-        _kernel_swi (Sound_SampleRate, &regs, &regs);
-
-        save_atodicr = *atodicr;
-        save_vidcr = *vidcr;
-
-#if 1
-	*atodicr = 0;
-	*vidcr = 0;
-        *vid_addr = 0xC0000003;	/* Video ereg in PowerDown mode */
-        *vid_addr = 0xD0004000;	/* Video fsynreg */
-        *vid_addr = 0xE0004000;	/* Video conreg */
-        *vid_addr = 0xB1000001;	/* Sound control register */
-        *atodicr = 0;		/* Stop A2D */
-#endif
-      }
-
-      /*
-       * Wait > 1/100s to ensure that external things have seen us go off
-       * (where "external things" is actually the IR micro)
-       */
-      tick = clock()+2;
-      while (clock() <= tick);
-
-#ifdef DEBUG
-      *io_port = '\xfb';	/* Red, Dog off */
-#endif
-
-      /* Mask off Timers 0 and 1 */
-      *irqmska &= ~TIMER_BITS;
-
-      /* Suspend Morris */
-      *susp_reg = 0;		/* Stop all: Fclk, Clk2, Clk8, Ref8 and Clk16 */
-
-      /* Event pin, IRQ or FIQ woke us up */
-
-#ifdef DEBUG
-      *io_port = '\xff';	/* Red + Green, Dog off */
-#endif
-
-      /* Restore Timers */
-      *irqmska |= TIMER_BITS;
-
-      /* Loop and re-issue the Sleeping service */
-    } while (TRUE);
-  }
+     state = OFF_PT; /* arbitrary state which isn't FATAL, INIT or ON */
+   }
 }
+
+// void go_off(void)
+// {
+//   byte save_atodicr;
+//   byte save_vidcr;
+//
+//   if (state != OFF_PT)
+//   {
+// /* if not already in PassThrough state, send an upcall_standby (0x0e) to see
+//    if anything objects to the STB shutting down */
+//
+//     regs.r[0] = UpCall_Standby;
+//     _kernel_swi (OS_UpCall, &regs, &regs);
+//
+//     if (regs.r[0] == 0)
+//     {
+//       return;			/* UpCall was claimed - don't shut down */
+//     }
+//
+//     tv_off(FALSE);
+//   }
+//
+//   if (cmospowerdown)
+//   {
+//     /*
+//      * CMOS says Power Down mode
+//      * default for STB
+//      */
+//     regs.r[1] = Service_PreReset;
+//     _kernel_swi (OS_ServiceCall, &regs, &regs);
+//
+//     set_io_port(LED_ON, LED_OFF, DOG_OFF);
+//
+//     /* Stop MPEG chips */
+//     tv_off(TRUE);
+//
+//     /* Go into stop mode prior to reset */
+//     do_reset();
+//     /* Never gets here */
+//   }
+//   else
+//   {
+//     /*
+//      * CMOS says Pass Through mode
+//      */
+//
+//     clock_t tick;
+//     int sound_rate;
+//
+//     do /* FOREVER! */
+//     {
+// #ifdef DEBUG
+//       printf("%d", state);
+// #endif
+//       regs.r[0] = state;
+//       regs.r[1] = Service_Sleeping;
+//       _kernel_swi (OS_ServiceCall, &regs, &regs);
+//
+//       if (regs.r[1] != Service_Sleeping)
+//       {
+//         /*
+//          * Sleeping claimed -> Pass Through mode
+//          *
+// 	 * Wake things up if we're in low-power mode
+// 	 */
+// 	if (state == OFF_LP)
+// 	{
+// 	  byte block[1];
+//
+// 	  *atodicr = save_atodicr;
+//           *vidcr = save_vidcr;
+//
+//   	  /* restore sound sample rate */
+//           regs.r[0] = 3;
+//           regs.r[1] = sound_rate;
+//           _kernel_swi (Sound_SampleRate, &regs, &regs);
+//
+//           /* Reint the joystick module which uses the A2D */
+//           regs.r[0] = 3;
+//           regs.r[1] = (int) "Joystick";
+//           _kernel_swi (OS_Module, &regs, &regs);
+//
+// #if 0     /* FIXME to support RTC as well as / instead of E2ROM */
+//           /* Update the RTC soft copy from the hard copy */
+//           /* Read the RTC time. This will fail if no RTC fitted */
+//           block[0] = 1;			/* Address to read from */
+//           regs.r[0] = 0xA0;		/* Write address */
+//           regs.r[1] = (int) block;
+//           regs.r[2] = 1;
+//           if (! _kernel_swi (IIC_Control, &regs, &regs))
+//           {
+//             regs.r[0] = 0xA1;		/* Read */
+//             regs.r[2] = 6;		/* We want 6 bytes */
+//             if (! _kernel_swi (IIC_Control, &regs, &regs))
+//             {
+//               /* Write RTC time */
+//
+//               /* Reint the RTCAdjust module which will be sadly confused */
+//               regs.r[0] = 3;
+//               regs.r[1] = (int) "RTCAdjust";
+//              _kernel_swi (OS_Module, &regs, &regs);
+//             }
+//           }
+// #endif
+// 	}
+//
+//         /*
+//          * Sleeping claimed -> Pass Through mode
+//          */
+//         state = OFF_PT;
+//
+// #ifdef DEBUG
+//         printf("PT\n");
+// #endif
+//
+//         /* Get screen mode */
+// 	regs.r[0] = 1;
+// 	_kernel_swi (OS_ScreenMode, &regs, &regs);
+//
+//         /* Set screen mode */
+// 	regs.r[0] = 0;
+// 	_kernel_swi (OS_ScreenMode, &regs, &regs);
+//
+//         set_io_port(LED_ON, LED_OFF, DOG_OFF);
+//         *irqmska |= TIMER_BITS;		/* Restore Timers */
+// #ifdef DEBUG
+//         printf("STBState_Off returns\n");
+// #endif
+//         return;
+//
+//       } /* (regs.r[1] != Service_Sleeping) */
+//
+//       /*
+//        * Sleeping not claimed -> do Low Power stuff if we havn't done it before
+//        */
+//       if (state != OFF_LP)
+//       {
+//
+// #ifdef DEBUG
+//         printf("LP\n");
+// #endif
+//         state = OFF_LP;
+//         set_io_port(LED_ON, LED_OFF, DOG_OFF);
+//
+//         /* Stop MPEG chips */
+//         tv_off(TRUE);
+//
+//         /* Save the current sound sample rate and set it to some bogus value */
+//         regs.r[0] = 1;
+//         _kernel_swi (Sound_SampleRate, &regs, &regs);
+//         sound_rate = regs.r[1];
+//
+// 	/* Hack to change sound clock */
+//         regs.r[0] = 3;
+//         if ((sound_rate == 7) || (sound_rate == 14) || (sound_rate == 20))
+//           regs.r[1] = 1;
+// 	else
+//           regs.r[1] = 7;
+//         _kernel_swi (Sound_SampleRate, &regs, &regs);
+//
+//         save_atodicr = *atodicr;
+//         save_vidcr = *vidcr;
+//
+// #if 1
+// 	*atodicr = 0;
+// 	*vidcr = 0;
+//         *vid_addr = 0xC0000003;	/* Video ereg in PowerDown mode */
+//         *vid_addr = 0xD0004000;	/* Video fsynreg */
+//         *vid_addr = 0xE0004000;	/* Video conreg */
+//         *vid_addr = 0xB1000001;	/* Sound control register */
+//         *atodicr = 0;		/* Stop A2D */
+// #endif
+//       }
+//
+//       /*
+//        * Wait > 1/100s to ensure that external things have seen us go off
+//        * (where "external things" is actually the IR micro)
+//        */
+//       tick = clock()+2;
+//       while (clock() <= tick);
+//
+// #ifdef DEBUG
+//       *io_port = '\xfb';	/* Red, Dog off */
+// #endif
+//
+//       /* Mask off Timers 0 and 1 */
+//       *irqmska &= ~TIMER_BITS;
+//
+//       /* Suspend Morris */
+//       *susp_reg = 0;		/* Stop all: Fclk, Clk2, Clk8, Ref8 and Clk16 */
+//
+//       /* Event pin, IRQ or FIQ woke us up */
+//
+// #ifdef DEBUG
+//       *io_port = '\xff';	/* Red + Green, Dog off */
+// #endif
+//
+//       /* Restore Timers */
+//       *irqmska |= TIMER_BITS;
+//
+//       /* Loop and re-issue the Sleeping service */
+//     } while (TRUE);
+//   }
+// }
