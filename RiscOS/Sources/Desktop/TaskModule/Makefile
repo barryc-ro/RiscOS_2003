@@ -28,12 +28,16 @@ EXP_HDR = <CExport$Dir>
 
 CPFLAGS = ~cfr~v
 
+RAM_MOD_FILE	= @.!Module.Output_M
 ROM_AOF_FILE	= @.!ROM_AOF.Output_M
 
 
 all:
 	Echo	Component $(COMPONENT): AMU target required.
 
+
+ram_mod:
+	Obey		@.!Module.!Run
 
 # rom_aof_file is a label for an internal target, consisting of all source 
 # files partially linked with all required libraries and RISCOSLIB:o.romcstubs 
@@ -42,10 +46,7 @@ all:
 rom_aof:
 	Obey		@.!ROM_AOF.!Run
 
-
-
 # Now all main targets required during ROM builds.
-
 
 clean:
 	Remove		linked.$(COMPONENT)
@@ -70,13 +71,23 @@ resources:
 	Echo		Component $(COMPONENT): 'resources' finished.
 
 
+ram:	ram_mod
+	Echo		Component $(COMPONENT): 'ram' finished.
+
+
 rom:	rom_aof
 	Echo		Component $(COMPONENT): 'rom' finished.
 
 
+install:	ram
+	mkdir -p	$(INSTDIR)
+	Copy		$(RAM_MOD_FILE) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	Echo		Component $(COMPONENT): 'install' (disc) finished.
+
+
 install_rom:	rom_aof
-	Copy		$(ROM_AOF_FILE) $(INSTDIR).$(COMPONENT) ~cfr~v
-	Echo		Component $(COMPONENT): 'install_rom' finished.
+	Copy		$(ROM_AOF_FILE) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	Echo		Component $(COMPONENT): 'install' (rom) finished.
 
 
 rom_link:	rom_aof
@@ -85,9 +96,5 @@ rom_link:	rom_aof
         Link		-o linked.$(COMPONENT) -rmf -base ${ADDRESS} $(ROM_AOF_FILE) RISC_OSLib:o.AbsSym
         Copy		linked.$(COMPONENT) ${LINKDIR}.$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'rom_link' finished.
-
-
-
-
 
 # Dynamic dependencies:
