@@ -91,6 +91,7 @@ resources_NCFresco_base:
 	${CP} NCFrescoRORes:Config      	${RESRES}.Config   ${CPFLAGS}
 	${CP} NCFrescoRORes:fontmap/txt 	${RESRES}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
+	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favmove   -o ${RESRES}.html.favmove   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename -o ${RESRES}.html.favrename ${TRFLAGS}
@@ -98,14 +99,14 @@ resources_NCFresco_base:
 	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${RESRES}.html.favscatr  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscats  -o ${RESRES}.html.favscats  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.global/css -o ${RESRES}.html.global/css ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histt     -o ${RESRES}.html.histt     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.prompt    -o ${RESRES}.html.prompt    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${RESRES}.html.okcncl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.password  -o ${RESRES}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${RESRES}.html.printopts ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt    -o ${RESRES}.html.prompt    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${RESRES}.html.sslcert   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${RESRES}.html.sslpin    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${RESRES}.html.sslserv   ${TRFLAGS}
@@ -142,6 +143,7 @@ install_NCFresco:
 	-${CP} NCFrescoRORes:Config      	${INSTALLDIR}.Config   ${CPFLAGS}
 	${CP} NCFrescoRORes:fontmap/txt  	${INSTALLDIR}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
+	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLDIR}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLDIR}.html.favmove   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLDIR}.html.favrename ${TRFLAGS}
@@ -149,14 +151,14 @@ install_NCFresco:
 	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${INSTALLDIR}.html.favscatr  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscats  -o ${INSTALLDIR}.html.favscats  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.global/css -o ${INSTALLDIR}.html.global/css ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLDIR}.html.histr     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histt     -o ${INSTALLDIR}.html.histt     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLDIR}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLDIR}.html.prompt    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLDIR}.html.okcncl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLDIR}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLDIR}.html.printopts ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLDIR}.html.prompt    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTALLDIR}.html.sslcert   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${INSTALLDIR}.html.sslpin    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
