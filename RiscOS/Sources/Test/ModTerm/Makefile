@@ -65,6 +65,13 @@ OBJS      = ${OM}.Main ${OM}.serial_lib
 .cmhg.${OM}:;   ${CMHG} -o $@ $<
 .s.${OM}:;      ${AS} ${AFLAGS} $< $@
 
+# Binary Build stuff
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_File !RunImage
+  BBE_Export_File Resources.!Run
+  BBE_Export_Dir o
+
 #
 # Build
 #
