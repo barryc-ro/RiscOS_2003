@@ -17,6 +17,7 @@ CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
+MODSQZ  = modsqz
 RM      = remove
 WIPE    = -wipe
 
@@ -40,16 +41,17 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 COMPONENT = IR
 TARGET    = aof.IR
 
-DFLAGS    = 
+DFLAGS    = -DRCMM
 
 #OBJS      = o.Debug o.Module o.IRiface o.poduleirq
-OBJS      = o.Debug o.Module o.IRiface
+OBJS      = o.Debug o.Module o.IRiface o.asm
 
 #
 # Rule patterns
 #
 .c.o:;      ${CC} ${THROWBACK} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -p -o $@ $< h.$*
+.cmhg.h:;   ${CMHG} -p ${DFLAGS} -d $@ $<
+.cmhg.o:;   ${CMHG} -p ${DFLAGS} -o $@ $<
 .s.o:;      ${AS} ${THROWBACK} ${AFLAGS} $< $@
 
 #
@@ -95,10 +97,12 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.IR: ${OBJS} ${CLIB}
+rm.IR:  rm.IRu
+        ${MODSQZ} rm.IRu $@
+
+rm.IRu: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 o.module: h.iriface
-h.iriface: o.iriface ;@
 
 # Dynamic dependencies:
