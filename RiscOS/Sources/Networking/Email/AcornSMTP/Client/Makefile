@@ -39,23 +39,24 @@
 #
 # Paths
 #
-EXP_C_H = <CExport$dir>.h
-EXP_C_O = <CExport$dir>.o
-EXP_HDR = <export$dir>
+EXP_C_H =	<CExport$dir>.h
+EXP_C_O =	<CExport$dir>.o
+EXP_HDR =	<export$dir>
 
 #
 # Generic options:
 #
-MKDIR   = cdir
-AS      = objasm -tb
-CC      = $(MemCheckCC) cc
-CMHG    = cmhg
-CP      = copy
-LD      = $(MemCheckLD) link
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-CD	= dir
+MKDIR =		cdir
+AS =		objasm -tb
+CC =		$(MemCheckCC) cc
+CMHG =		cmhg
+CP =		copy
+LD =		$(MemCheckLD) link
+RM =		remove
+MODSQ =		modsqz
+WIPE =		-wipe
+CD =		dir
+STRIPDEPND =	stripdepnd
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -63,51 +64,54 @@ WFLAGS = ~c~v
 #
 # Include files
 #
-INCLUDES=	TCPIPLibs:,C:,<Lib$Dir>
+INCLUDES =	TCPIPLibs:,C:,<Lib$Dir>
 
-INETLIB   = TCPIPLibs:o.inetlibzm
-SOCKLIB   = TCPIPLibs:o.socklibzm
-UNIXLIB   = TCPIPLibs:o.unixlibzm
-CALLX     = <Lib$Dir>.callx.o.callx
-EMAILLIB  = <Lib$Dir>.Email.EmailLib.o.EmailLibzm
-LIBS      = ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB} ${EXTRALIBS}
+INETLIB =	TCPIPLibs:o.inetlibzm
+SOCKLIB =	TCPIPLibs:o.socklibzm
+UNIXLIB =	TCPIPLibs:o.unixlibzm
+CALLX =		<Lib$Dir>.callx.o.callx
+EMAILLIB =	<Lib$Dir>.Email.EmailLib.o.EmailLibzm
+ASMUTILS =	<Lib$Dir>.AsmUtils.o.AsmUtilszm
+LIBS =		$(SOCKLIB) $(INETLIB) $(UNIXLIB) $(CALLX) $(ASMUTILS) $(DOBJS) $(EMAILLIB) $(EXTRALIBS)
 
 #
 # Program specific options:
 #
-COMPONENT = AcornSMTP
-TARGET = rm.AcornSMTP
-ROMTARGET = aof.AcornSMTP
+COMPONENT =	AcornSMTP
+TARGET =	rm.AcornSMTP
+ROMTARGET =	aof.AcornSMTP
 
 
-STUBS=		C:o.Stubs
+STUBS =		C:o.Stubs
 
-ROMCSTUBS=      RISC_OSLib:o.romcstubs
-ABSSYM=         RISC_OSLib:o.AbsSym
+ROMCSTUBS =	RISC_OSLib:o.romcstubs
+ABSSYM =	RISC_OSLib:o.c_AbsSym
 
 COMPAT=		-DCOMPAT_INET4
 
-CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wp -depend !Depend -c $(THROWBACK) ${TINYSTUBS}\
-		-D${SYSTEM} ${EXTRACCFLAGS}
+CFLAGS=		-ffah -zM -I$(INCLUDES) -DINET -DCOMPAT_INET4 $(DEBUG)\
+		-zps1 -Wp -depend !Depend -c -throwback $(TINYSTUBS)\
+		-D$(SYSTEM) $(EXTRACCFLAGS)
 
-CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
+CMHGFLAGS =	-p -I$(INCLUDES) $(THROWBACK)
 
 ASMFLAGS=       
 
+HDR =		h.header
+
 OBJS=		swihndlers.o handlers.o smtp_utils.o module.o sendmail.o header.o \
-                errortable.o get.o sendline.o send.o cmdresp.o \
-                ${LIBS}
+		errortable.o get.o sendline.o send.o cmdresp.o \
+		$(LIBS)
 
 OBJSI=		i.swihndlers i.handlers i.smtp_utils i.module i.sendmail o.header \
-                i.errortable i.get i.sendline i.send i.cmdresp \
-                ${LIBS}
+		i.errortable i.get i.sendline i.send i.cmdresp \
+		$(LIBS)
                 
 OBJSINST=	inst.swihndlers inst.handlers inst.smtp_utils inst.module inst.sendmail o.header \
-                inst.errortable inst.get inst.sendline inst.send inst.cmdresp \
-                ${LIBS}
+		inst.errortable inst.get inst.sendline inst.send inst.cmdresp \
+		$(LIBS)
 
-EXTRAS=         acornsmtp.o
+EXTRAS=		acornsmtp.o
 
 #
 # Rule patterns
@@ -116,88 +120,93 @@ EXTRAS=         acornsmtp.o
 .c.o:;		$(CC) $(CFLAGS) -o $@ $<
 .c.i:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
 .i.inst:;	$(CC) $(CFLAGS) -C++ -o $@ $<
-.s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
+.s.o:;		$(AS) $(ASMFLAGS) -o $@ $<
 .cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
 
-all: ${TARGET}
-        @echo ${COMPONENT}: all complete
+all: $(TARGET)
+	@echo $(COMPONENT): all complete
 
 #
 # RISC OS ROM build rules:
 #
-rom: ${ROMTARGET}
-        @echo ${COMPONENT}: rom module built
+rom: $(ROMTARGET)
+	@echo $(COMPONENT): rom module built
 
-preprocess: ${OBJSI} local_dirs
-	@echo ${COMPONENT}: preprocess build complete
+preprocess: $(OBJSI) local_dirs
+	@echo $(COMPONENT): preprocess build complete
 
-instrument: ${OBJSINST} inst.instlib local_dirs
+instrument: $(OBJSINST) inst.instlib local_dirs
 	$(LD) -rmf -s link/sym -o rm.AcornSMTPu $(OBJSINST) inst.instlib $(STUBS)
 	ModSqz rm.AcornSMTPu rm.AcornSMTP
-	@echo ${COMPONENT}: instrument build complete
+	@echo $(COMPONENT): instrument build complete
 
-export:	export_${PHASE}
+export:	export_$(PHASE)
 
 export_hdrs: h.AcornSMTP local_dirs
-	${CP}	h.AcornSMTP	${EXP_C_H}.AcornSMTP	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (hdrs)
+	$(CP)	h.AcornSMTP	$(EXP_C_H).AcornSMTP	$(CPFLAGS)
+	@echo $(COMPONENT): export complete (hdrs)
 
 export_libs: o.AcornSMTP local_dirs
-	${CP}	o.AcornSMTP	${EXP_C_O}.AcornSMTP	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (libs)
+	$(CP)	o.AcornSMTP	$(EXP_C_O).AcornSMTP	$(CPFLAGS)
+	@echo $(COMPONENT): export complete (libs)
 
-install_rom: ${ROMTARGET}
-        ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+install_rom: $(ROMTARGET)
+	$(CP) $(ROMTARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): rom module installed
 
 clean:
-		$(WIPE) o.*      $(WFLAGS)
-		$(WIPE) i.*      $(WFLAGS)
-		$(WIPE) inst.*   $(WFLAGS)
-                $(WIPE) rm.*     $(WFLAGS)
-                $(WIPE) aof.*    $(WFLAGS)
-		$(RM) link/sym
-		$(RM) rm
-		$(RM) aof
-		$(RM) linked
-		$(RM) map
-		$(RM) i
-		$(RM) inst
-		$(RM) o
+	@$(WIPE) o.*      $(WFLAGS)
+	@$(WIPE) i.*      $(WFLAGS)
+	@$(WIPE) inst.*   $(WFLAGS)
+	@$(WIPE) rm.*     $(WFLAGS)
+	@$(WIPE) aof.*    $(WFLAGS)
+	@$(RM) link/sym
+	@$(RM) rm
+	@$(RM) aof
+	@$(RM) linked
+	@$(RM) map
+	@$(RM) i
+	@$(RM) inst
+	@$(RM) o
+	@$(RM) $(HDR)
+	@$(STRIPDEPND) Makefile
+	@echo $(COMPONENT): cleaned
 
 local_dirs:
-	${MKDIR} o
-	${MKDIR} aof
-	${MKDIR} rm
-	${MKDIR} i
-	${MKDIR} inst
+	$(MKDIR) o
+	$(MKDIR) aof
+	$(MKDIR) rm
+	$(MKDIR) i
+	$(MKDIR) inst
 
 #
 # Target 
 #
-${TARGET}:	$(OBJS) $(EXTRAS) local_dirs
-		$(LD) -rmf -s link/sym -o rm.AcornSMTPu $(OBJS) $(STUBS)
-		ModSqz rm.AcornSMTPu $@
+$(TARGET): $(OBJS) $(EXTRAS) $(HDR) local_dirs
+	$(LD) -rmf -s link/sym -o rm.AcornSMTPu $(OBJS) $(STUBS)
+	ModSqz rm.AcornSMTPu $@
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} $(EXTRAS) local_dirs
-        ${LD} -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS}
+$(ROMTARGET): $(OBJS) $(EXTRAS) $(HDR) local_dirs
+	$(LD) -s link/sym -o $@ -aof $(OBJS) $(ROMCSTUBS)
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
+	$(MKDIR) linked
+	$(MKDIR) map
+	$(LD) -o linked.$(COMPONENT) -map -rmf -base $(ADDRESS) $(ROMTARGET) $(ABSSYM) > map.$(COMPONENT)
+	$(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): rom_link complete
 
 #
 # Some rules that need explicitly declaring
 #
+$(HDR):	cmhg.header
+	$(CMHG) $(CMHGFLAGS) cmhg.header -d $(HDR)
 
 
 # Dynamic dependencies:
