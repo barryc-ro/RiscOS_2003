@@ -72,9 +72,7 @@ clean:
 
 keygen: o.keygen o.throwback o.unicdata
 	${MKDIR} s
-        # Link with ANSILib instead of Stubs because old shared C libraries
-        # have a buggy qsort that will blow up with such a large data set.
-	${LD} -o keygen o.keygen o.throwback o.unicdata C:o.ANSILib
+	${LD} -o keygen o.keygen o.throwback o.unicdata C:o.Stubs
 
 keyconvert: o.keyconvert o.unicdata
 	${MKDIR} s
