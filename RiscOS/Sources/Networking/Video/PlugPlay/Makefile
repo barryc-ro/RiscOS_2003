@@ -17,14 +17,13 @@
 # These are for builds where SYSTEM is not defined on the AMU command
 # line, e.g. ROM builds
 
-COMPONENT	= PlugPlay
 APP		= !PlugPlay
 MODULE		= rm.!PlugPlay
 ROM_MODULE	= aof.PlugPlay
 
 # Where are the resources?
 
-LDIR		= Resources.${LOCALE}.${SYSTEM}
+LDIR		= LocalRes:${COMPONENT}
 
 # Need to use various things for ROM builds or Messages file version tokens
 
@@ -36,8 +35,8 @@ ADDTOMESSAGES	= awk.AddToMsgs
 # Export Paths for Messages module
 #
 
-RESDIR		= <resource$dir>.Resources2.${COMPONENT}
-RESAPP		= <resource$dir>.Apps.${APP}
+RESDIR		= <Resource$Dir>.Resources2.${COMPONENT}
+RESAPP		= <Resource$Dir>.Apps.${APP}
 
 
 # -----------------------------------------------------------------------------
@@ -70,7 +69,7 @@ WFLAGS		= ~cf~vr
 # BASEFLAGS holds common compile time options that all builds will use.
 # BASEFLAGSD holds additional flags for debug builds.
 
-BASEFLAGS	= -DCOMPAT_INET4 "-DSYSTEM=\"${SYSTEM}\""
+BASEFLAGS	= -DCOMPAT_INET4 "-DSYSTEM=\"${COMPONENT}\""
 BASEFLAGSD	= -fn -DTRACE
 
 # Build-dependent flags.
@@ -156,11 +155,6 @@ FILES_COMMON = \
 FILES = \
  ${FILES_COMMON} \
  ${TARGET}
-
-# Include these in the ROM module
-
-RESFILES = \
- ${FILES_COMMON}
 
 
 # -----------------------------------------------------------------------------
@@ -323,6 +317,7 @@ resources:
 	-${CP} ${LDIR}.Sprites22	${RESDIR}.Sprites22	${CPFLAGS}
 	-${CP} ${LDIR}.Sprites23	${RESDIR}.Sprites23	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
+	${AWK} -f ${ADDTOMESSAGES} ${VERSIONNUM} >> ${RESDIR}.Messages
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.About		${RESDIR}.About		${CPFLAGS}
 	${WIPE} ${RESDIR}.About.CVS	${WFLAGS}
@@ -333,7 +328,6 @@ clean:
 	${WIPE}	abs		${WFLAGS}
 	${WIPE}	aof		${WFLAGS}
 	${WIPE}	linked		${WFLAGS}
-	${WIPE}	map		${WFLAGS}
 	${WIPE}	o		${WFLAGS}
 	${WIPE}	opp		${WFLAGS}
 	${WIPE}	oppd		${WFLAGS}
@@ -356,7 +350,6 @@ opp.dirs:
 	@${MKDIR} abs
 	@${MKDIR} aof
 	@${MKDIR} linked
-	@${MKDIR} map
 	@${MKDIR} o
 	@${MKDIR} opp
 	@${MKDIR} oppd
@@ -372,28 +365,16 @@ opp.dirs:
 
 
 # -----------------------------------------------------------------------------
-# Development rules
-#
-
-linkmap: ${OBJSPP} ${LIBS}
-	${LD} -map -o null:x ${OBJS} ${LIBS} > map.linked
-
-map:
-	${LD} -map -bin -base 0 -o null: ${OBJSPP} ${LIBS} > map.base0
-
-
-# -----------------------------------------------------------------------------
 # Final link for ROM Image (using given base address)
 #
 
 rom_link:
-	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
-		${ROM_MODULE} ${ABSSYM} -map > map.${COMPONENT}
-	truncate map.${COMPONENT} linked.${COMPONENT}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} \
+		${ROM_MODULE} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-oppz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
+oppz.ModuleWrap: s.ModuleWrap s.AppName s.ResFiles
 	${AS} ${AFLAGS} s.ModuleWrap $@
 
 s.ModuleWrap: ${WRAPPER}
@@ -425,7 +406,7 @@ ${ROM_MODULE}: oppz.ModuleWrap ${OBJSPPZ} ${ROMCSTUBS} ${LIBSZ} opp.dirs
 	@echo
 	${LD} -s syms.ROMMod -o $@ -aof oppz.ModuleWrap ${OBJSPPZ} ${LIBSZ} ${ROMCSTUBS}
 
- ${MODULE}D: oppdz.ModuleWrap ${OBJSPPDZ} ${LIBSZ} opp.dirs
+${MODULE}D: oppdz.ModuleWrap ${OBJSPPDZ} ${LIBSZ} opp.dirs
 	@echo
 	${LD} -s syms.ROMDMod -o $@ -module oppz.ModuleWrap ${OBJSPPDZ} ${LIBSZ}
 

@@ -36,6 +36,8 @@
 #endif
 #include <debuglib/debuglib.h>
 
+#include <VideoCtrl.h>
+
 #include "Filter.h"
 #include "FromROSLib.h"
 #include "Global.h"
@@ -49,7 +51,9 @@
 
 /* Local compile-time options */
 
-#define Magic_PlugIn_Instance 0x47554C50 /* "PLUG" */
+#define Magic_PlugIn_Instance  0x47554C50 /* "PLUG" */
+#define PlugIn_ParamsName_ID   "id"
+#define PlugIn_ParamsName_Data "data"
 
 /* Local structures */
 
@@ -85,12 +89,12 @@ typedef struct plugin_instance
   int                        last_xscroll;
   int                        last_yscroll;
 
-  char                     * url; ///// Not used yet
+  const char               * id;  /* These point into the plugin_file_entry structs, */
+  const char               * url; /* so should not have free() called on them.       */
 
   unsigned                   redraw_handler :1;
   unsigned                   reopen_handler :1;
   unsigned                   filter_done    :1;
-  unsigned                   have_vctrl     :1;
 }
 plugin_instance;
 
@@ -161,6 +165,9 @@ static void plugin_delete_instance(int handle)
   plugin_instance * i = plugin_find_instance(handle);
 
   if (i == NULL) return;
+
+  /* The 'id' and 'url' fields point into the file entries, so we */
+  /* do NOT free these individually.                              */
 
   plugin_delete_file_entries(i);
 
@@ -415,7 +422,9 @@ static int plugin_read_params_string(FILE * f, char ** string)
 /**************************************************************/
 /* plugin_read_params_file()                                  */
 /*                                                            */
-/* Read a parameters file.                                    */
+/* Read a parameters file. The 'url' and 'id' fields of the   */
+/* given plugin_instance structure may be updated on exit to  */
+/* point into appropriate strings within the file structures. */
 /*                                                            */
 /* Parameters: Pointer to the plugin_instance structure       */
 /*             relevant to the file;                          */
@@ -470,6 +479,15 @@ static _kernel_oserror * plugin_read_params_file(plugin_instance * i, const char
 
     c = plugin_read_params_string(f, &i->entries->mime);
     if (c == EOF) goto plugin_read_params_file_exit_with_error;
+
+    /* If we get the ID or DATA entries, store a direct pointer to them */
+    /* within the instance structure for faster access later.           */
+
+    if (i->entries->name != NULL)
+    {
+      if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_ID))   i->id  = i->entries->data;
+      if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Data)) i->url = i->entries->data;
+    }
   }
 
   /* Normal mode exit */
@@ -833,20 +851,50 @@ _kernel_oserror * plugin_got_abort(WimpMessage * m)
 
 _kernel_oserror * plugin_got_inform(WimpMessage * m)
 {
-  MPlugIn_Inform * inform = (MPlugIn_Inform *) &m->data;
-  char             name [sizeof(inform->name) + 1];
+  plugin_instance * i;
+  MPlugIn_Inform  * inform = (MPlugIn_Inform *) &m->data;
+  char              id [sizeof(inform->name) + 1];
 
   #ifdef TRACE
     if (tl & (1u<<30)) dprintf(("", "plugin_got_inform: Called\n"));
   #endif
 
-  strncpy(name, inform->name, sizeof(name) - 1);
-  name[sizeof(name) - 1] = '\0';
+  if (inform->info_id == MPlugIn_Inform_InfoID_VideoControlHandle)
+  {
+    strncpy(id, inform->name, sizeof(id) - 1);
+    id[sizeof(id) - 1] = '\0';
 
-  dprintf(("", "Inform received: '%s', %d, %08X\n",
-           name,
-           inform->info_id,
-           inform->info.video_control_handle));
+    #ifdef TRACE
+      if (tl & (1u<<30)) dprintf(("", "plugin_got_inform: Supported inform received for '%s', handle %08X\n",
+                                  id,
+                                  inform->info.video_control_handle));
+    #endif
+
+    i = instances;
+
+    while (i)
+    {
+      if (!strcmp(i->id, id)) break;
+      i = i->next;
+    }
+
+    if (i != NULL)
+    {
+      #ifdef TRACE
+        if (tl & (1u<<30)) dprintf(("", "plugin_got_inform: Assigning handle to instance %p\n", i));
+      #endif
+
+      i->video_control_handle = inform->info.video_control_handle;
+
+      /* Ensure the video position is up to date */
+
+      RetError(plugin_move_video(i));
+    }
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) dprintf(("", "plugin_got_inform: Successful\n"));
+  #endif
 
   return NULL;
 }
@@ -993,9 +1041,25 @@ static _kernel_oserror * plugin_move_video(plugin_instance * i)
 {
   /* Can't proceed unless we have a Video Control handle */
 
-  if (i->have_vctrl)
+  if (i->video_control_handle != 0)
   {
-    // _swix(VideoControl_Options...)
+    int opts[7];
+
+    opts[0] = vc_tags_rectangle;
+    opts[1] = 4;
+    opts[4] = i->position.xmax - i->position.xmin;
+    opts[5] = i->position.ymax - i->position.ymin;
+    opts[2] = i->position.xmin + opts[4] / 2;
+    opts[3] = i->position.ymin + opts[5] / 2;
+
+    opts[6] = vc_tags__end;
+
+    return _swix(VideoControl_Options,
+                 _INR(0,2),
+
+                 0,
+                 i->video_control_handle,
+                 &opts);
   }
 
   return NULL;
