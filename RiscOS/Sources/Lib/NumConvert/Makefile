@@ -154,7 +154,7 @@ o.locdirs:
 	@create o.locdirs
 	@stamp  o.locdirs
 
-o.dirs:
+o.dirs: o.locdirs
         @echo
 	${MKDIR} ${LIBDIR}
 	${MKDIR} ${EXPORT_DIR}
