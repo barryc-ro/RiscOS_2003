@@ -29,6 +29,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+THROWBACK = -Throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
@@ -81,7 +82,7 @@ NODB  =         -UREMOTE_DEBUG -DCHIMPANZEE_INTERFACE \
 
 NCTARGETARCH = ${NODB}
 
-CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS} ${DEBUG}
+CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS} ${DEBUG} -DUserIF_${USERIF}
 
 
 
