@@ -34,11 +34,13 @@ LD	= link
 RM      = remove
 TOKENISE = tokenise
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 ASFLAGS  = ${THROWBACK} -depend !Depend -Stamp -quit
 CCFLAGS  = ${THROWBACK} -c -depend !Depend ${INCLUDES} ${DFLAGS} -zM -ffah
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
+DFLAGS   = -D${MACHINE}
 
 TOKENS   = Hdr:Tokens
 
@@ -112,6 +114,7 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} linked
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${MODULE}: ${OBJS} ${TGRLIB}
