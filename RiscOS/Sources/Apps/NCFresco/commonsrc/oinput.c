@@ -270,6 +270,13 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
 	ti->max_up = webfonts[WEBFONT_TTY].max_up + INPUT_TEXT_BORDER_Y;
 	ti->max_down = webfonts[WEBFONT_TTY].max_down + INPUT_TEXT_BORDER_Y;
+
+	if (ii->hh.type == value_absunit)
+	{
+	    int extra = (int)ii->hh.u.f - (webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down + 2*INPUT_TEXT_BORDER_Y);
+	    ti->max_up += extra/2;
+	    ti->max_down += extra/2;
+	}
 	break;
     }
 

@@ -10,6 +10,8 @@
 
 #ifdef REMOTE_DEBUG
 
+static void dbglist(void);
+
 #include "debug/remote.h"
 
 static debug_session *db_sess = NULL;
@@ -21,12 +23,26 @@ static void cleanup(void)
 
 static int debug_cmd_handler(int argc, char *argv[], void *handle)
 {
-    if (argc == 2)
+    int handled = -1;
+    if (argc == 1)
     {
-	debug_set(argv[0], atoi(argv[1]));
-	return 0;
+	if (strcasecomp(argv[0], "showdbg") == 0)
+	{
+	    dbglist();
+	    handled = 1;
+	}
     }
-    return 1;
+    else if (argc == 2)
+    {
+	if (strcasecomp(argv[0], "openurl") == 0)
+	{
+	    frontend_open_url(argv[1], NULL, NULL, NULL, 0);
+	    handled = 1;
+	}
+	else
+	    handled = debug_set(argv[0], atoi(argv[1]));
+    }
+    return handled;
     handle = handle;
 }
 
@@ -161,17 +177,8 @@ enum
     layn
 };
 
-extern void dbginit(void)
+static void dbglist(void)
 {
-    dbg_conf_item *ptr = dbg_conf;
-    dbg_conf_item *end = ptr + sizeof(dbg_conf) / sizeof(dbg_conf_item);
-
-    while (ptr < end)
-    {
-	ptr->present = getenv(ptr->name) != NULL;
-	ptr++;
-    }
-
     TABDBG(("Table debugging present\n"));
     TABDBGN(("Excessive Table debugging present\n"));
     OBJDBG(("Object debugging present\n"));
@@ -202,16 +209,33 @@ extern void dbginit(void)
     LNKDBGN(("Excessive link debugging present\n"));
     LAYDBG(("Frame debugging present\n"));
     LAYDBGN(("Excessive frame debugging present\n"));
+}
 
+extern void dbginit(void)
+{
+    dbg_conf_item *ptr = dbg_conf;
+    dbg_conf_item *end = ptr + sizeof(dbg_conf) / sizeof(dbg_conf_item);
+
+    while (ptr < end)
+    {
+	ptr->present = getenv(ptr->name) != NULL;
+	ptr++;
+    }
+
+    dbglist();
+    
 #ifdef REMOTE_DEBUG
-    remote_debug_open("NCFresco", &db_sess);
-    if (db_sess)
-	remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
-    atexit(cleanup);
+    if (!db_sess)
+    {
+	remote_debug_open("NCFresco", &db_sess);
+	if (db_sess)
+	    remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
+	atexit(cleanup);
+    }
 #endif
 }
 
-extern void debug_set(const char *feature, int enable)
+extern int debug_set(const char *feature, int enable)
 {
     int ix;
 
@@ -224,6 +248,8 @@ extern void debug_set(const char *feature, int enable)
 	    break;
 	}
     }
+
+    return ix != sizeof(dbg_conf) / sizeof(dbg_conf_item);
 }
 
 extern int debug_get(const char *feature)
@@ -242,7 +268,12 @@ extern int debug_get(const char *feature)
     return 0;
 }
 
-
+extern void dbgpoll(void)
+{
+#ifdef REMOTE_DEBUG
+    debug_poll(db_sess);
+#endif
+}
 
 /* **** N.B.  These don't need semi-colons at the end as they define functions */
 DBGFNDEF(tabdbg, tab)
@@ -281,6 +312,10 @@ DBGFNDEF(laydbgn, layn)
 extern void dbginit(void)
 {
 
+}
+
+extern void dbgpoll(void)
+{
 }
 
 #endif /* DEBUG */

@@ -166,6 +166,7 @@ struct _frontend_view
 
 /* ----------------------------------------------------------------------------- */
 
+#define PROFILE_NUM_VAR		"Current$User"
 #define PROFILE_NAME_VAR	"User$Name"
 
 #define NVRAM_FONTS_TAG		"BrowserFontSize"

@@ -430,7 +430,7 @@ static key_list rca_web_keys[] =
     { kbd_handset_PRINT,		fevent_PRINT },
     { akbd_PrintK,			fevent_TOOLBAR_PRINT + fevent_WINDOW },
 
-    { kbd_handset_MENU,			fevent_TOOLBAR_DETAILS },
+    { kbd_handset_MENU,			fevent_TOGGLE_STATUS },
 
     { kbd_handset_TOOLBAR,          fevent_TOGGLE_STATUS },
     { kbd_handset_OPEN,             fevent_OPEN_URL+fevent_WINDOW },

@@ -500,9 +500,7 @@ static os_error *split_message(const char *str, int width, int handle, int *numl
             splitpoint = (char *)r.r[1];
             segwidth = r.r[3];
 
-#if UTIL_DEBUG
-	    fprintf(stderr, "ScanString: '%s' w %d = split leaves '%s' w %d\n", seg, width, splitpoint, segwidth);
-#endif
+/* 	    DBG(("ScanString: '%s' w %d = split leaves '%s' w %d\n", seg, width, splitpoint, segwidth)); */
 
             /* splitpoint should now point to a space, or the end of the string */
             if (lines)
@@ -750,9 +748,9 @@ int nvram_read(const char *tag, int *val)
     char buf[4];
     int err = -1;
     _swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
-#if DEBUG
-    fprintf(stderr, "nvram_read: '%s' = %d err %d\n", tag, *(int *)buf, err);
-#endif
+
+    DBG(("nvram_read: '%s' = %d err %d\n", tag, *(int *)buf, err));
+
     if (err >= 0)
 	*val = *(int *)buf;
     return err >= 0;
@@ -764,9 +762,9 @@ int nvram_write(const char *tag, int new_val)
     int err = -1;
     *(int *)buf = new_val;
     _swix(NVRAM_Write, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
-#if DEBUG
-    fprintf(stderr, "nvram_write: '%s' = %d err %d\n", tag, new_val, err);
-#endif
+
+    DBG(("nvram_write: '%s' = %d err %d\n", tag, new_val, err));
+
     return err == 0;
 }
 

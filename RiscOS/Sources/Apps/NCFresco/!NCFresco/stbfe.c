@@ -184,6 +184,7 @@ static void check_pending_scroll(fe_view v);
 static void fe_update_page_info(fe_view v);
 /* static void fe_force_fit(fe_view v, BOOL force); */
 static void fe_keyboard_close(void);
+static void re_read_config(int flags);
 
 /* -------------------------------------------------------------------------- */
 
@@ -741,12 +742,14 @@ enum
     content_tag_SOLIDHIGHLIGHT,
     content_tag_NOSCROLL,
     content_tag_FASTLOAD,
-    content_tag_URL
+    content_tag_URL,
+    content_tag_USER,
+    content_tag_USERNAME
 };
 
 static const char *content_tag_list[] =
 {
-    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD", "URL"
+    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD", "URL", "USER", "USERNAME"
 };
 
 /*
@@ -913,6 +916,28 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		    /* set up a pending line drop */
 		    if (vals[content_tag_LINEDROP].value)
 			linedrop = atoi(vals[content_tag_LINEDROP].value);
+
+		    /* check for user change */
+		    if (vals[content_tag_USER].value)
+		    {
+			int user = atoi(vals[content_tag_USER].value);
+			char *current_user_s = getenv(PROFILE_NUM_VAR);
+			if (current_user_s && atoi(current_user_s) != user)
+			{
+			    char buffer[64];
+
+			    /* set the current user variable */
+			    sprintf(buffer, "%d", user);
+			    _kernel_setenv(PROFILE_NUM_VAR, buffer);
+
+			    /* set the user name variable */
+			    translate_escaped_text(strsafe(vals[content_tag_USERNAME].value), buffer, sizeof(buffer));
+			    _kernel_setenv(PROFILE_NAME_VAR, buffer);
+
+			    /* re read the config and flush the cache */
+			    re_read_config(0);
+			}
+		    }
 		}
 		
 		/* read position for window, safe area relative */
@@ -1198,6 +1223,26 @@ fe_view fe_dbox_view(const char *name)
     }
 
     return view;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+static void fe_move_window_to_top(fe_view v)
+{
+    wimp_wstate state;
+    int dy;
+    
+    if (!v || !v->w)
+	return;
+
+    frontend_fatal_error(wimp_get_wind_state(v->w, &state));
+
+    dy = text_safe_box.y1 - state.o.box.y1;
+    state.o.box.y1 += dy;
+    state.o.box.y0 += dy;
+    frontend_fatal_error(wimp_open_wind(&state.o));
+
+    v->box = state.o.box;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -4042,6 +4087,28 @@ static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
     /* extend margin of view if not frames*/
     fe_status_set_margins(main_view, TRUE);
 
+    /* if a popup is open then move to top of OSK or screen */
+    {
+	fe_view v = fe_find_top_popup(main_view);
+	if (v && v->open_transient && (v->transient_position == fe_position_CENTERED || v->transient_position == fe_position_CENTERED_WITH_COORDS))
+	{
+	    wimp_wstate state;
+	    int dy;
+	    
+	    frontend_fatal_error(wimp_get_wind_state(v->w, &state));
+
+	    dy = box->y1 - state.o.box.y0;
+	    if (dy > text_safe_box.y1 - state.o.box.y1)
+		dy = text_safe_box.y1 - state.o.box.y1;
+
+	    state.o.box.y1 += dy;
+	    state.o.box.y0 += dy;
+	    frontend_fatal_error(wimp_open_wind(&state.o));
+
+	    v->box = state.o.box;
+	}
+    }
+    
     /* check that item with caret in it is still in view */
     {
 	fe_view v = fe_selected_view();
@@ -5106,6 +5173,8 @@ void fe_event_process(void)
 	mm_free(pending_error_retry);
 	pending_error_retry = NULL;
     }
+
+    dbgpoll();
 }
 
 /* ------------------------------------------------------------------------------------------- */

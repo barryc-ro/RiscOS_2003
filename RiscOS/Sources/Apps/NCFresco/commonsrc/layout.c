@@ -483,15 +483,15 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, in
 
 #if DEBUG
 {
-    fprintf(stderr, "layout: actually %d frames\n", doc->rh->nframes);
+    PRSDBG(("layout: actually %d frames\n", doc->rh->nframes));
     for (i = 0; i < doc->rh->nframes; i++)
     {
         fe_frame_info *ip = &info[i];
-        fprintf(stderr, "'%16s' %4d,%4d %4d,%4d div %d,%d,%d,%d '%s'\n",
+        PRSDBG(("'%16s' %4d,%4d %4d,%4d div %d,%d,%d,%d '%s'\n",
 		ip->name ? ip->name : "<none>",
 		ip->box.x0, ip->box.y0, ip->box.x1, ip->box.y1,
 		ip->dividers[0], ip->dividers[1], ip->dividers[2], ip->dividers[3],
-		urls && urls[i] ? urls[i] : "<none>");
+		urls && urls[i] ? urls[i] : "<none>"));
     }
 }
 #endif
@@ -552,10 +552,12 @@ void layout_free_spacing_list(antweb_doc *doc)
 static void dump_list(int n, VALUE *list)
 {
     int i;
-    fprintf(stderr, "layout: update heights to");
+    PRSDBG(("layout: update heights to"));
     for (i = 0; i < n; i++)
-        fprintf(stderr, " %g", list[i].u.f);
-    fprintf(stderr, "\n");
+    {
+        PRSDBG((" %g", list[i].u.f));
+    }
+    PRSDBG(("\n"));
 }
 #else
 #define dump_list(n, list)
