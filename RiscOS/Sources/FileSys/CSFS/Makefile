@@ -79,7 +79,7 @@ FDBASEOBJS    =	ofd.csfserr ofd.sfs ofd.sff ofd.sfi ofd.arcs    \
 		ofd.mount ofd.service ofd.serx ofd.update ofd.fs 	   \
 		ofd.interface ofd.link ofd.open	ofd.gbpb ofd.func ofd.file \
 		ofd.close ofd.args ofd.getbytes ofd.putbytes ofd.xstr      \
-		ofd.modulewrap ofd.modulewrap
+		ofd.modulewrap ofd.header
 
 OBJS =    o.resources  ${BASEOBJS}
 FDOBJS =  ofd.resources ${FDBASEOBJS}
