@@ -51,6 +51,7 @@ COMPONENT = PortMan
 TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
 EXPORTS   = ${EXP_C_H}.${COMPONENT} ${EXP_HDR}.${COMPONENT}
+RDIR      = ${RESDIR}.${COMPONENT}
 
 OBJS      =	\
 o.msgfile	\
@@ -116,6 +117,11 @@ dirs:
 	${MKDIR}	rm
 	${MKDIR}	sao
 
+
+resources:
+        ${MKDIR} ${RDIR}
+        ${CP} resources.<System>.Tags ${RDIR}.Tags ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 # dummy target
 h.header: o.header	;@
