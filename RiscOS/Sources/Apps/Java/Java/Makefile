@@ -56,7 +56,6 @@ resources:
         ${CP} ${RDIR}.!Run       ${INSTDIR}.${APP}.!Run        ${CPFLAGS}
         ${CP} ${RDIR}.!Runimage  ${INSTDIR}.${APP}.!Runimage   ${CPFLAGS}
         ${CP} ${RDIR}.!Sprites   ${INSTDIR}.${APP}.!Sprites    ${CPFLAGS}
-        ${CP} ${RDIR}.!Sprites22 ${INSTDIR}.${APP}.!Sprites22  ${CPFLAGS}
         ${CP} ${RDIR}.About      ${INSTDIR}.${APP}.About       ${CPFLAGS}
         ${CP} ${RDIR}.Copyright  ${INSTDIR}.${APP}.Copyright   ${CPFLAGS}
         ${CP} ${RDIR}.Index      ${INSTDIR}.${APP}.Index       ${CPFLAGS}
