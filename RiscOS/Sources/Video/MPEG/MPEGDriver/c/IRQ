@@ -81,6 +81,14 @@ Date		Who	Change
 31/01/2000	BJGA	Split video and audio IRQ handlers; implemented audio header
 			parsing, in order to set sample frequencies correctly;
 			adjusted VID_XDO and VID_XDS back again
+09/02/2000	BJGA	Mutes for one audio frame across sampling frequency changes
+			(masks nasty audio glitch); added support for dual mono audio;
+			implemented IRQ_UpdateMuteState() to manage the various things
+			that need to mute audio; rewrote code that assigns video frame
+			buffers so that two of them are only ever used for B-frames
+			(fix for 3520 bug) even though the possibility of us needing
+			three buffers simultaneously for anchor frames means that we
+			now need five frame buffers in total!!
 
 ***************************************************************************/
 
@@ -130,6 +138,7 @@ static void static_INT_SER (void);
 static void static_INT_PDE (void);
 static void static_INT_VHR (void);
 static void static_INT_SFC (void);
+static void static_INT_FNP (void);
 static void static_ProcessVideoHdr (void *argument);
 static void static_NewPictureDecode (void);
 static void static_ProcessVideoSequenceHdr (void);
@@ -302,8 +311,9 @@ void IRQ_HandleAudioIRQ (void)
   static unsigned int audio_ints;
   do
   {
-    audio_ints = AUD_ITR & AUD_ITM;
-    dprintf (("IRQ", "IRQ_HandleAudioIRQ: AUD_ITR = %04X\n", audio_ints));
+    audio_ints = AUD_ITR;
+//    dprintf (("IRQ", "IRQ_HandleAudioIRQ: AUD_ITR before masking = %04X\n", audio_ints));
+    audio_ints  &= AUD_ITM;
     
     if (audio_ints != 0)  /* quick reject if no audio interrupts */
     {
@@ -313,11 +323,11 @@ void IRQ_HandleAudioIRQ (void)
 /*    if (audio_ints & AUDIO_INT_CRC) static_INT_CRC ();*/
 /*    if (audio_ints & AUDIO_INT_ADF) static_INT_ADF ();*/
 /*    if (audio_ints & AUDIO_INT_POU) static_INT_POU ();*/
-      if (audio_ints & AUDIO_INT_SFC) /*static_INT_SFC ()*/;
+      if (audio_ints & AUDIO_INT_SFC) static_INT_SFC ();
 /*    if (audio_ints & AUDIO_INT_DCH) static_INT_DCH ();*/
 /*    if (audio_ints & AUDIO_INT_IFT) static_INT_IFT ();*/
 /*    if (audio_ints & AUDIO_INT_IFF) static_INT_IFF ();*/
-/*    if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();*/
+      if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();
     }
   }
   /* Only exit when we're satisfied that we're not about to raise another IRQ. */
@@ -487,8 +497,9 @@ _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
     if (irqs_were_enabled) _kernel_irqs_on ();
     
     /* Enable appropriate interrupts */
-//    AUD_ITM_8 |= AUDIO_INT_SFC>>8;
+    AUD_ITM_8 |= AUDIO_INT_SFC>>8;
     AUD_ITM_0 |= AUDIO_INT_VHR>>0;
+    AUD_ITM_8 |= AUDIO_INT_FNP>>8;
     
     /* Assume a 44.1 kHz sample rate unless told otherwise */
     STi3520L_SetPCMClock (sr_44k1, false, false);
@@ -507,23 +518,7 @@ Out:		Pointer to error block
 _kernel_oserror *IRQ_EnableAudioIRQs (void)
 {
   _kernel_oserror *e = NULL;
-  int retry_count = 200;
-  int dummy_counter;
-  
-  /* Update state machine - audio starts immediately */
-  Stream.audio.state = stream_open;
-  dprintf (("IRQ", "EnableAudioIRQs: audio.state = stream_open\n"));
-  
-  AUD_RST = 1;
-  /* Ensure the restart bit clears itself - if it doesn't then try writing the register again */
-  while ((retry_count-- > 0) && ((AUD_RST & 1) == 0))
-  {
-    for (dummy_counter = 0; dummy_counter < 100; dummy_counter++); /* wait a while */
-  }
-  if (retry_count == 0) dprintf (("IRQ", "EnableAudioIRQs: audio restart failed\n"));
-  
-  AUD_MUT = 0; /* unmute */
-  AUD_PLY = 1; /* start decoding */
+  dprintf (("IRQ", "EnableAudioIRQs\n"));
   return e;
 }
 
@@ -540,12 +535,34 @@ void IRQ_DisableAudioIRQs (void)
   WRITE_AUD_ITM(0);  /* mask off all audio interrupts */
   WRITE_AUD_IMS(0);
   
-  AUD_MUT = 1; /* mute */
-  AUD_PLY = 0; /* stop decoding */
-  
   /* Release 3520 audio IRQs */
   _swix (OS_ReleaseDeviceVector, _INR(0,4), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
     sti3520l_audio_irq_handler, Module_PrivateWord);
+}
+
+/******	IRQ_UpdateMuteState() **********************************************
+
+Purpose:	Mutes or unmutes, taking account of all reasons for muting
+Notes:		Is called whenever something has changed that could affect muting
+
+***************************************************************************/
+
+void IRQ_UpdateMuteState (void)
+{
+  if (Stream.rs_flags.audio_present == false ||
+      Stream.audio.state == stream_closed ||
+      Stream.audio.state == stream_prefilling ||
+      Stream.aud_flags.muted == true ||
+      Stream.volume == 0 ||
+      Stream.audio.speed_indicator != 1 ||
+      Stream.aud_flags.muted_across_sampling_frequency_transition == true)
+  {
+    AUD_MUT = 1;
+  }
+  else
+  {
+    AUD_MUT = 0;
+  }
 }
 
 /******	IRQ_AudioFast() ****************************************************
@@ -939,13 +956,47 @@ Notes:		This is enabled throughout prefill and normal play.
 static void static_INT_VHR (void)
 {
   sample_rate old_sampling_frequency = (sample_rate) Stream.audio_header.fields.sampling_frequency;
+  audio_channel_type old_mode = (audio_channel_type) Stream.audio_header.fields.mode;
+  
   dprintf (("IRQ", "INT_VHR\n"));
+  
+  /* Read new audio header from 3520 */
   Stream.audio_header.word = AUD_HDR;
-  if (!Stream.aud_flags.pcmclk_set_up_for_this_stream || (sample_rate) Stream.audio_header.fields.sampling_frequency != old_sampling_frequency)
+  
+  /* Unmute after a sampling frequency transition, if necessary */
+  if (Stream.aud_flags.muted_across_sampling_frequency_transition)
+  {
+    Stream.aud_flags.muted_across_sampling_frequency_transition = false;
+    IRQ_UpdateMuteState ();
+  }
+  
+  /* If sample rate has changed, or if this is the first header, set up PCMCLK */
+  /* Also mute for an audio frame, so as to mask the transitional glitch - but not on the first header! */
+  if ((sample_rate) Stream.audio_header.fields.sampling_frequency != old_sampling_frequency || !Stream.aud_flags.first_header_received)
   {
     STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, false);
-    Stream.aud_flags.pcmclk_set_up_for_this_stream = true;
+    if (Stream.aud_flags.first_header_received)
+    {
+      Stream.aud_flags.muted_across_sampling_frequency_transition = true;
+      IRQ_UpdateMuteState ();
+    }
   }
+  
+  /* If audio audio mode has changed, or if this is the first header, we may need to output left only, right only or both channels */
+  if ((audio_channel_type) Stream.audio_header.fields.mode != old_mode || !Stream.aud_flags.first_header_received)
+  {
+    if (Stream.audio_header.fields.mode != ct_dual_mono || Stream.audio_parms.specifier == dc_both)
+    {
+      AUD_EXT = dc_both;
+    }
+    else
+    {
+      AUD_EXT = Stream.audio_parms.specifier ^ 3; /* left and right channel bits are swapped in AUD_EXT and dual_channel_specifier */
+    }
+  }
+  
+  /* Ensure this is true from now on */
+  Stream.aud_flags.first_header_received = true;
 }
 
 /******	static_INT_SFC() ***************************************************
@@ -958,7 +1009,19 @@ Notes:		This is enabled throughout prefill and normal play.
 static void static_INT_SFC (void)
 {
   dprintf (("IRQ", "INT_SFC\n"));
-  STi3520L_SetPCMClock ((sample_rate) (AUD_SFR & 3), false, false);
+  /* The 3520 doesn't reset its internal copy of the latest sampling frequency on any software resets, so this interrupt is as good as useless! */
+}
+
+/******	static_INT_FNP() ***************************************************
+
+Purpose:	Handles First bit of New frame at PCM output audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_FNP (void)
+{
+  dprintf (("IRQ", "INT_FNP\n"));
 }
 
 /******	static_ProcessVideoHdr() *******************************************
@@ -1052,7 +1115,7 @@ static void static_NewPictureDecode (void)
   if (Stream.current_picture_structure != ps_first_field_picture)
   {
     dprintf (("IRQ", "NewPictureDecode: new frame struct\n"));
-    /* Remove a picture struct from the unused list (there will always be at least one unused at this point) */
+    /* Remove a frame struct from the unused list (there will always be at least one unused at this point) */
     new_frame = Stream.unused_frames;
     Stream.unused_frames = new_frame->decode_link;
     /* Add it on the front of the decoding list */
@@ -1061,8 +1124,6 @@ static void static_NewPictureDecode (void)
     new_frame->on_decode_list = true;
     /* Write picture parameters into the first picture_t struct */
     Stream.decode_frames->lastpic = &Stream.decode_frames->pic1;
-    /* Flags that we haven't assigned a frame buffer to this frame struct yet */
-    Stream.vid_flags.buffer_assigned_to_this_frame = false;
   }
   else
   {
@@ -1269,57 +1330,40 @@ static void static_ProcessVideoPictureHdr (void)
   Stream.decode_frames->frame_center_vertical_offset [1] = 0;
   Stream.decode_frames->frame_center_vertical_offset [2] = 0;
   Stream.decode_frames->lastpic->active_format = 0xFF; /* magic value to flag that AFD hasn't been found */
-
-  /* Get a new reconstruction frame pointer, unless we already have one */
-  if (!Stream.vid_flags.buffer_assigned_to_this_frame)
+  
+  /* Get a new reconstruction frame pointer */
+  if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE)
   {
-    Stream.decode_frames->frame_buffer = Stream.unused_frame_buffers;
-    if (Stream.decode_frames->frame_buffer == NULL)
-    {
-      /* In this case, all the frame buffers are already in use. */
-      /* The currently displaying frame will *definitely* be a B-frame, and so will be the next one to become available. */
-      /* We have to double-book it now, because we'd miss the hardware latch otherwise... */
-      Stream.decode_frames->frame_buffer = Stream.display_frames->frame_buffer;
-    }
-    else
-    {
-      /* Remove a frame_buffer struct from the unused list */
-      Stream.unused_frame_buffers = Stream.decode_frames->frame_buffer->unused_link;
-    }
-    /* Either way, increment the usage count */
-    Stream.decode_frames->frame_buffer->usage_count ++;
-    /* Flag that we've assigned a buffer now */
-    Stream.vid_flags.buffer_assigned_to_this_frame = true;
+    Stream.decode_frames->frame_buffer = Stream.next_B_frame_buffer;
   }
-  WRITE_VID_RFP(Stream.decode_frames->frame_buffer->addr);
+  else
+  {
+    Stream.decode_frames->frame_buffer = Stream.next_anchor_frame_buffer;
+  }
   
   /* Set up the predictor frame pointers (which depend upon picture_coding_type) */
   {
     frame_t *frame;
-    frame_t *next_frame; /* because we may be removing the frame from the list, we have to work this out first */
     int anchor_frames_found = 0;
-    unsigned int BFP = 0;
-    unsigned int FFP = 0;
-    for (frame = Stream.decode_frames->decode_link; frame != NULL; frame = next_frame)
+    unsigned int BFP = SDRAM_FRAME_BUFFER_1_START; /* these are as good as anything for use as defaults */
+    unsigned int FFP = SDRAM_FRAME_BUFFER_2_START; /* in the case of serious bitstream corruption!!     */
+    for (frame = Stream.decode_frames->decode_link; frame != NULL; frame = frame->decode_link)
     {
-      next_frame = frame->decode_link;
       if (frame->lastpic->picture_coding_type != B_PICTURE)
       {
         anchor_frames_found++;
         /* For anchor frames, the most recent anchor frame is written to VID_FFP */
-        if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE && anchor_frames_found == 1) FFP = frame->frame_buffer->addr;
-        /* For anchor frames, the second-most recent anchor frame is no longer required as a predictor */
-        if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE && anchor_frames_found == 2) static_RemoveFrameFromList (frame, true);
+        if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE && anchor_frames_found == 1) FFP = frame->frame_buffer;
         /* For B-frames, the most recent anchor frame is written to VID_BFP */
-        if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && anchor_frames_found == 1) BFP = frame->frame_buffer->addr;
+        if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && anchor_frames_found == 1) BFP = frame->frame_buffer;
         /* For B-frames, the second-most recent anchor frame is written to VID_FFP */
-        if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && anchor_frames_found == 2) FFP = frame->frame_buffer->addr;
+        if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && anchor_frames_found == 2) FFP = frame->frame_buffer;
       }
     }
     WRITE_VID_FFP(FFP); /* it seems that these writes will intermittently */
     WRITE_VID_BFP(BFP); /* fail if we do them in the opposite order!!     */
   }
-  dprintf (("IRQ", "ProcessVideoPictureHdr: RFP = %04X, FFP = %04X, BFP = %04X\n", VID_RFP & 0x3FFF, VID_FFP & 0x3FFF, VID_BFP & 0x3FFF));
+  dprintf (("IRQ", "ProcessVideoPictureHdr: RFP = %04X, FFP = %04X, BFP = %04X\n", Stream.decode_frames->frame_buffer, VID_FFP & 0x3FFF, VID_BFP & 0x3FFF));
   
   /* Add the frame into the display list (this depends upon the picture_coding_type too) */
   if (Stream.current_picture_structure != ps_first_field_picture /* note that this still refers to the previous picture */)
@@ -1874,7 +1918,7 @@ static void static_SetUpDisplayForNewAU (void)
         WRITE_VID_XDS(112+actual_display_width+6-1);
       }
       WRITE_VID_DCF(VID_DCF | VID_DCF_EVD);
-      WRITE_VID_DFP(Stream.display_frames->frame_buffer->addr);
+      WRITE_VID_DFP(Stream.display_frames->frame_buffer);
       /* Set state flags/variables */
       Stream.fields_into_this_PU = -1; /* start an incrementing count of how many fields the frame has been displayed for */
       Stream.field_to_trigger_second_decode_on = 0; /* default, used unless first decode stalls */
@@ -1921,6 +1965,12 @@ static void static_WriteDecodeInstruction (bool FIS)
       return;
     }
   } */
+  
+  /* Defer writing RFP until now, so that there's no chance that after the stream is closed, the 3520 is left with a   */
+  /* combination of RFP and picture_coding_type that contradicts the strict B-frame / anchor-frame buffer assignments. */
+  /* (Otherwise the 3520's internal B-frame pointers can be corrupted when the sequence header search is launched for the next stream.) */
+  WRITE_VID_RFP(Stream.decode_frames->frame_buffer);
+  
   VID_PFH = (Stream.decode_frames->lastpic->backward_horizontal_f_code << 4) | Stream.decode_frames->lastpic->forward_horizontal_f_code;
   VID_PFV = (Stream.decode_frames->lastpic->backward_vertical_f_code << 4) | Stream.decode_frames->lastpic->forward_vertical_f_code;
   VID_PPR1 = (Stream.decode_frames->lastpic->picture_coding_type << 4) | (Stream.decode_frames->lastpic->intra_dc_precision << 2) | Stream.decode_frames->lastpic->picture_structure;
@@ -1930,14 +1980,47 @@ static void static_WriteDecodeInstruction (bool FIS)
   
   if (Stream.next_picture_structure != ps_second_field_picture)
   {
-    /* If we just finished decoding a B-frame, remove it from the decoding list, since it's never going to be used as a predictor */
     if (Stream.decode_frames->decode_link != NULL) /* exempt the first frame, since there's no previous in this case! */
     {
+      /* If we just finished decoding a B-frame, remove it from the decoding list, since it's never going to be used as a predictor */
       if (Stream.decode_frames->decode_link->lastpic->picture_coding_type == B_PICTURE)
       {
         dprintf (("IRQ", "WriteDecodeInstruction: removing B-frame %d from decode list\n", ((int) Stream.decode_frames->decode_link - (int) Stream.frame) / sizeof (frame_t)));
         static_RemoveFrameFromList (Stream.decode_frames->decode_link, true);
       }
+      /* If we are just about to decode an anchor frame, remove the third-last anchor frame from the decoding list, since it's no longer needed */
+      if (Stream.decode_frames->lastpic->picture_coding_type != B_PICTURE)
+      {
+        frame_t *frame;
+        frame_t *next_frame; /* because we are removing a frame from the list, we have to work this out first */
+        int anchor_frames_found = 0;
+        for (frame = Stream.decode_frames->decode_link /* first on the list is definitely an anchor frame */; frame != NULL; frame = next_frame)
+        {
+          next_frame = frame->decode_link;
+          if (frame->lastpic->picture_coding_type != B_PICTURE)
+          {
+            anchor_frames_found++;
+            if (anchor_frames_found >= 2)
+            {
+              dprintf (("IRQ", "WriteDecodeInstruction: removing anchor frame %d from decode list\n", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
+              static_RemoveFrameFromList (frame, true);
+            }
+          }
+        }
+      }
+    }
+  }
+  if (Stream.next_picture_structure != ps_first_field_picture)
+  {
+    /* Update appropriate next-frame_buffer pointer */
+    if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE)
+    {
+      Stream.next_B_frame_buffer ^= (SDRAM_FRAME_BUFFER_4_START/256 ^ SDRAM_FRAME_BUFFER_5_START/256); /* toggle B-frame storage */
+    }
+    else
+    {
+      Stream.next_anchor_frame_buffer += (SDRAM_FRAME_BUFFER_2_START/256 - SDRAM_FRAME_BUFFER_1_START/256); /* cycle anchor frames between buffers 1, 2 and 3 */
+      if (Stream.next_anchor_frame_buffer == SDRAM_FRAME_BUFFER_4_START/256) Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_1_START/256; /* loop back to buffer 1 */
     }
   }
   
@@ -2044,13 +2127,6 @@ static void static_RemoveFrameFromList (frame_t *removed_frame, bool D_list)
     dprintf (("IRQ", "RemoveFrameFromList: returning frame %d to unused list\n", ((int) removed_frame - (int) Stream.frame) / sizeof (frame_t)));
     removed_frame->decode_link = Stream.unused_frames;
     Stream.unused_frames = removed_frame;
-    /* And if its frame_buffer usage count goes to zero, move that to the unused frame_buffer struct list too */
-    removed_frame->frame_buffer->usage_count --;
-    if (removed_frame->frame_buffer->usage_count == 0)
-    {
-      removed_frame->frame_buffer->unused_link = Stream.unused_frame_buffers;
-      Stream.unused_frame_buffers = removed_frame->frame_buffer;
-    }
   }
 }
 

@@ -21,6 +21,8 @@ Date		Who	Change
 			Audio_SWISetSpeed, Audio_SWIResetStream, static_AudioStart and static_AudioStop
 			based upon their c.Video equivalents; static_ReadBufferVariable is all-new
 28/01/2000	BJGA	Added audio header parsing initialisations
+07/02/2000	BJGA	Implemented muting, volume control, muting on "bit errors" (which I interpret
+			to mean audio frame CRC errors), and dual channel mode selection
 
 ***************************************************************************/
 
@@ -97,6 +99,10 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.s_flags.video_present = old_video_present_flag;
   Stream.csh = csh;
   Stream.audio_parms = *aps;
+  if (Stream.audio_parms.dual_channel_specifier_present == false)
+  {
+    Stream.audio_parms.specifier = dc_both; /* default to playing both dual-channels unless otherwise specified */
+  }
   
   /* Initialise various variables */
   Stream.rs_flags.video_present = Stream.s_flags.video_present;
@@ -111,6 +117,7 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.audio.since_open.picture_decode_errors = 0;
   Stream.audio.since_open.severe_errors = 0;
   Stream.audio.since_open.pipeline_errors = 0;
+  Stream.audio_header.word = 0;
   Stream.audio_buffer_prefill = static_ReadBufferVariable ("MPEG2$AudioBufferPreFill", DEFAULT_AUDIO_BUFFER_PREFILL);
   Stream.audio_buffer_low_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferLowWaterMark", DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK);
   Stream.audio_buffer_high_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferHighWaterMark", DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK);
@@ -222,9 +229,26 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWIPlay (unsigned int flags, stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
+  int retry_count = 200;
+  int dummy_counter;
   IGNORE(flags);
   IGNORE(ash);
   dprintf (("Audio", "SWIPlay\n"));
+  
+  /* Update state machine - audio starts immediately */
+  Stream.audio.state = stream_open;
+  dprintf (("Audio", "SWIPlay: audio.state = stream_open\n"));
+  
+  AUD_RST = 1;
+  /* Ensure the restart bit clears itself - if it doesn't then try writing the register again */
+  while ((retry_count-- > 0) && ((AUD_RST & 1) == 0))
+  {
+    for (dummy_counter = 0; dummy_counter < 100; dummy_counter++); /* wait a while */
+  }
+  if (retry_count == 0) dprintf (("Audio", "SWIPlay: audio restart failed\n"));
+  
+  AUD_PLY = 1; /* start decoding */
+  IRQ_UpdateMuteState ();
   
   e = IRQ_EnableAudioIRQs ();
   
@@ -247,6 +271,7 @@ _kernel_oserror *Audio_SWISetSpeed (unsigned int flags, stream_handle_t ash, uns
   IGNORE(ash);
   dprintf (("Audio", "SWISetSpeed\n"));
   Stream.audio.speed_indicator = speed;
+//  IRQ_UpdateMuteState ();
   return e;
 }
 
@@ -297,8 +322,9 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWIMuteSound (unsigned int flags, stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(flags);
   IGNORE(ash);
+  Stream.aud_flags.muted = flags & 1;
+  IRQ_UpdateMuteState ();
   return e;
 }
 
@@ -315,10 +341,21 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWISoundVolume (unsigned int flags, stream_handle_t ash, int volume, int *return_old_volume)
 {
   _kernel_oserror *e = NULL;
+  unsigned char attenuation;
   IGNORE(flags);
   IGNORE(ash);
-  IGNORE(volume);
-  IGNORE(return_old_volume);
+  *return_old_volume = Stream.volume;
+  if (volume != -1)
+  {
+    volume = MAX(volume, 0);
+    volume = MIN(volume, 256);
+    Stream.volume = volume;
+    attenuation = (256 - volume) / 4;
+    if (attenuation == 64) attenuation = 63;
+    AUD_LCA = attenuation;
+    AUD_RCA = attenuation;
+    IRQ_UpdateMuteState (); /* if maximum attenuation is selected, mute instead */
+  }
   return e;
 }
 
@@ -358,6 +395,15 @@ _kernel_oserror *Audio_SWISetAudioParameters0 (stream_handle_t ash, int new_stat
   IGNORE(ash);
   IGNORE(new_state);
   IGNORE(return_old_state);
+  
+  *return_old_state = Stream.audio_parms.mute_audio_on_errors;
+  
+  if ((int) new_state != -1) /* -1 means only return current value */
+  {
+    Stream.audio_parms.mute_audio_on_errors = new_state;
+    AUD_CRC = new_state;
+  }
+  
   return e;
 }
 
@@ -374,10 +420,40 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWISetAudioParameters1 (stream_handle_t ash, dual_channel_specifier new_state, dual_channel_specifier *return_old_state, audio_channel_type *return_channel_type)
 {
   _kernel_oserror *e = NULL;
+  audio_channel_type mode;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
   IGNORE(ash);
-  IGNORE(new_state);
-  IGNORE(return_old_state);
-  IGNORE(return_channel_type);
+  
+  if (irqs_were_enabled) _kernel_irqs_off (); /* |mode| might change under our feet otherwise */
+  
+  mode = (audio_channel_type) Stream.audio_header.fields.mode;
+  *return_old_state = Stream.audio_parms.specifier;
+  if (Stream.aud_flags.first_header_received)
+  {
+    *return_channel_type = mode;
+  }
+  else
+  {
+    *return_channel_type = ct_unknown;
+  }
+  
+  if ((int) new_state != -1) /* -1 means only return current values */
+  {
+    Stream.audio_parms.specifier = new_state;
+    if (Stream.aud_flags.first_header_received)
+    {
+      if (mode != ct_dual_mono || new_state == dc_both)
+      {
+        AUD_EXT = dc_both;
+      }
+      else
+      {
+        AUD_EXT = new_state ^ 3; /* left and right channel bits are swapped in AUD_EXT and dual_channel_specifier */
+      }
+    }
+  }
+  
+  if (irqs_were_enabled) _kernel_irqs_on ();
   return e;
 }
 
@@ -443,9 +519,13 @@ static _kernel_oserror *static_AudioStart (void)
   Stream.audio.since_reset.picture_decode_errors = 0;
   Stream.audio.since_reset.severe_errors = 0;
   Stream.audio.since_reset.pipeline_errors = 0;
-  Stream.audio_header.word = 0;
-  Stream.aud_flags.pcmclk_set_up_for_this_stream = false;
+  Stream.aud_flags.muted = false;
+  Stream.aud_flags.first_header_received = false;
+  Stream.aud_flags.muted_across_sampling_frequency_transition = false;
+  Stream.volume = 256;
   Stream.discarded_audio_bit_buffer_data = -1; /* flag that VID_ABL should be read on the next Audio_ResetStream */
+  IRQ_UpdateMuteState ();
+  AUD_CRC = Stream.audio_parms.mute_audio_on_errors;
   
   /* Claim interrupts */
   IRQ_EnableCommonIRQs ();
@@ -490,6 +570,8 @@ static unsigned int static_AudioStop (bool play_out)
       Stuffing_FreePacket (&Stream.audio);
     }
   }
+  IRQ_UpdateMuteState ();
+  AUD_PLY = 0; /* stop decoding */
   
   /* Release interrupts */
   IRQ_DisableCommonIRQs ();
