@@ -117,17 +117,17 @@ all:	${TARGET} ${TARGETZ} ${LIBS}
 
 ${PNGLIB}:
 	dir PNG
-	amu ${MFLAGS}
+	amu ${MFLAGS} ${MAKECMDGOALS}
 	back
 
 ${PNGLIBZ}:
 	dir PNG
-	amu ${MFLAGS}
+	amu ${MFLAGS} ${MAKECMDGOALS}
 	back
 
 ${JPEGLIB}:
 	dir JPEG
-	amu ${MFLAGS}
+	amu ${MFLAGS} ${MAKECMDGOALS}
 	back
 
 #
