@@ -31,7 +31,7 @@ SQFLAGS =
 # Program specific options:
 #
 COMPONENT = NCFresco
-TARGET    = aof.${COMPONENT}
+TARGET    = aof.ncfre-${TYPE}
 
 ABSSYM    = RISC_OSLib:o.c_abssym
 
@@ -40,10 +40,6 @@ ABSSYM    = RISC_OSLib:o.c_abssym
 #
 rom: 
         @echo ${COMPONENT}: rom module built
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTALLDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
 
 clean:
         @echo ${COMPONENT}: cleaned
@@ -155,7 +151,7 @@ export_hdrs:
 #
 
 rom_link: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET}${TYPE} ${ABSSYM}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link for ${ITYPE} build complete
 
