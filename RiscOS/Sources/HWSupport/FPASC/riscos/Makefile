@@ -21,7 +21,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = CDir
+MKDIR   = do mkdir -p
 AS      = ObjAsm
 CP      = Copy
 LD      = Link
@@ -48,6 +48,11 @@ rom: ${TARGET}
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
+install: ${TARGET}
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
@@ -63,27 +68,14 @@ resources:
         ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-# ARM600
-#
 ${TARGET}: o.fpe
         ${MKDIR} rm.${MACHINE}
         ${LD} -rmf -o $@ o.fpe
 
-o.fpe: s.fpemedusa
-        ${AS} -I Hdr:t.^ ${ASFLAGS} -APCS 3/32bit -CPU ARM7M s.fpemedusa $@
-
-# ARM2/3
-#
-#${TARGET}: o.fpe400
-#        ${MKDIR} rm.${MACHINE}
-#        ${LD} -rmf -o $@ o.fpe400
-#
-#o.fpe400: s.fpe400
-#        ${AS} -I Hdr:t.^ ${ASFLAGS} -APCS 3/26bit s.fpe400 $@
+o.fpe: s.${System}
+        ${AS} -I Hdr:t.^ ${ASFLAGS} -APCS ${FPE_APCS} -CPU ARM7M s.${System} $@
 
 ${EXP_HDR}.FPEmulator: hdr.FPEmulator
         ${CP} hdr.FPEmulator $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.fpe400: s.fpe400 ^.coresrc.s.main ^.coresrc.^.coresrc.s.defaults ^.coresrc.^.vensrc.riscos.options Hdr:t.^.ListOpts Hdr:t.^.Macros Hdr:t.^.Services Hdr:t.^.ModHand Hdr:t.^.EnvNumbers ^.coresrc.^.vensrc.riscos.FPEMacros ^.coresrc.^.vensrc.riscos.^.^.VersionASM ^.coresrc.^.coresrc.s.regnames ^.coresrc.^.coresrc.s.armdefs ^.coresrc.^.coresrc.s.fpadefs ^.coresrc.^.coresrc.s.wsdefs ^.coresrc.^.coresrc.^.vensrc.riscos.ctxtws ^.coresrc.^.coresrc.^.vensrc.riscos.globalws ^.coresrc.^.vensrc.riscos.start ^.coresrc.^.coresrc.s.toplevel ^.coresrc.^.coresrc.^.coresrc.s.macros ^.coresrc.^.coresrc.^.coresrc.s.fpaundef ^.coresrc.^.coresrc.^.coresrc.s.fpeundef ^.coresrc.^.coresrc.^.coresrc.s.ldst ^.coresrc.^.coresrc.^.coresrc.s.rounding ^.coresrc.^.coresrc.^.coresrc.s.nans ^.coresrc.^.coresrc.^.coresrc.s.arith ^.coresrc.^.coresrc.^.coresrc.s.transhw ^.coresrc.^.coresrc.^.coresrc.s.transsw ^.coresrc.^.coresrc.^.coresrc.s.interf ^.coresrc.^.vensrc.riscos.end
-o.fpe: s.fpemedusa ^.coresrc.s.main ^.coresrc.^.coresrc.s.defaults ^.coresrc.^.vensrc.riscos.options Hdr:t.^.ListOpts Hdr:t.^.Macros Hdr:t.^.Services Hdr:t.^.ModHand Hdr:t.^.EnvNumbers ^.coresrc.^.vensrc.riscos.FPEMacros ^.coresrc.^.vensrc.riscos.^.^.VersionASM Hdr:t.^.SWIs Hdr:t.^.RISCOS ^.coresrc.^.coresrc.s.regnames ^.coresrc.^.coresrc.s.armdefs ^.coresrc.^.coresrc.s.fpadefs ^.coresrc.^.coresrc.s.wsdefs ^.coresrc.^.coresrc.^.vensrc.riscos.ctxtws ^.coresrc.^.coresrc.^.vensrc.riscos.globalws ^.coresrc.^.vensrc.riscos.start ^.coresrc.^.coresrc.s.toplevel ^.coresrc.^.coresrc.^.coresrc.s.macros ^.coresrc.^.coresrc.^.coresrc.s.fpaundef ^.coresrc.^.coresrc.^.coresrc.s.fpeundef ^.coresrc.^.coresrc.^.coresrc.s.ldst ^.coresrc.^.coresrc.^.coresrc.s.rounding ^.coresrc.^.coresrc.^.coresrc.s.nans ^.coresrc.^.coresrc.^.coresrc.s.arith ^.coresrc.^.coresrc.^.coresrc.s.transhw ^.coresrc.^.coresrc.^.coresrc.s.transsw ^.coresrc.^.coresrc.^.coresrc.s.interf ^.coresrc.^.vensrc.riscos.end
