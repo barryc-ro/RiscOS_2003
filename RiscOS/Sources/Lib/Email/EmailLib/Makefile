@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.09 for RISC OS
+#	VERSION:	0.10 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -24,6 +24,8 @@
 #	09/01/98	0.07	RDW	merged in BALs debug build target
 #	18/02/98	0.08	RDW	Split NetFax NFE code from generic emaillibrary
 #	20/02/98	0.09	RDW	added XNFrtnrcpt to OBJS, HDRS, OBJSZ, OBJSD
+#	25/02/98	0.10	RDW	Commented out DEBUG so it can be passed from
+#					amu commandline
 
 #
 # Paths
@@ -80,7 +82,7 @@ ABSSYM=         RISC_OSLib:o.AbsSym
 
 C++LIB=		C:o.c++lib 
 
-DEBUG=		#-DMEMCHECK #-DDEBUGLIB
+#DEBUG=		#-DMEMCHECK #-DDEBUGLIB
 
 CFLAGS=		-ffah -I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}
