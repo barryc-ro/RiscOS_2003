@@ -3,7 +3,8 @@
 /*          (C) 2000 Pace Micro Technology PLC                */
 /*          All rights reserved                               */
 /*                                                            */
-/* Purpose: Handle the Breakpoint dialogue box.               */
+/* Purpose: Handle the Breakpoint dialogue box and provide    */
+/*          breakpoint structure management functions.        */
 /*                                                            */
 /* Author:  A.D.Hodgkinson.                                   */
 /*                                                            */
@@ -27,6 +28,7 @@
 #include "BEManager.h"
 #include "BEStructs.h"
 #include "Errors.h"
+#include "FEStructs.h"
 #include "Limit.h"
 #include "List.h"
 #include "Global.h"
@@ -37,10 +39,24 @@
 /* Local variables */
 
 static ObjectId window_for_focus = NULL_ObjectId;
+static bool     nulls_claimed    = false;
+
+/* The following array contents must match the order of items in the */
+/* breakpoint_type enumeration defined in FEStructs.h, as code below */
+/* uses the type as an index into the array.                         */
+
+static const char * idents[] = {
+                                 "BPFunction:Function",
+                                 "BPAddress:Address",
+                                 "BPSWI:SWI",
+                                 "BPLine:Line",
+                                 "BPWimpEvent:Wimp event",
+                                 "BPServiceCall:Service call",
+                                 "BPUpCall:UpCall"
+                               };
 
 /* Local functions */
 
-static _kernel_oserror * breakpoint_set_up           (ObjectId o, list_add_for * attached);
 static int               breakpoint_gain_focus       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 static int               breakpoint_parent_hidden    (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
@@ -65,7 +81,7 @@ _kernel_oserror * breakpoint_set_up(ObjectId o, list_add_for * attached)
   ComponentId      focus = NULL_ComponentId;
   int              state;
 
-  dprintf(("BrkP", "breakpoints_set_up: Called with ID &%08X for &%08X\n", (int) o, (int) attached));
+  dprintf(("BrkP", "breakpoint_set_up: Called with ID &%08X for &%08X\n", (int) o, (int) attached));
 
   if (attached == NULL)
   {
@@ -252,17 +268,26 @@ _kernel_oserror * breakpoint_set_up(ObjectId o, list_add_for * attached)
   }
   else
   {
-    unsigned int flags;
-    unsigned int add = 0;
+    _kernel_oserror * e = NULL;
+    breakpoint      * b;
+    unsigned int      flags;
 
     def = NULL_ComponentId;
 
+    /* Build a temporary breakpoint structure from the initial text. Until */
+    /* this is freed, return... must not be called - so no RetError.       */
+
+    RetError(breakpoint_string_to_struct(attached->initial_text, &b));
+
     /* See if this is an item for the main writeable */
 
-    if      (!strncmp(attached->initial_text, Breakpoint_Tag_Function, sizeof(Breakpoint_Tag_Function) - 1)) add = sizeof(Breakpoint_Tag_Function) - 1, def = Breakpoint_CID_Function;
-    else if (!strncmp(attached->initial_text, Breakpoint_Tag_Address,  sizeof(Breakpoint_Tag_Address)  - 1)) add = sizeof(Breakpoint_Tag_Address)  - 1, def = Breakpoint_CID_Address;
-    else if (!strncmp(attached->initial_text, Breakpoint_Tag_SWI,      sizeof(Breakpoint_Tag_SWI)      - 1)) add = sizeof(Breakpoint_Tag_SWI)      - 1, def = Breakpoint_CID_SWI;
-    else if (!strncmp(attached->initial_text, Breakpoint_Tag_Line,     sizeof(Breakpoint_Tag_Line)     - 1)) add = sizeof(Breakpoint_Tag_Line)     - 1, def = Breakpoint_CID_Line;
+    switch (b->type)
+    {
+      case breakpoint_type_function: def = Breakpoint_CID_Function; break;
+      case breakpoint_type_address:  def = Breakpoint_CID_Address;  break;
+      case breakpoint_type_swi:      def = Breakpoint_CID_SWI;      break;
+      case breakpoint_type_line:     def = Breakpoint_CID_Line;     break;
+    }
 
     /* If it is, select the appropriate radio button and fill in the text */
 
@@ -270,58 +295,64 @@ _kernel_oserror * breakpoint_set_up(ObjectId o, list_add_for * attached)
     {
       focus = Breakpoint_CID_MainWriteable;
 
-      RetError(radiobutton_set_state(0, o, def, 1));
+      /* Value of 'e' gets dealt with later on, below */
 
-      RetError(utils_set_writeable_field(o,
-                                         focus,
-                                         attached->initial_text + add,
-                                         Limits_Writeable_General));
+      e = utils_set_writeable_field(o,
+                                    focus,
+                                    b->info,
+                                    Limits_Writeable_General);
     }
 
     /* Otherwise, deal with the Wimp event, service call and UpCall options */
 
-    else if (!strncmp(attached->initial_text, Breakpoint_Tag_WimpEvent, sizeof(Breakpoint_Tag_WimpEvent) - 1))
+    else if (b->type == breakpoint_type_event)
     {
       def = Breakpoint_CID_WimpEventRadio;
 
-      RetError(radiobutton_set_state(0, o, def, 1));
-
-      RetError(utils_set_display_field(o,
-                                       Breakpoint_CID_WimpEventDisplay,
-                                       attached->initial_text + sizeof(Breakpoint_Tag_WimpEvent) - 1,
-                                       Limits_Breakpoint_WEDisplay));
+      e = utils_set_display_field(o,
+                                  Breakpoint_CID_WimpEventDisplay,
+                                  b->info,
+                                  Limits_Breakpoint_WEDisplay);
     }
-    else if (!strncmp(attached->initial_text, Breakpoint_Tag_ServiceCall, sizeof(Breakpoint_Tag_ServiceCall) - 1))
+    else if (b->type == breakpoint_type_service)
     {
       def   = Breakpoint_CID_ServiceCallRadio;
       focus = Breakpoint_CID_ServiceCallWriteable;
 
-      RetError(radiobutton_set_state(0, o, def, 1));
-
-      RetError(utils_set_writeable_field(o,
-                                         focus,
-                                         attached->initial_text + sizeof(Breakpoint_Tag_ServiceCall) - 1,
-                                         Limits_Breakpoint_SCWriteable));
+      e = utils_set_writeable_field(o,
+                                    focus,
+                                    b->info,
+                                    Limits_Breakpoint_SCWriteable);
     }
-    else if (!strncmp(attached->initial_text, Breakpoint_Tag_UpCall, sizeof(Breakpoint_Tag_UpCall) - 1))
+    else if (b->type == breakpoint_type_upcall)
     {
       def   = Breakpoint_CID_UpCallRadio;
       focus = Breakpoint_CID_UpCallWriteable;
 
-      RetError(radiobutton_set_state(0, o, def, 1));
-
-      RetError(utils_set_writeable_field(o,
-                                         focus,
-                                         attached->initial_text + sizeof(Breakpoint_Tag_UpCall) - 1,
-                                         Limits_Breakpoint_UCWriteable));
+      e = utils_set_writeable_field(o,
+                                    focus,
+                                    b->info,
+                                    Limits_Breakpoint_UCWriteable);
     }
 
-    /* Nothing selected? Bad string. */
+    /* Free the temporary structure and check if an error was raised */
+
+    breakpoint_free(b);
+
+    /* ...so, can now return any errors */
+
+    if (e != NULL) return e;
+
+    /* Nothing to select? Bad string. Else select the radio button. */
 
     if (def == NULL_ComponentId)
     {
       return errors_frontend_error(fee_invalid_parameters,
                                    "breakpoint_set_up");
+    }
+    else
+    {
+      RetError(radiobutton_set_state(0, o, def, 1));
     }
 
     /* Was whatever we just selected already greyed out? */
@@ -348,9 +379,10 @@ _kernel_oserror * breakpoint_set_up(ObjectId o, list_add_for * attached)
   /* are greyed out, which is why it needs to be set manually in the    */
   /* first place.                                                       */
 
-  if (focus != NULL_ComponentId)
+  if (focus != NULL_ComponentId && nulls_claimed == false)
   {
     window_for_focus = o;
+    nulls_claimed    = true;
 
     register_null_claimant(Wimp_ENull,
                            breakpoint_gain_focus,
@@ -359,7 +391,7 @@ _kernel_oserror * breakpoint_set_up(ObjectId o, list_add_for * attached)
 
   /* Done */
 
-  dprintf(("BrkP", "breakpoints_set_up: Successful\n"));
+  dprintf(("BrkP", "breakpoint_set_up: Successful\n"));
 
   return NULL;
 }
@@ -393,6 +425,7 @@ static int breakpoint_gain_focus(int eventcode, WimpPollBlock * b, IdBlock * idb
                    (ComponentId) handle);
 
   window_for_focus = NULL_ObjectId;
+  nulls_claimed    = false;
 
   deregister_null_claimant(Wimp_ENull,
                            breakpoint_gain_focus,
@@ -522,11 +555,12 @@ static int breakpoint_parent_hidden(int eventcode, ToolboxEvent * event, IdBlock
 
 int breakpoint_add(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  list_add_for * attached;
-  char           field[Limits_List_Item];
-  const char   * tag;
-  ComponentId    selected, readfrom;
-  size_t         len;
+  breakpoint        b;
+  _kernel_oserror * e;
+  list_add_for    * attached;
+  char            * listitem;
+  char              field[Limits_List_Item];
+  ComponentId       selected, readfrom;
 
   dprintf(("BrkP", "breakpoint_add: Called\n"));
 
@@ -615,13 +649,13 @@ int breakpoint_add(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
 
   switch (selected)
   {
-    case Breakpoint_CID_Function:         readfrom = Breakpoint_CID_MainWriteable,        tag = Breakpoint_Tag_Function;    break;
-    case Breakpoint_CID_Address:          readfrom = Breakpoint_CID_MainWriteable,        tag = Breakpoint_Tag_Address;     break;
-    case Breakpoint_CID_SWI:              readfrom = Breakpoint_CID_MainWriteable,        tag = Breakpoint_Tag_SWI;         break;
-    case Breakpoint_CID_Line:             readfrom = Breakpoint_CID_MainWriteable,        tag = Breakpoint_Tag_Line;        break;
-    case Breakpoint_CID_WimpEventRadio:   readfrom = Breakpoint_CID_WimpEventDisplay,     tag = Breakpoint_Tag_WimpEvent;   break;
-    case Breakpoint_CID_ServiceCallRadio: readfrom = Breakpoint_CID_ServiceCallWriteable, tag = Breakpoint_Tag_ServiceCall; break;
-    case Breakpoint_CID_UpCallRadio:      readfrom = Breakpoint_CID_UpCallWriteable,      tag = Breakpoint_Tag_UpCall;      break;
+    case Breakpoint_CID_Function:         readfrom = Breakpoint_CID_MainWriteable,        b.type = breakpoint_type_function; break;
+    case Breakpoint_CID_Address:          readfrom = Breakpoint_CID_MainWriteable,        b.type = breakpoint_type_address;  break;
+    case Breakpoint_CID_SWI:              readfrom = Breakpoint_CID_MainWriteable,        b.type = breakpoint_type_swi;      break;
+    case Breakpoint_CID_Line:             readfrom = Breakpoint_CID_MainWriteable,        b.type = breakpoint_type_line;     break;
+    case Breakpoint_CID_WimpEventRadio:   readfrom = Breakpoint_CID_WimpEventDisplay,     b.type = breakpoint_type_event;    break;
+    case Breakpoint_CID_ServiceCallRadio: readfrom = Breakpoint_CID_ServiceCallWriteable, b.type = breakpoint_type_service;  break;
+    case Breakpoint_CID_UpCallRadio:      readfrom = Breakpoint_CID_UpCallWriteable,      b.type = breakpoint_type_upcall;   break;
 
     default:
     {
@@ -633,71 +667,71 @@ int breakpoint_add(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
     break;
   }
 
-  len = strlen(tag);
+  /* Read the field */
 
-  if (len + 1 < sizeof(field))
+  if (readfrom == Breakpoint_CID_WimpEventDisplay)
   {
-    /* Read the field */
+    ChkError(displayfield_get_value(0,
+                                    idb->self_id,
+                                    readfrom,
+                                    field,
+                                    sizeof(field),
+                                    NULL));
+  }
+  else
+  {
+    ChkError(writablefield_get_value(0,
+                                     idb->self_id,
+                                     readfrom,
+                                     field,
+                                     sizeof(field),
+                                     NULL));
+  }
 
-    if (readfrom == Breakpoint_CID_WimpEventDisplay)
+  field[sizeof(field) - 1] = '\0';
+  b.info = field;
+
+  ChkError(toolbox_get_client_handle(0,
+                                     idb->self_id,
+                                     (void *) (&attached)));
+
+  dprintf(("BrkP", "breakpoint_add: Attached list_add_for is at &%08X\n", (unsigned int) attached));
+
+  /* Assemble the item string. Must not use ChkError until freed */
+  /* or the item will be leaked.                                 */
+
+  ChkError(breakpoint_struct_to_string(&b, &listitem));
+
+  dprintf(("BrkP", "breakpoint_add: Composite text is '%s'\n", listitem));
+
+  if (attached && attached->parent != NULL_ObjectId)
+  {
+    if (attached->list_item >= 0)
     {
-      ChkError(displayfield_get_value(0,
-                                      idb->self_id,
-                                      readfrom,
-                                      field + len,
-                                      sizeof(field) - len,
-                                      NULL));
+      /* We're open for a specific item in the list, so change its text */
+      /* and update the attached list_add_for data                      */
+
+      e = list_modify_item(attached->parent, attached->list_item, listitem);
+      if (e != NULL) goto ba_bail;
+
+      /* The dialogue box may not be closing (e.g. Adjust-click) so make */
+      /* sure the initial text record is updated, otherwise a subsequent */
+      /* Adjust-click on Cancel would behave strangely.                  */
+
+      StrNCpy0(attached->initial_text, listitem);
     }
     else
     {
-      ChkError(writablefield_get_value(0,
-                                       idb->self_id,
-                                       readfrom,
-                                       field + len,
-                                       sizeof(field) - len,
-                                       NULL));
-    }
+      /* We're open for no specific item, so add to the top */
 
-    field[sizeof(field) - 1] = '\0';
-
-    if (*(field + len) != '\0')
-    {
-      /* Assemble the full string */
-
-      strncpy(field, tag, len);
-
-      dprintf(("BrkP", "breakpoint_add: Composite text is '%s'\n", field));
-
-      ChkError(toolbox_get_client_handle(0,
-                                         idb->self_id,
-                                         (void *) (&attached)));
-
-      dprintf(("BrkP", "breakpoint_add: Attached list_add_for is at &%08X\n", (unsigned int) attached));
-
-      if (attached && attached->parent != NULL_ObjectId)
-      {
-        if (attached->list_item >= 0)
-        {
-          /* We're open for a specific item in the list, so change its text */
-          /* and update the attached list_add_for data                      */
-
-          ChkError(list_modify_item(attached->parent, attached->list_item, field));
-
-          /* The dialogue box may not be closing (e.g. Adjust-click) so make */
-          /* sure the initial text record is updated, otherwise a subsequent */
-          /* Adjust-click on Cancel would behave strangely.                  */
-
-          StrNCpy0(attached->initial_text, field);
-        }
-        else
-        {
-          /* We're open for no specific item, so add to the top */
-
-          ChkError(list_add_item(attached->parent, field));
-        }
-      }
+      e = list_add_item(attached->parent, listitem);
+      if (e != NULL) goto ba_bail;
     }
   }
+
+  /* Finished with the string */
+
+  free(listitem);
 
   /* Should we close the window? (Keyboard shortcut or SELECT pressed) */
 
@@ -710,6 +744,15 @@ int breakpoint_add(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
   }
 
   dprintf(("BrkP", "breakpoint_add: Successful\n"));
+
+  return 0;
+
+ba_bail:
+
+  dprintf(("BrkP", "breakpoint_add: Internal error, bailing\n"));
+
+  free(listitem);
+  ChkError(e);
 
   return 0;
 }
@@ -760,9 +803,6 @@ int breakpoint_cancel(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
   return 0;
 }
 
-/**************************************************************/
-/* breakpoint_radios()                                        */
-/*                                                            */
 /* Called when one of the radio buttons in the Breakpoint     */
 /* dialogue box changes state.                                */
 /*                                                            */
@@ -875,4 +915,200 @@ static _kernel_oserror * breakpoint_grey_from_radios(ObjectId self, ComponentId 
   dprintf(("BrkP", "breakpoint_grey_from_radios: Successful\n"));
 
   return NULL;
+}
+
+/**************************************************************/
+/* breakpoint_free()                                          */
+/*                                                            */
+/* Free the contents of a given breakpoint structure and the  */
+/* structure itself. Will deal with next and previous         */
+/* pointers within itself, but callers must ensure that if    */
+/* the item given is pointed to by a wider list pointer (e.g. */
+/* a project structure), that structure is pointed to another */
+/* item first.                                                */
+/*                                                            */
+/* Parameters: Pointer to the breakpoint structure to free.   */
+/*             May be NULL, in which case the function does   */
+/*             nothing.                                       */
+/**************************************************************/
+
+void breakpoint_free(breakpoint * b)
+{
+  if (b == NULL) return;
+
+  free(b->info);
+
+  if (b->prev != NULL) b->prev->next = b->next;
+  if (b->next != NULL) b->next->prev = b->prev;
+
+  free(b);
+}
+
+/**************************************************************/
+/* breakpoint_struct_to_string()                              */
+/*                                                            */
+/* Convert the contents of a given breakpoint structure into  */
+/* a string for use in dialogue boxes etc.                    */
+/*                                                            */
+/* String is of the form "<type>: <name>", e.g. "Line: 452".  */
+/* Actual content depends on the application's Messages file, */
+/* so it is unwise to store these strings in files as they    */
+/* wouldn't load back properly should the messages have       */
+/* changed - unless the file contained the messages to use as */
+/* well...                                                    */
+/*                                                            */
+/* Parameters: Pointer to the breakpoint structure to read;   */
+/*                                                            */
+/*             Pointer to a char *, updated on exit with a    */
+/*             pointer to the constructed string. This is     */
+/*             allocated by malloc; the caller is responsible */
+/*             for freeing it when no longer needed.          */
+/**************************************************************/
+
+_kernel_oserror * breakpoint_struct_to_string(const breakpoint * b, char ** name)
+{
+  unsigned int   count = 0;
+  char         * str;
+
+  dprintf(("BrkP", "breakpoint_struct_to_string: Called for &%08X\n", (unsigned int) b));
+
+  if (
+       b        == NULL           ||
+       name     == NULL           ||
+       b->info  == NULL           ||
+       *b->info == '\0'           ||
+       b->type  <  0              ||
+       b->type  >= sizeof(idents)
+     )
+     return errors_frontend_error(fee_invalid_parameters,
+                                  "breakpoint_struct_to_string");
+
+  /* The lookup_token calls update the global 'tokens' buffer contents. */
+
+  count = strlen(lookup_token(idents[b->type],0,0)) +
+          2                                         + /* ": "   */
+          strlen(b->info)                           + /* <info> */
+          1;                                          /* NUL    */
+
+  /* Allocate space */
+
+  str = malloc(count);
+  if (str == NULL) return errors_frontend_error(fee_out_of_memory,
+                                                "breakpoint_struct_to_string");
+
+  /* Build it */
+
+  strcpy(str, tokens);
+  count = strlen(str);
+  str[count++] = ':';
+  str[count++] = ' ';
+  strcpy(str + count, b->info);
+
+  /* Return the string */
+
+  *name = str;
+
+  dprintf(("BrkP", "breakpoint_struct_to_string: Successful\n"));
+
+  return NULL;
+}
+
+/**************************************************************/
+/* breakpoint_string_to_struct()                              */
+/*                                                            */
+/* Convert the contents of a given string from a dialogue     */
+/* box etc. into a breakpoint structure.                      */
+/*                                                            */
+/* Parameters: Pointer to the string to parse;                */
+/*                                                            */
+/*             Pointer to a pointer to a breakpoint structure */
+/*             updated with a pointer to a filled in item.    */
+/*             The caller is responsible for freeing it with  */
+/*             breakpoint_free.                               */
+/**************************************************************/
+
+_kernel_oserror * breakpoint_string_to_struct(const char * name, breakpoint ** b)
+{
+  unsigned int   len;
+  unsigned int   index = 0;
+  breakpoint   * l     = NULL;
+
+  dprintf(("BrkP", "breakpoint_string_to_struct: Called for '%s'\n", name != NULL ? name : "<NULL>"));
+
+  if (name == NULL || b == NULL) goto bsts_params;
+
+  /* Allocate the breakpoint structure */
+
+  l = calloc(1, sizeof(breakpoint));
+
+  if (l == NULL) return errors_frontend_error(fee_out_of_memory,
+                                              "breakpoint_string_to_struct");
+
+  /* Read the item type. lookup_token calls update the global "tokens" buffer */
+
+  while (index < sizeof(idents))
+  {
+    len = strlen(lookup_token(idents[index], 0, 0));
+
+    if (!strncmp(name, tokens, len))
+    {
+      name    += len;
+      l->type  = (breakpoint_type) index;
+      break;
+    }
+
+    index++;
+  }
+
+  if (index == sizeof(idents)) return errors_frontend_error(fee_out_of_memory,
+                                                            "breakpoint_string_to_struct");
+
+  /* Skip the separator */
+
+  if (
+       *name     != ':' ||
+       *(++name) != ' ' ||
+       *(++name) == '\0'
+     )
+     goto bsts_params;
+
+  /* The rest is the name information */
+
+  l->info = malloc(strlen(name) + 1);
+
+  if (l->info == NULL)
+  {
+    free(l);
+    return errors_frontend_error(fee_out_of_memory,
+                                   "breakpoint_string_to_struct");
+  }
+
+  dprintf(("BrkP", "breakpoint_string_to_struct: Name/info is '%s'\n", name));
+
+  strcpy(l->info, name);
+
+  /* This must always be set externally, if it's a breakpoint for tracing */
+
+  l->for_trace_only = false;
+
+  /* Return the structure */
+
+  *b = l;
+
+  dprintf(("BrkP", "breakpoint_string_to_struct: Successful\n"));
+
+  return NULL;
+
+bsts_params:
+
+  dprintf(("BrkP", "breakpoint_string_to_struct: Invalid parameters\n"));
+
+  if (l != NULL)
+  {
+    free(l->info);
+    free(l);
+  }
+
+  return errors_frontend_error(fee_invalid_parameters,
+                               "breakpoint_string_to_struct");
 }

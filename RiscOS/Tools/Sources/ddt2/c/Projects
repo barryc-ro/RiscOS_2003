@@ -13,9 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "Breakpoint.h"
 #include "Errors.h"
 #include "FEStructs.h"
 #include "Global.h"
+#include "Watchpoint.h"
 #include "Utils.h"
 
 #include "Projects.h"
@@ -32,7 +34,8 @@ static project * projects_find_project (project * p);
 /* projects_find_project()                                    */
 /*                                                            */
 /* For the truly paranoid, pass a project pointer and this    */
-/* function will search for it in the projects list.          */
+/* function will search for it in the projects list. Can be   */
+/* given NULL.                                                */
 /*                                                            */
 /* Parameters: Pointer to the project to find.                */
 /*                                                            */
@@ -404,7 +407,13 @@ _kernel_oserror * projects_remove_objects(project * p, bool temporary)
 {
   dprintf(("Proj", "projects_remove_objects: Called for &%08X (%s)\n", (unsigned int) p, temporary ? "temporary" : "main list"));
 
-  if (!temporary && projects_find_project(p) == NULL)
+  if (
+       p == NULL ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_remove_objects");
@@ -445,7 +454,14 @@ _kernel_oserror * projects_add_breakpoint(project * p, bool temporary, breakpoin
 
   /* Paranoia fest */
 
-  if (name == NULL || (!temporary && projects_find_project(p) == NULL))
+  if (
+       p    == NULL ||
+       name == NULL ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_add_breakpoint");
@@ -507,11 +523,23 @@ _kernel_oserror * projects_remove_breakpoint_by_name(project * p, bool temporary
 {
   breakpoint * b;
 
-  dprintf(("Proj", "projects_remove_breakpoint_by_name: Called for &%08X with %d, '%s' (%s)\n", (unsigned int) p, type, name ? name : "<NULL>", temporary ? "temporary" : "main list"));
+  dprintf(("Proj", "projects_remove_breakpoint_by_name: Called for &%08X with %d, '%s' (%s)\n",
+           (unsigned int) p,
+           type,
+           name      ? name        : "<NULL>",
+           temporary ? "temporary" : "main list"));
 
   /* Paranoia fest */
 
-  if (name == NULL || (!temporary && projects_find_project(p) == NULL))
+  if (
+       p     == NULL ||
+       name  == NULL ||
+       *name == '\0' ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_remove_breakpoint_by_name");
@@ -521,7 +549,7 @@ _kernel_oserror * projects_remove_breakpoint_by_name(project * p, bool temporary
 
   for (b = p->breakpoints; b != NULL; b = b->next)
   {
-    if (b->type == type && !utils_strcasecmp(b->info, name)) break;
+    if (b->type == type && !strcmp(b->info, name)) break;
   }
 
   /* If not found, throw back an error */
@@ -561,36 +589,37 @@ _kernel_oserror * projects_remove_breakpoint_by_address(project * p, bool tempor
 
   /* Paranoia fest */
 
-  if (b == NULL || (!temporary && projects_find_project(p) == NULL))
+  if (
+       p == NULL ||
+       b == NULL ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_remove_breakpoint_by_address");
   }
 
-  if (!temporary)
+  for (find = p->breakpoints; find != NULL; find = find->next)
   {
-    for (find = p->breakpoints; find != NULL; find = find->next)
-    {
-      if (find == b) break;
-    }
+    if (find == b) break;
+  }
 
-    if (find == NULL)
-    {
-      return errors_frontend_error(fee_invalid_parameters,
-                                   "projects_remove_breakpoint_by_address");
-    }
+  if (find == NULL)
+  {
+    return errors_frontend_error(fee_invalid_parameters,
+                                 "projects_remove_breakpoint_by_address");
   }
 
   /* Remove the item */
 
-  free(b->info);
-
   if (b->next) b->next->prev = b->prev;
   if (b->prev) b->prev->next = b->next;
+  if (b == p->breakpoints) p->breakpoints = b->next;
 
-  if (!temporary && b == p->breakpoints) p->breakpoints = b->next;
-
-  free(b);
+  breakpoint_free(b);
 
   dprintf(("Proj", "projects_remove_breakpoint_by_address: Successful\n"));
 
@@ -613,7 +642,13 @@ _kernel_oserror * projects_remove_breakpoints(project * p, bool temporary)
 {
   dprintf(("Proj", "projects_remove_breakpoints: Called for &%08X (%s)\n", (unsigned int) p, temporary ? "temporary" : "main list"));
 
-  if (!temporary && projects_find_project(p) == NULL)
+  if (
+       p == NULL ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_remove_breakpoints");
@@ -642,46 +677,24 @@ _kernel_oserror * projects_remove_breakpoints(project * p, bool temporary)
 /*             true if it is a temporary (bypass pointer      */
 /*             checking from the main project list);          */
 /*                                                            */
-/*             true if the following name is for a variable,  */
-/*             else for a location;                           */
-/*                                                            */
-/*             Variable name or location as a NUL terminated  */
-/*             string;                                        */
-/*                                                            */
-/*             true if watching for a read, else false;       */
-/*                                                            */
-/*             true if watching for a write, else false;      */
-/*                                                            */
-/*             true if watching for any value, else false and */
-/*             the next parameter is read;                    */
-/*                                                            */
-/*             Value to watch for as a NUL termianted string, */
-/*             only used if previous parameter is 'false'.    */
+/*             Full text description of the watchpoint.       */
 /**************************************************************/
 
-_kernel_oserror * projects_add_watchpoint(project * p, bool temporary, bool variable, const char * name, bool read, bool write, bool anything, const char * value)
+_kernel_oserror * projects_add_watchpoint(project * p, bool temporary, const char * desc)
 {
   watchpoint * w;
 
-  dprintf(("Proj", "projects_add_watchpoint: Called for &%08X with %s, '%s', %s, %s, %s, '%s' (%s)\n",
+  dprintf(("Proj", "projects_add_watchpoint: Called for &%08X with '%s' (%s)\n",
            (unsigned int) p,
-           variable  ? "variable"  : "location",
-           name      ? name        : "<NULL>",
-           read      ? "true"      : "false",
-           write     ? "true"      : "false",
-           anything  ? "true"      : "false",
-           value     ? value       : "<NULL>",
+           desc      ? desc        : "<NULL>",
            temporary ? "temporary" : "main list"));
 
   /* Paranoia fest */
 
   if (
-       name == NULL ||
-       (
-         !anything &&
-         value == NULL
-       )
-       ||
+       p     == NULL ||
+       desc  == NULL ||
+       *desc == '\0' ||
        (
          !temporary &&
          projects_find_project(p) == NULL
@@ -694,42 +707,7 @@ _kernel_oserror * projects_add_watchpoint(project * p, bool temporary, bool vari
 
   /* Allocate a new watchpoint structure */
 
-  w = calloc(sizeof(watchpoint), 1);
-
-  if (w == NULL)
-  {
-    return errors_frontend_error(fee_out_of_memory,
-                                 "projects_add_watchpoint");
-  }
-
-  /* Fill it in */
-
-  w->variable = variable;
-  w->name     = utils_strdup(name);
-
-  if (w->name == NULL)
-  {
-    free(w);
-    return errors_frontend_error(fee_out_of_memory,
-                                 "projects_add_watchpoint");
-  }
-
-  w->read     = read;
-  w->write    = write;
-  w->anything = anything;
-
-  if (!anything)
-  {
-    w->value = utils_strdup(value);
-
-    if (w->value == NULL)
-    {
-      free(w->name);
-      free(w);
-      return errors_frontend_error(fee_out_of_memory,
-                                   "projects_add_watchpoint");
-    }
-  }
+  RetError(watchpoint_string_to_struct(desc, &w));
 
   /* Link it in */
 
@@ -744,54 +722,76 @@ _kernel_oserror * projects_add_watchpoint(project * p, bool temporary, bool vari
   return NULL;
 }
 
-// /**************************************************************/
-// /* projects_remove_watchpoint_by_name()                       */
-// /*                                                            */
-// /* Remove a watchpoint from a project's list of watchpoints.  */
-// /* The text descriptor match is case sensitive.               */
-// /*                                                            */
-// /* Parameters: Pointer to the project;                        */
-// /*                                                            */
-// /*             false if the project is a main project, else   */
-// /*             true if it is a temporary (bypass pointer      */
-// /*             checking from the main project list);          */
-// /*                                                            */
-// /*             Text description (name) of watchpoint.         */
-// /**************************************************************/
-//
-// _kernel_oserror * projects_remove_watchpoint_by_name(project * p, bool temporary, const char * name)
-// {
-//   watchpoint * b;
-//
-//   dprintf(("Proj", "projects_remove_watchpoint_by_name: Called for &%08X with %d, '%s' (%s)\n", (unsigned int) p, type, name ? name : "<NULL>", temporary ? "temporary" : "main list"));
-//
-//   /* Paranoia fest */
-//
-//   if (name == NULL || (!temporary && projects_find_project(p) == NULL))
-//   {
-//     return errors_frontend_error(fee_invalid_parameters,
-//                                  "projects_remove_watchpoint_by_name");
-//   }
-//
-//   /* Find the item */
-//
-//   for (b = p->watchpoints; b != NULL; b = b->next)
-//   {
-//     if (b->type == type && !utils_strcasecmp(b->info, name)) watch;
-//   }
-//
-//   /* If not found, throw back an error */
-//
-//   if (b == NULL)
-//   {
-//     return errors_frontend_error(fee_invalid_parameters,
-//                                  "projects_remove_watchpoint_by_name");
-//   }
-//
-//   dprintf(("Proj", "projects_remove_watchpoint_by_name: Exitting through projects_remove_watchpoint_by_address with address &%08X\n", (unsigned int) b));
-//
-//   return projects_remove_watchpoint_by_address(p, temporary, b);
-// }
+/**************************************************************/
+/* projects_remove_watchpoint_by_name()                       */
+/*                                                            */
+/* Remove a watchpoint from a project's list of watchpoints.  */
+/* Since names may not be unique, the entire string specifier */
+/* is required. This means all recorded watchpoint structures */
+/* must be converted to strings to check against the item     */
+/* passed in. As a result, this function runs slowly.         */
+/*                                                            */
+/* Parameters: Pointer to the project;                        */
+/*                                                            */
+/*             false if the project is a main project, else   */
+/*             true if it is a temporary (bypass pointer      */
+/*             checking from the main project list);          */
+/*                                                            */
+/*             Full text description of watchpoint.           */
+/**************************************************************/
+
+_kernel_oserror * projects_remove_watchpoint_by_name(project * p, bool temporary, const char * desc)
+{
+  watchpoint * b;
+  char       * s = NULL;
+
+  dprintf(("Proj", "projects_remove_watchpoint_by_name: Called for &%08X with '%s' (%s)\n",
+           (unsigned int) p,
+           desc      ? desc        : "<NULL>",
+           temporary ? "temporary" : "main list"));
+
+  /* Paranoia fest */
+
+  if (
+       p     == NULL ||
+       desc  == NULL ||
+       *desc == '\0' ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
+  {
+    return errors_frontend_error(fee_invalid_parameters,
+                                 "projects_remove_watchpoint_by_name");
+  }
+
+  /* Find the item */
+
+  for (b = p->watchpoints; b != NULL; b = b->next)
+  {
+    RetError(watchpoint_struct_to_string(b, &s));
+
+    if (!strcmp(s, desc))
+    {
+      free(s);
+      break;
+    }
+    else free(s);
+  }
+
+  /* If not found, throw back an error */
+
+  if (b == NULL)
+  {
+    return errors_frontend_error(fee_invalid_parameters,
+                                 "projects_remove_watchpoint_by_name");
+  }
+
+  dprintf(("Proj", "projects_remove_watchpoint_by_name: Exitting through projects_remove_watchpoint_by_address with address &%08X\n", (unsigned int) b));
+
+  return projects_remove_watchpoint_by_address(p, temporary, b);
+}
 
 /**************************************************************/
 /* projects_remove_watchpoint_by_address()                    */
@@ -817,37 +817,37 @@ _kernel_oserror * projects_remove_watchpoint_by_address(project * p, bool tempor
 
   /* Paranoia fest */
 
-  if (b == NULL || (!temporary && projects_find_project(p) == NULL))
+  if (
+       p == NULL ||
+       b == NULL ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_remove_watchpoint_by_address");
   }
 
-  if (!temporary)
+  for (find = p->watchpoints; find != NULL; find = find->next)
   {
-    for (find = p->watchpoints; find != NULL; find = find->next)
-    {
-      if (find == b) break;
-    }
+    if (find == b) break;
+  }
 
-    if (find == NULL)
-    {
-      return errors_frontend_error(fee_invalid_parameters,
-                                   "projects_remove_watchpoint_by_address");
-    }
+  if (find == NULL)
+  {
+    return errors_frontend_error(fee_invalid_parameters,
+                                 "projects_remove_watchpoint_by_address");
   }
 
   /* Remove the item */
 
-  free(b->name);
-  free(b->value);
-
   if (b->next) b->next->prev = b->prev;
   if (b->prev) b->prev->next = b->next;
+  if (b == p->watchpoints) p->watchpoints = b->next;
 
-  if (!temporary && b == p->watchpoints) p->watchpoints = b->next;
-
-  free(b);
+  watchpoint_free(b);
 
   dprintf(("Proj", "projects_remove_watchpoint_by_address: Successful\n"));
 
@@ -870,7 +870,13 @@ _kernel_oserror * projects_remove_watchpoints(project * p, bool temporary)
 {
   dprintf(("Proj", "projects_remove_watchpoints: Called for &%08X (%s)\n", (unsigned int) p, temporary ? "temporary" : "main list"));
 
-  if (!temporary && projects_find_project(p) == NULL)
+  if (
+       p == NULL ||
+       (
+         !temporary &&
+         projects_find_project(p) == NULL
+       )
+     )
   {
     return errors_frontend_error(fee_invalid_parameters,
                                  "projects_remove_watchpoints");
