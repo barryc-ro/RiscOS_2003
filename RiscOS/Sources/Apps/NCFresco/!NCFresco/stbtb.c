@@ -92,10 +92,10 @@ struct tb_bar_descriptor
 
     int number;
     int type;
-    
+
     int entry_event;
     int exit_event;
-    
+
     int initial_component;	/* when moving onto it */
     int open_component;		/* when opening it */
 
@@ -242,13 +242,26 @@ static os_error *gfade(int obj, int cmp, int fade)
 {
     unsigned flags;
     os_error *e;
+
+    /* Fade a toolbar icon. The selection of the "faded" sprite is all done
+     * for us by the ToolAction gadget out of the Toolbox.
+     *     The Acorn Developer CD contains a StrongHelp 2 file which mentions
+     * ("documents" is far too strong a word) all this pants.
+     */
+
+    STBDBG(("gfade: obj%x cmp%x (%d)..", obj, cmp, fade ));
+
     e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 0x40, cmp, &flags);
-    if (!e)
+    if (!e && (flags & toolactionflag_HASFADESPRITE) )
     {
-        int old_fade = (flags & 0x80000000) != 0;
+        int old_fade = (flags & gadgetflag_FADED) != 0;
+        STBDBG(("  call %snecessary", (old_fade==fade)?"un":"" ));
         if (old_fade != fade)
-            e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x41, cmp, flags ^ 0x80000000);
+            e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x41, cmp, flags ^ gadgetflag_FADED);
     }
+
+    STBDBG(( e ? "..error %s\n" : "\n", e->errmess ));
+
     return e;
 }
 
@@ -291,6 +304,9 @@ static os_error *setfield(int obj, int cmp, const char *msg, int check)
 {
     int type;
     _kernel_oserror *e;
+
+    STBDBG(("setfield(%x,%x,%s,%d)\n", obj, cmp, msg, check));
+
     e = _swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 70, cmp, &type);
     if (!e)
     {
@@ -346,14 +362,14 @@ static char *getwriteable(int obj, int cmp)
     _kernel_oserror *e;
     e = _swix(Toolbox_ObjectMiscOp, _INR(0,5)|_OUT(5), 0, obj, 513, cmp, 0, 0, &size);
     if (e)
-        return strdup(e->errmess);
+        return mm_strdup(e->errmess);
 
     s = mm_malloc(size);
     e = _swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, obj, 513, cmp, s, size);
     if (e)
     {
         mm_free(s);
-        return strdup(e->errmess);
+        return mm_strdup(e->errmess);
     }
     return s;
 }
@@ -405,6 +421,8 @@ static os_error *setval(int obj, int cmp, int val)
     if (cmp == -1)
         return NULL;
 
+    STBDBG(("setval: obj %x cmp %x val %x\n", obj, cmp, val ));
+
     e = _swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 70, cmp, &type);
     if (!e)
     {
@@ -433,6 +451,10 @@ static os_error *setval(int obj, int cmp, int val)
         }
 	if (write)
 	    e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, write, cmp, val);
+    }
+    {
+    if ( e )
+    	STBDBG(("setval: ObjectMiscOp returns %s\n", e->errmess ));
     }
     return (os_error *)e;
 }
@@ -529,10 +551,13 @@ static os_error *toolactionsetpair(int obj, int cmp, const char *off, const char
 }
 #endif
 
-static os_error *toolactionpress(int obj, int cmp, int pressed)
+os_error *toolactionpress(int obj, int cmp, int pressed)
 {
     os_error *e;
     int was_pressed;
+
+    STBDBG(("toolactionpress(%x %x %d)\n", obj, cmp, pressed ));
+
     e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, obj, 0x140149, cmp, &was_pressed);
     if (!e && was_pressed != pressed)
 	e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x140148, cmp, pressed);
@@ -544,13 +569,13 @@ static os_error *toolactionpress(int obj, int cmp, int pressed)
 static BOOL tb_bar_set_highlight(tb_bar_info *tbi, int val, BOOL is_index)
 {
     int success = FALSE;
-    if (val != -1)
+    if (val != -1 && tbi)
     {
 	wimp_box box;
 	wimp_wstate state;
 
 	STBDBG(("tb_bar_set_highlight(): bar %d index %d obj %x, cmp %x\n", tbi ? tbi->num : -1, val, tbi->object_handle, is_index ? tbi->buttons[val].cmp : val));
-	    
+
 	success = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, is_index ? tbi->buttons[val].cmp : val, &box) == NULL;
 	wimp_get_wind_state(tbi->window_handle, &state);
 	coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
@@ -585,7 +610,7 @@ static int get_highlighted(tb_bar_info *tbi)
 	if (_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140149, tbi->buttons[i].cmp, &pressed) == NULL &&
 	    pressed)
 	    return i;
-    return -1;    
+    return -1;
 }
 
 static int get_active(tb_bar_info *tbi)
@@ -597,7 +622,7 @@ static int get_active(tb_bar_info *tbi)
 	    tbi->buttons[i].cmp != I_SECURE &&	/* security light on is returned as ACTIVE but it's not what we meant */
 	    tbi->buttons[i].cmp != I_DIRECTION)	/* arrow pointing up is returned as ACTIVE but it's not what we meant */
 	    return i;
-    return -1;    
+    return -1;
 }
 
 static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
@@ -611,7 +636,7 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
     /* if there is an active highlight then can only move off it - unless on the codec toolbar */
     if ((find_bar_from_number(tbi->num)->flags & tb_bar_MOVE_OFF_ACTIVE) != 0 && active != -1 && active != highlight)
 	return FALSE;
-    
+
     /* get the position of the item we are moving off */
     cmp = tbi->buttons[highlight].cmp;
 
@@ -630,7 +655,7 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
 	    x = on_screen_kbd_pos.x0 + 8;
 	if (x > on_screen_kbd_pos.x1 - 8)
 	    x = on_screen_kbd_pos.x1 - 8;
-	
+
 	if (flags & be_link_BACK)
 	    frontend_pointer_set_position(NULL, x, on_screen_kbd_pos.y0 + 16);
 	else
@@ -646,13 +671,14 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
     {
 	fe_move_highlight_xy(v, &box, flags | be_link_XY);
     }
-    
+
     return TRUE;
 }
 
 /* --------------------------------------------------------------------------*/
 
-#if 0
+/* pdh: had been "#if 0", but ANT builds still need it (I think) */
+#ifndef STBWEB_BUILD
 static void *sprite_load(const char *file_name)
 {
     int type, size;
@@ -678,7 +704,8 @@ static void *sprite_load(const char *file_name)
 }
 #endif
 
-#if 0
+/* pdh: had been "#if 0", but ANT builds still need it (I think) */
+#ifndef STBWEB_BUILD
 /* Check for the tile in a global place and in our own directory for standalone releases */
 
 static void *sprite_load_tile(const char *suffix)
@@ -690,7 +717,7 @@ static void *sprite_load_tile(const char *suffix)
     strcat(buffer, suffix);
 
     STBDBG(("sprite_load_tile: '%s'\n", buffer));
-    
+
     if ((sprite_area = sprite_load(buffer)) == NULL)
     {
 	strcpy(buffer, PROGRAM_NAME":Tile");
@@ -722,7 +749,7 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
     int object, i;
     struct gadget_object *gadget;
     tb_button_info *info, *info_list;
-    
+
     /* create the window, fixing up the sprite area */
     frontend_fatal_error((os_error *)_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, template_name, &obj));
     if (obj == NULL)
@@ -730,7 +757,7 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 	*list = NULL;
 	return 0;
     }
-    
+
     wobj = (struct window_object *)obj->header_size;
     if (new_sprite_area)
 	wobj->window.sprite_area = new_sprite_area;
@@ -747,7 +774,7 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 
 	if (gadget->cmp == I_WORLD)
 	    gadget->flags |= 0x40000000;
-	
+
 	gadget = (struct gadget_object *)((char *)gadget + (gadget->class_no >> 16));
 
 	STBDBG(("  x %d cmp %d\n", info->x_pos, info->cmp));
@@ -755,14 +782,16 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 
     /* now sort the list into horizontal order */
     qsort(info_list, wobj->gadget_count, sizeof(*info_list), compare_info);
-    
+
     /* create object after fixing up flags */
     frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, template_name, &object));
+
+    STBDBG(("tb_bar_create: toolbox_createobject returned\n" ));
 
     /* return pointer */
     *list = info_list;
     *n_buttons = wobj->gadget_count;
-    
+
     return object;
 }
 
@@ -778,7 +807,7 @@ typedef struct
 
     int entry_event;
     int exit_event;
-    
+
     int initial_component;	/* when moving onto it */
     int open_component;		/* when opening it */
 
@@ -795,7 +824,7 @@ void tb_bar_add(const void *info)
 {
     const config_toolbar_info *ti = (const config_toolbar_info *)info;
     tb_bar_descriptor *tbd;
-    
+
     if (ti->count < 5)
 	return;
 
@@ -807,7 +836,7 @@ void tb_bar_add(const void *info)
 
     tbd->entry_event = ti->entry_event;
     tbd->exit_event = ti->exit_event;
-    
+
     tbd->initial_component = ti->initial_component;
     tbd->open_component = ti->open_component;
 
@@ -829,7 +858,7 @@ void tb_bar_name(const void *info)
     tb_bar_descriptor *tbd = bar_descriptor_list;
 
     if (tbd)
-	tbd->name = strdup((const char *)info);
+	tbd->name = mm_strdup((const char *)info);
 }
 
 int tb_bar_get_num_from_name(const char *name)
@@ -853,15 +882,20 @@ static tb_bar_info *tb_bar_init(int bar_num)
     /* check for legal bar number */
     if ((tbd = find_bar_from_number(bar_num)) == NULL)
 	return NULL;
-    
+
     /* get name */
-    sprintf(name, "T%d", bar_num);
+#ifdef ANT_NCFRESCO
+    if ( !is_a_tv() )
+        sprintf(name, "M%d", bar_num);
+    else
+#endif
+        sprintf(name, "T%d", bar_num);
 
     /* create object */
     object_handle = tb_bar_create(name, tile_sprite, &button_list, &n_buttons);
-    
+
     STBDBG(("tb_bar_init(): bar %d '%s' creates object %x, %d buttons\n", bar_num, name, object_handle, n_buttons));
-    
+
     tbi = NULL;
     if (object_handle)
     {
@@ -884,10 +918,10 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	    STBDBG(("tb_bar_init(): sprite_area %p\n", info.info.spritearea));
 	}
 #endif
-    
+
 	tbi->buttons = button_list;
 	tbi->n_buttons = n_buttons;
-    
+
 	/* link in to list */
 	if (bar_list)
 	{
@@ -904,13 +938,13 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD_BORDER, &wbox) == NULL ||
 	    _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &wbox) == NULL)
 	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - wbox.x1, 0);
-    
+
 	/* extend one extent up or down to cover safe area */
 	if (config_display_control_top)
 	    box.y1 = 0x4000;
 	else
 	    box.y0 = -0x4000;
-	
+
 	box.x0 = -0x4000;
 	box.x1 = 0x4000;
 	_swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, tbi->object_handle, 15, &box);
@@ -918,7 +952,7 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	/* do a reset to ensure the sprites are set up correctly */
 	tb_status_rotate_reset();
     }
-    
+
     return tbi;
 }
 
@@ -931,7 +965,7 @@ static void tb_bar_dispose(BOOL do_exit_fn)
 
     if (tbi == NULL)
 	return;
-    
+
     tbd = find_bar_from_number(tbi->num);
 
     if (do_exit_fn && tbd->exit_event)
@@ -942,7 +976,7 @@ static void tb_bar_dispose(BOOL do_exit_fn)
 
     /* remove object */
     _swix(Toolbox_DeleteObject, _INR(0,1), 0, tbi->object_handle);
-    
+
     mm_free(tbi->buttons);
     mm_free(tbi);
 }
@@ -960,7 +994,7 @@ BOOL tb_status_unstack(BOOL do_exit_fn)
     tb_bar_descriptor *tbd;
     tb_bar_info *tbi;
     int return_bar, return_cmp;
-    
+
     STBDBG(("tb_status_unstack(): in bar_list %p return_bar %d\n", bar_list, bar_list ? bar_list->return_bar : 99));
 
     /* see if we can do anything */
@@ -972,7 +1006,7 @@ BOOL tb_status_unstack(BOOL do_exit_fn)
     /* get return bar */
     return_bar = bar_list->return_bar;
     return_cmp = bar_list->return_component;
-    
+
     /* dispose of current bar */
     tb_bar_dispose(do_exit_fn);
 
@@ -986,7 +1020,7 @@ BOOL tb_status_unstack(BOOL do_exit_fn)
 	tb_bar_set_highlight(tbi, return_cmp, FALSE);
 	setfocus(tbi->object_handle);
     }
-    
+
     STBDBGN(("tb_status_unstack(): out\n"));
 
     return TRUE;
@@ -1006,7 +1040,7 @@ void tb_status_new(fe_view v, int bar_num)
     int old_bar = bar_list ? bar_list->num : -1;
 
     STBDBG(("tb_status_new(): in bar_num %d old_bar %d old_state %d\n", bar_num, old_bar, old_state));
-    
+
     /* is this one already open */
     if (old_bar == bar_num)
 	return;
@@ -1054,7 +1088,7 @@ void tb_status_new(fe_view v, int bar_num)
     }
 
     sound_event(snd_TOOLBAR_SHOW_SUB);
-    
+
     STBDBG(("tb_status_new(): out\n"));
 }
 
@@ -1184,7 +1218,7 @@ int tb_init(int *m_list, int *wimp_version)
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 
     STBDBG(("tb_init():\n"));
-    
+
     frontend_fatal_error((os_error *)_swix(Toolbox_Initialise, _INR(0,6) | _OUTR(0,1),
 					   0, *wimp_version, m_list, tb_list, "<" PROGRAM_NAME "$Dir>",
 					   m_block, tb_block,
@@ -1304,7 +1338,7 @@ void tb_menu_show(fe_view v, int which_menu)
 #define PLUGIN_NAME_PREFIX "PlugIn$Type_"
 
 #define FILETYPE_NAME_PREFIX "File$Type_"
-	    
+
 #define error_MENU_NO_SUCH_COMPONENT            0x80AA14u
 
 static void tb_menu_do_plugins(int obj)
@@ -1312,7 +1346,7 @@ static void tb_menu_do_plugins(int obj)
     char *runtype = NULL;
     os_error *e;
     char buffer[256];
-    
+
     do
     {
 	e = (os_error *)_swix(OS_ReadVarVal, _INR(0,4) | _OUT(3),
@@ -1333,7 +1367,7 @@ static void tb_menu_do_plugins(int obj)
 
 	    /* Try and set tick option */
 	    e = mtick(obj, fevent_PLUGIN_TOGGLE + filetype, tick_state);
-	    
+
 	    /*, if it fails then add the component to the menu */
 	    STBDBG(("tb plugin: filetype %03x info %p flags %x tick returns %x '%s'\n",
 		    filetype, info, tick_state, e ? e->errnum : 0, e ? e->errmess : ""));
@@ -1344,7 +1378,7 @@ static void tb_menu_do_plugins(int obj)
 		char *name;
 		strcpy(nameval, PLUGIN_NAME_PREFIX);
 		strcat(nameval, runtype + sizeof(PLUGIN_TYPE_PREFIX)-1);
-	    
+
 		name = getenv(nameval);
 
 		STBDBG(("tb plugin: nameval '%s' name '%s'\n", nameval, strsafe(name)));
@@ -1356,7 +1390,7 @@ static void tb_menu_do_plugins(int obj)
 		    name = getenv(nameval);
 		    STBDBG(("tb plugin: nameval '%s' name '%s'\n", nameval, strsafe(name)));
 		}
-		
+
 		if (!name)
 		{
 		    sprintf(nameval, "PlugIn%03x", filetype);
@@ -1365,10 +1399,10 @@ static void tb_menu_do_plugins(int obj)
 
 		{
 		    struct menu_entry_object descr;
-		
+
 		    descr.flags = tick_state ? 1 : 0;
 		    descr.cmp = fevent_PLUGIN_TOGGLE + filetype;
-		    descr.text = strdup(name);
+		    descr.text = mm_strdup(name);
 		    descr.text_limit = strlen(descr.text) + 1;
 		    descr.click_object_name = 0;
 		    descr.sub_menu_object_name = 0;
@@ -1382,7 +1416,7 @@ static void tb_menu_do_plugins(int obj)
 		    mm_free(descr.text);
 		}
 	    }
-	    
+
 	    /* if not in list then add it */
 	    if (info == NULL)
 	    {
@@ -1671,7 +1705,7 @@ void tb_status_show(int small_only)
 		wimp_box lbox;
 		if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_LIGHTS_GREEN, &lbox) != NULL)
 		    lbox = o.box;
-	    
+
 		o.box.x0 += text_safe_box.x0;
 		o.box.x1 += text_safe_box.x0;
 
@@ -1703,6 +1737,8 @@ void tb_status_show(int small_only)
     if (open)
     {
         o.behind = (wimp_w)-1;
+
+	STBDBG(("tb_status_show: bar_list=%x ->object_handle=%x\n", bar_list, bar_list->object_handle));
         frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 0, bar_list->object_handle, 1, &o.box, 0, 0));/* tb_block[4], tb_block[5]));*/
 
 	/* when opening the full toolbar set the highlight to it automatically */
@@ -1714,7 +1750,7 @@ void tb_status_show(int small_only)
 		tb_bar_set_highlight(bar_list, tbd->open_component, FALSE);
 		setfocus(bar_list->object_handle);
 	    }
-	}	
+	}
     }
 }
 
@@ -1741,7 +1777,7 @@ void tb_status_hide(int only_if_small)
 	    tb_bar_dispose(TRUE);
 	    tb_bar_init(config_display_control_initial);
 	}
-	
+
 	/* if we are closing big toolbar and still spinning then reopen ickle status bar */
 	if (turn_ctr != -1 && !only_if_small)
 	    tb_status_show(TRUE);
@@ -1937,9 +1973,9 @@ void tb_status_rotate(void)
 	    sprintf(sprite_name1, "%st,%sts", config_animation_name, config_animation_name);
 	    setfield(bar_list->object_handle, I_WORLD_BORDER, sprite_name1, FALSE);
 	}
-	
+
 	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
-	
+
 	sprintf(sprite_name1, "%s%02d", config_animation_name, turn_ctr);
 	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
     }
@@ -1978,6 +2014,13 @@ void tb_status_resize(int xdiff, int ydiff)
         movegadget(bar_list->object_handle, I_LIGHTS_GREEN, xdiff, xdiff);
         movegadget(bar_list->object_handle, I_LIGHTS_YELLOW, xdiff, xdiff);
         movegadget(bar_list->object_handle, I_LIGHTS_RED, xdiff, xdiff);
+#ifdef ANT_NCFRESCO
+        movegadget(bar_list->object_handle, 0x1002, xdiff, xdiff);  /* help */
+        movegadget(bar_list->object_handle, 0x2054, xdiff, xdiff);  /* scroll */
+        movegadget(bar_list->object_handle, 0x2055, xdiff, xdiff);  /* scroll */
+        movegadget(bar_list->object_handle, 0x2050, xdiff, xdiff);  /* scroll */
+        movegadget(bar_list->object_handle, 0x2051, xdiff, xdiff);  /* scroll */
+#endif
 /*         movegadget(bar_list->object_handle, I_SECURE, xdiff, xdiff); */
     }
 }
@@ -2108,8 +2151,11 @@ void tb_status_set_lights(int state)
 
 void tb_status_init(void)
 {
+/* pdh: had been commented out, but ANT builds still need it (I think) */
+#ifndef STBWEB_BUILD
 /*     if (config_display_control_initial == BAR_STATUS) */
-/* 	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V"); */
+	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
+#endif
 
     STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
 
@@ -2124,13 +2170,13 @@ void tb_status_set_key_leds(void)
 
     r = _kernel_osbyte(202, 0, 255);
     state = state_lights &~ (state_NUM_LOCK | state_CAPS_LOCK | state_SCROLL_LOCK);
-    
+
     if ((r & (1<<(2 + 8))) == 0)
 	state |= state_NUM_LOCK;
-    
+
     if ((r & (1<<(4 + 8))) == 0)
 	state |= state_CAPS_LOCK;
-    
+
     if (r & (1<<(1 + 8)))
 	state |= state_SCROLL_LOCK;
 
@@ -2139,7 +2185,7 @@ void tb_status_set_key_leds(void)
 	int diff = state ^ state_lights;
 
 	state_lights = state;
-	
+
 	if (diff & state_NUM_LOCK)
 	    setstate(bar_list->object_handle, I_NUM_LOCK, state & state_NUM_LOCK);
 	if (diff & state_CAPS_LOCK)
@@ -2187,7 +2233,7 @@ void tb_open_url(void)
 	url1 = check_url_prefix(url);
 	mm_free(url);
 
-	frontend_complain(frontend_open_url(url1, NULL, TARGET_VERY_TOP, NULL, fe_open_url_NO_REFERER));
+	frontend_complain(frontend_open_url(url1, NULL, TARGET_VERY_TOP, NULL, NULL, fe_open_url_NO_REFERER));
 
 	mm_free(url1);
     }
@@ -2215,17 +2261,17 @@ static int movehighlight(tb_bar_info *tbi, int direction)
 	next += direction;
     }
     while (next >= 0 && next < tbi->n_buttons && !selectable(tbi->object_handle, tbi->buttons[next].cmp));
-    
+
     if (next < 0)
 	next = 0;
     if (next > tbi->n_buttons-1)
 	next = tbi->n_buttons-1;
-    
+
     STBDBG(("movehighlight(): dir %d from %d to %d\n", direction, initial, next));
 
     if (initial == next)
 	return FALSE;
-    
+
     tb_bar_set_highlight(tbi, next, TRUE);
     return TRUE;
 }
@@ -2241,6 +2287,9 @@ void tb_events(int *event, fe_view v)
             break;
 
         default:
+
+	    STBDBG(("vw%p: toolbar event, action 0x%x\n", v, e->action_no ));
+
             if ((e->action_no & 0xff0) == 0xf00)
                 mshow_handler(e->action_no, tb_block);
             else if (e->action_no < 0x10000)
@@ -2255,7 +2304,7 @@ void tb_event_handler(int event, fe_view v)
     int claimed = FALSE;
 
     STBDBG(("tb_event_handler(): v %p event %d\n", v, event));
-    
+
     if (tbi)
     {
 /* 	fe_view v = fe_selected_view(); */
@@ -2314,9 +2363,14 @@ void tb_event_handler(int event, fe_view v)
 
 	case fevent_TOOLBAR_ACTIVATE:
 	{
-	    int cmp = tbi->buttons[get_highlighted(tbi)].cmp;
+	    int hl = get_highlighted(tbi);
+	    int cmp = tbi->buttons[hl].cmp;
 	    int action;
-	    os_error *e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140143, cmp, &action);
+	    os_error *e;
+
+	    STBDBG(("tb_event_handler: hl=%d object handle=0x%x, cmp=0x%x\n", hl, tbi->object_handle, cmp ));
+
+	    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140143, cmp, &action);
 
 	    STBDBG(("tb_event_handler(): err '%s' action %x\n", e ? e->errmess : "", action));
 
@@ -2346,7 +2400,7 @@ BOOL tb_status_check_pointer(wimp_mousestr *mp)
 
 	return TRUE;
     }
-#endif    
+#endif
     return  FALSE;
 }
 
@@ -2384,7 +2438,7 @@ void tb_codec_state_change(int state, BOOL opening, BOOL closing)
     if (bar_list && bar_list->type == bar_type_CODEC)
     {
 	int i;
-	
+
 	for (i = 0; i < sizeof(codec_component)/sizeof(codec_component[0]); i++)
 	    setstate(bar_list->object_handle, codec_component[i], state == i);
 

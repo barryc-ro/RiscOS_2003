@@ -59,7 +59,7 @@ BOOL is_a_tv(void)
     {
 	os_regset r;
 	os_error *e;
-	
+
 	r.r[0] = 0;
 	e = os_swix(ModeFiles_MonitorType, &r);
 	if (e)
@@ -102,7 +102,7 @@ static void get_tool_sprite_sizes(int *tool_width, int *tool_height)
     char *suffix;
 
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-    
+
     /* read tool sprite area*/
     r.r[0] = 9;
     frontend_fatal_error(os_swix(Wimp_ReadSysInfo, &r));
@@ -273,7 +273,7 @@ os_error *fe_plot_sprite(char *name, int x, int y, wimp_box *bb)
 
 void fe_anti_twitter(const wimp_box *bb)
 {
-    if (gbf_active(GBF_ANTI_TWITTER))
+    if ( gbf_active(GBF_ANTI_TWITTER) && is_a_tv() )
     {
         os_regset r;
         os_error *e;
@@ -574,7 +574,11 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
     BOOL x_scroll_bar = config_display_frames_scrollbars && width >= MIN_WIN_WIDTH && extent->x1 - extent->x0 > width + (*old_y_scroll_bar ? toolsprite_width : 0);
     BOOL y_scroll_bar = config_display_frames_scrollbars && height >= MIN_WIN_HEIGHT && extent->y1 - extent->y0 > height + (*old_x_scroll_bar ? toolsprite_height : 0);
 
-    STBDBG(("feutils_check_window_bar from %s/%s\n", caller(1), caller(2)));
+    STBDBG(( "feutils_check_window_bar from %s/%s wimp=%d\n", caller(1), caller(2), wimp_version ));
+
+    STBDBG(( "  x %d want %d; y %d want %d\n",
+             x_scroll_bar, *old_x_scroll_bar,
+             y_scroll_bar, *old_y_scroll_bar ));
 
     if (x_scroll_bar != *old_x_scroll_bar || y_scroll_bar != *old_y_scroll_bar)
     {
@@ -586,13 +590,15 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
 	wimp_w parent_w;
 	int align_flags;
 	int wflags;
-	
+
         wimp_get_caret_pos(&c);
         has_caret = c.w == op->w;
 
 	/* read either entire window block or just the current state */
 	if (wimp_version < 380)
 	{
+	    STBDBG(( "feutils_check_window_bars: calling get_wind_info\n" ));
+
 	    winfo.w = op->w;
 	    wimp_get_wind_info((wimp_winfo *)((int)&winfo | 1));
 
@@ -601,10 +607,14 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
 	}
 	else
 	{
+	    STBDBG(( "feutils_check_window_bars: exciting GetWindowState call\n" ));
+
 	    state.o.w = op->w;
 	    _swix(Wimp_GetWindowState, _INR(1,2) | _OUTR(3,4), &state, *(int *)"TASK", &parent_w, &align_flags);
 	    wflags = (int)state.flags;
 	}
+
+	STBDBG(( "feutils_check_window_bars: get flags done\n" ));
 
         /* update window structure and flags */
         if (y_scroll_bar && !*old_y_scroll_bar)
@@ -646,7 +656,10 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
 	}
 	else
 	{
-	    _swix(Wimp_SetExtent, _INR(1,2), op->w, &extent);
+	    /* pdh 30/10/97: was _INR(1,2), &extent */
+	    _swix(Wimp_SetExtent, _INR(0,1), op->w, extent);
+
+            STBDBG(( "feutils_check_window_bars: making exciting OpenWindow call\n" ));
 
 	    state.o = *op;
 	    state.flags = (wimp_wflags)wflags;
@@ -659,6 +672,7 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
 	/* reposition the caret */
         if (has_caret)
         {
+            STBDBG(( "feutils_check_window_bars: setting caret\n" ));
             c.w = op->w;
             wimp_set_caret_pos(&c);
         }
@@ -667,8 +681,12 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
         *old_x_scroll_bar = x_scroll_bar;
         *old_y_scroll_bar = y_scroll_bar;
 
+        STBDBG(("feutils_check_window_bars: completed\n"));
+
         return TRUE;
     }
+
+    STBDBG(("feutils_check_window_bars: nothing to do\n"));
 
     return FALSE;
 }
@@ -711,7 +729,7 @@ void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *bo
     ex.y1 = - margin->y1;
     ex.y0 = - (new_height > doc_height ? new_height : doc_height) - margin->y0;
 #endif
-    
+
 #if 1
 /*   if (new_width > dw || new_height > dh) */
 #else
@@ -743,8 +761,8 @@ void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *bo
     }
     else
     {
-	if (state.o.behind == -1)
-	    state.o.behind = fe_status_window_handle();
+/*	if (state.o.behind == -1)
+	    state.o.behind = fe_status_window_handle();*/
 
 	STBDBG(("resize: open %x behind %x\n", state.o.w, state.o.behind));
 
@@ -846,14 +864,14 @@ void feutils_init_2(void)
 	margin_box.x1 = - ((screen_box.x1*config_display_margin.x1/100) + 3) &~ 3;
 	margin_box.y0 =   ((screen_box.y1*config_display_margin.y0/100) + 3) &~ 3;
 	margin_box.y1 = - ((screen_box.y1*config_display_margin.y1/100) + 3) &~ 3;
-    
+
 	text_safe_box.x0 = screen_box.x0 + margin_box.x0;
 	text_safe_box.x1 = screen_box.x1 + margin_box.x1;
 
 	text_safe_box.y0 = screen_box.y0 + margin_box.y0;
 	text_safe_box.y1 = screen_box.y1 + margin_box.y1;
     }
-    
+
     offset = ((screen_box.x1/6) + 3) &~ 3;
     error_box.x0 = screen_box.x0 + margin_box.x0;
     error_box.x1 = screen_box.x1 + margin_box.x1;
@@ -864,7 +882,7 @@ void feutils_init_2(void)
 
     if (is_a_tv())
 	gbf_flags |= GBF_ANTI_TWITTER;
-    
+
     get_tool_sprite_sizes(&toolsprite_width, &toolsprite_height);
 
     done_init = TRUE;
@@ -963,7 +981,7 @@ os_error *fe_file_to_url(char *file, char **url_out)
     /* if still has "-URL" prefixed then just return the URL*/
     if (strncasecomp(buffer1, "-URL", 4) == 0)
     {
-        *url_out = strdup(skip_space(buffer1+4));
+        *url_out = mm_strdup(skip_space(buffer1+4));
         return NULL;
     }
 
@@ -989,7 +1007,7 @@ char *extract_value(const char *s, const char *tag)
     int len;
     char *copy;
 
-    copy = strdup(s);
+    copy = mm_strdup(s);
 
     /* search for tag*/
     tagpos = strstr(copy, tag);
@@ -1031,12 +1049,14 @@ void frontend_fatal_error(os_error *e)
         usrtrc("fatal %x '%s'\n", e->errnum, e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
+        STBDBG(("fatal %x '%s'\n", e->errnum, e->errmess));
+        STBDBG(("by '%s' from '%s'\n", caller(1), caller(2)));
 
         er.errnum = e->errnum;
         sprintf(er.errmess, msgs_lookup("fatal2:"), e->errnum);
-	
-	_swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK | (1<<8), PROGRAM_NAME, NULL, NULL, 0);
-        exit(0);
+
+	_swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK/* | (1<<8)*/, PROGRAM_NAME, NULL, NULL, 0);
+        exit(1);
     }
 }
 
@@ -1113,7 +1133,7 @@ char *check_url_prefix(const char *url)
                 char *path1;
 
                 netloc = strndup(path, slash-path);
-                path1 = strdup(slash);
+                path1 = mm_strdup(slash);
 
                 mm_free(path);
                 path = path1;
@@ -1122,11 +1142,11 @@ char *check_url_prefix(const char *url)
 
         s = netloc;
         if (strncasecomp(s, "ftp", 3) == 0)
-            scheme = strdup("ftp");
+            scheme = mm_strdup("ftp");
         else if (strncasecomp(s, "gopher", 6) == 0)
-            scheme = strdup("gopher");
+            scheme = mm_strdup("gopher");
         else
-            scheme = strdup("http");
+            scheme = mm_strdup("http");
     }
 
     new_url = url_unparse(scheme, netloc, path ? path : "/", params, query, frag);
@@ -1160,14 +1180,14 @@ os_error *fe_start_task(const char *cli, wimp_t *task_out)
     }
 
     visdelay_begin();
-    
+
     /* always try this, never mind whether an error occurs or not */
     _kernel_setenv(PROGRAM_NAME"$LastCLI", cli);
 
     e = (os_error *)_swix(Wimp_StartTask, _IN(0)|_OUT(0), cli, task_out);
 
     visdelay_end();
-    
+
     if (!e && next_old != -1)
     {
 	us = -1;

@@ -108,7 +108,7 @@ static char *strip_fragment(const char *url)
     const char *frag = strrchr(url, '#');
     if (frag)
     {
-        char *new_url = strdup(url);
+        char *new_url = mm_strdup(url);
         new_url[frag - url] = 0;
         return new_url;
     }
@@ -122,11 +122,11 @@ static void fragment_parse(const char *url, char **url_out, char **fragment_out)
     if (frag)
     {
         *url_out = strndup(url, frag - url);
-        *fragment_out = strdup(frag+1);
+        *fragment_out = mm_strdup(frag+1);
     }
     else
     {
-        *url_out = strdup(url);
+        *url_out = mm_strdup(url);
         *fragment_out = NULL;
     }
 }
@@ -172,7 +172,7 @@ static void fe_global_remove_oldest(void)
 
     time_t oldest_date = INT_MAX;
     fe_global_history_item *oldest_item = NULL, *oldest_last = NULL;
-    
+
     for (last = NULL, item = global_hist_list; item; last = item, item = item->next)
     {
 	if (oldest_date > item->date)
@@ -189,7 +189,7 @@ static void fe_global_remove_oldest(void)
 	    oldest_last->next = oldest_item->next;
 	else
 	    global_hist_list = oldest_item->next;
-	
+
 	fe_global_free_item(oldest_item);
     }
 }
@@ -244,8 +244,8 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
     {
         new_item = mm_calloc(sizeof(*item), 1);
 
-        new_item->title = strdup(title);
-        new_item->url = strdup(bare_url);
+        new_item->title = mm_strdup(title);
+        new_item->url = mm_strdup(bare_url);
         new_item->url_hash = h;
 	new_item->date = time(NULL);
 
@@ -503,6 +503,8 @@ os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, 
     int i;
     char *s;
 
+    STBDBG(("in fe_history_write_combined_list\n"));
+
     /* back track to place to start */
     /* ANC-00288: added check on item in case current == NULL */
     for (i = 0, item = current; i < N_RECENT_SITES/2 && item && item->next; i++, item = item->next)
@@ -611,12 +613,12 @@ static fe_history_item *fe_history_add(fe_view v, const char *url, const char *t
     if ((h = mm_calloc(1, sizeof(*h))) == NULL)
 	return NULL;
 
-    h->frame[0].url = strdup(url);
+    h->frame[0].url = mm_strdup(url);
     h->frame[0].url_hash = string_hash(url);
     strcpy(h->frame[0].specifier, specifier);
 
     h->n_frames = 1;
-    h->title = strdup(title);
+    h->title = mm_strdup(title);
 
     v->hist_count++;
 
@@ -716,7 +718,7 @@ os_error *fe_history_move(fe_view v, int direction)
     int index;
 
     DBG(("fe_history_move: v%p dir %d hist_at %p dest %p\n", v, direction, v->hist_at, dest));
-    
+
     if (!dest)
 	return makeerror(ERR_NO_HISTORY);
 
@@ -741,7 +743,7 @@ os_error *fe_history_move(fe_view v, int direction)
 
 	/* open the new url */
 	/* the extra frames are opened by override code in frontend_frame_layout() */
-	return frontend_open_url(dest->frame[index].url, vv, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
+	return frontend_open_url(dest->frame[index].url, vv, NULL, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
     }
 
     return makeerror(ERR_NO_HISTORY);
@@ -753,7 +755,7 @@ int fe_history_move_alpha_index(fe_view v, int index, char **new_url)
     fe_global_history_item *item = fe_global_lookup_index(index);
     if (item)
     {
-	*new_url = strdup(item->url);
+	*new_url = mm_strdup(item->url);
 	return TRUE;
     }
 
@@ -775,13 +777,13 @@ static BOOL fe_history_move_to(fe_view v, fe_history_item *item, char **new_url)
 
 	if (vv == v)
 	{
-	    *new_url = strdup(item->frame[0].url);
+	    *new_url = mm_strdup(item->frame[0].url);
 	    return TRUE;
 	}
 
 	/* open the new url */
 	/* the extra frames are opened by override code in frontend_frame_layout() */
-	frontend_open_url(item->frame[0].url, vv, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
+	frontend_open_url(item->frame[0].url, vv, NULL, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
     }
 
     return FALSE;
@@ -900,7 +902,7 @@ int fe_history_visit(fe_view v, const char *url, const char *title)
 	item->is_offline = v->offline_mode == fe_keyboard_OFFLINE;
         top->hist_at = item;
     }
-    
+
     /* and to the global history if not a frame element */
     if (v == top && v->offline_mode == fe_keyboard_ONLINE)
         fe_global_add(url, title);
@@ -1041,7 +1043,7 @@ void fe_history_update_current_state(fe_view v)
 
 	/* write in initial type values */
 	backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
-	hfi->url = strdup(url);
+	hfi->url = mm_strdup(url);
 	memcpy(hfi->specifier, specifier, sizeof(specifier));
 
 	/* fill in current scroll positions */
@@ -1093,7 +1095,7 @@ void fe_history_optimise(fe_view v)
 		item->prev->next = item;
 	    else
 		v->first = item;
-		
+
 	    if (item->next)
 		item->next->prev = item;
 	    else
@@ -1142,7 +1144,7 @@ void history_dump(BOOL global)
     }
 }
 #endif
-	
+
 /* ---------------------------------------------------------------------------------------------*/
 
 /* eof stbhist.c*/

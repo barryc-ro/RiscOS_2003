@@ -90,6 +90,7 @@ void event2_release_nulls( event2_null_proc proc, void *handle )
 
 static event2_drag_proc dragproc = NULL;
 static void            *draghandle;
+BOOL timed_out = FALSE;     /* in here to help hide it */
 
 static BOOL event2_dragpoll( wimp_eventstr *e, void *handle )
 {

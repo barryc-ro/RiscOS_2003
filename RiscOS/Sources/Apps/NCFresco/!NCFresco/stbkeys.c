@@ -405,7 +405,7 @@ static key_list nc_movement1_keys[] =
 #define nc_codec_keys	rca_codec_keys
 #define nc_osk_keys	rca_osk_keys
 #define nc_frame_link_keys	rca_frame_link_keys
-#define nc_external_popup_keys	rca_external_popup_keys	
+#define nc_external_popup_keys	rca_external_popup_keys
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -825,7 +825,7 @@ void stbkeys_list_add(const void *info)
 	if ((list_size % LIST_CHUNK_SIZE) == 0)
 	{
 	    BOOL success = FALSE;
-	
+
 	    if (list == NULL)
 		success = flex_alloc((flex_ptr)&list, LIST_CHUNK_SIZE * sizeof(*list));
 	    else
@@ -845,7 +845,7 @@ void stbkeys_list_add(const void *info)
 	kn->map = (unsigned char)ki->map;
 	kn->key = (unsigned short)ki->key;
     }
-    
+
     /* write in new values */
     kn->event = (unsigned short)ki->event;
     kn->flags = ki->count >= 4 ? (unsigned char)ki->flags : 0;
@@ -857,7 +857,7 @@ void stbkeys_list_clear(void)
 	flex_free((flex_ptr)&list);
     list_size = 0;
 }
-    
+
 /* ------------------------------------------------------------------------------------------- */
 
 /* This view could be null if the caret was in the status bar
@@ -953,7 +953,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     if (event == -1) switch (config_mode_platform)
     {
     case platform_RISCOS_DESKTOP:
-	event = fe_key_lookup(chcode, platform_riscos_keys);	
+	event = fe_key_lookup(chcode, platform_riscos_keys);
 	break;
     case platform_NC:
 	event = fe_key_lookup(chcode, platform_nc_keys);
@@ -1045,11 +1045,11 @@ void stbkeys_list_loaded(void)
 	    writeables_map[count].action = (input_key_action) d->event;
 	    count++;
 	}
-    
+
     /* terminate */
     writeables_map[count].key = -1;
     writeables_map[count].action = key_action_NO_ACTION;
-    
+
     /* register with backend */
     set_input_key_map(writeables_map);
 }

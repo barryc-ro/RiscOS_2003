@@ -458,7 +458,7 @@ static os_error *imagemap_check_file(antweb_doc *parent_doc, const char *url)
     /* set fetching here as if the file is cached it will be loaded and cleared within call to access_url */
     parent_doc->fetching = doc;
 
-    e = access_url(use_url, 0 /*flags*/, NULL /*ofile*/, NULL /*bfile*/, NULL /*referrer*/, NULL /*progress*/, imagemap_doc_complete, doc, &doc->ah);
+    e = access_url(use_url, 0 /*flags*/, NULL /*ofile*/, NULL /*bfile*/, NULL, NULL /*referrer*/, NULL /*progress*/, imagemap_doc_complete, doc, &doc->ah);
 
     mm_free(use_url);
 

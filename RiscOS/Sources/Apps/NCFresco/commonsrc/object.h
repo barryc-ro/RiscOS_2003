@@ -188,6 +188,10 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key);
 void otextarea_asdraw(rid_text_item *di, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
 int otextarea_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box);
+void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *len);
+void otextarea_write_to_file(rid_textarea_item *tai, FILE *f);
+void otextarea_write_to_file_raw(rid_textarea_item *tai, FILE *f);
+
 
 void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);

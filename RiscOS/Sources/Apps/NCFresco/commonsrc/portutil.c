@@ -1237,7 +1237,7 @@ static int make_num (const char *  s)
 	return *(s+1) - '0';
 }
 
-static int make_month (const char *  s)
+int make_month (const char *  s)
 {
     int i;
     for (i=0; i<12; i++)
@@ -1446,7 +1446,7 @@ char *strcatx_with_leeway(char *s, const char *s1, int leeway)
 {
     char *new_s = NULL;
     int slen, actuallen, newlen;
-    
+
     if (s)
     {
 	slen = strlen(s);
@@ -1456,7 +1456,7 @@ char *strcatx_with_leeway(char *s, const char *s1, int leeway)
     {
 	slen = actuallen = 0;
     }
-    
+
     newlen = slen + (s1 ? strlen(s1) : 0) + 1;
 
  /*  DBG(("strcatx: s %p s1 %p leeway %d: slen %d s1len %d newlen %d (%d) actuallen %d\n", s, s1, leeway, slen, strlen(s1), newlen, (newlen + leeway) &~ leeway, actuallen)); */
@@ -1473,7 +1473,7 @@ char *strcatx_with_leeway(char *s, const char *s1, int leeway)
 
 	s = new_s;
     }
-    
+
     if (s1 && s)
 	strcpy(s + slen, s1);
 
@@ -1516,7 +1516,7 @@ char *xfgets(FILE *in)
 	    buffer[blen-1] = '\0';
 	    finished = TRUE;
 	}
-	
+
 	s = strcatx(s, buffer);
 
 /* 	DBG(("xfgets: read '%s' finished %d gives %s\n", buffer, finished, s)); */

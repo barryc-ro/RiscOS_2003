@@ -39,7 +39,7 @@
 #include "stream.h"
 #include "gbf.h"
 
-#define TXTDBG(a) 
+#define TXTDBG(a)
 
 #if !NEW_TEXTAREA
 #ifndef MAX_TEXT_LINE
@@ -61,7 +61,7 @@ static void insert_char(rid_textarea_item *tai, int point, int c)
     if (memzone_alloc(&tai->text, 1) != -1)
     {
 	int n_to_move;
-	    
+
 	flexmem_noshift();
 
 	/* for safety */
@@ -115,7 +115,7 @@ static int find_next_break(rid_textarea_item *tai, int offset)
 {
     char *s;
     int i, n, ws;
-    
+
     TXTDBG(("find_next_break: tai%p offset %d data %p used %d\n", tai, offset, tai->text.data, tai->text.used));
 
     flexmem_noshift();
@@ -123,7 +123,7 @@ static int find_next_break(rid_textarea_item *tai, int offset)
     s = tai->text.data + offset;
     n = tai->text.used - offset;
     ws = -1;
-    
+
     for (i = 0; i < n; i++)
     {
 	int c = *s++;
@@ -163,7 +163,7 @@ static int find_next_break(rid_textarea_item *tai, int offset)
 static int count_lines(rid_textarea_item *tai)
 {
     int i, this_off;
-    
+
     TXTDBG(("count_lines: tai%p\n", tai));
 
     this_off = 0;
@@ -182,7 +182,7 @@ static int count_lines(rid_textarea_item *tai)
 static void fillin_line_list(rid_textarea_item *tai, int *list)
 {
     int i;
-    
+
     TXTDBG(("fillin_line_list: tai %p list %p\n", tai, list));
 
     list[0] = 0;
@@ -209,12 +209,12 @@ static int check_line_list(rid_textarea_item *tai, int offset, int apply_after)
     int n_lines;
     int changed_from;
     int i;
-    
+
     TXTDBG(("check_line_list: tai %p offset %d after %d\n", tai, offset, apply_after));
 
     /* calculate the new line count and allocate the structure */
     n_lines = count_lines(tai);
-    
+
     tai->lines = mm_realloc(tai->lines, sizeof(int) * (n_lines + 1));
 
     tai->lines[0] = 0;
@@ -279,7 +279,7 @@ static void font_paint_n(const char *text, int n, int x, int y)
 
     _swix(Font_Paint, _INR(1,4) | _IN(7), text, (1<<7) | font_OSCOORDS, x, y, n);
 }
-	
+
 static void decode_offset(rid_textarea_item *tai, int cpos, SHORTISH *xpos, SHORTISH *ypos)
 {
     int i;
@@ -343,7 +343,7 @@ static void otextarea_copy_defaults(rid_textarea_item *tai)
 	tai->text.used = tai->default_text.used;
 
 	TXTDBG(("default area: '%.*s'\n", tai->default_text.used, tai->default_text.data));
-	
+
 	flexmem_shift();
 
 	/* tidy this block now */
@@ -405,7 +405,7 @@ static int useable_columns(rid_textarea_item *tai, antweb_doc *doc)
 	    cols = 1;
     }
     return cols;
-}    
+}
 
 void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -431,11 +431,11 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     otextarea_copy_defaults(tai);
 
     tai->useable_cols = useable_columns(tai, doc);
-    
+
     buffer = mm_malloc(tai->useable_cols + 1);
     memset(buffer, ' ', tai->useable_cols);
     buffer[tai->useable_cols] = 0;
-    
+
 /*     for(i=0; i < tai->cols; i++) */
 /* 	buffer[i] = ' '; */
 /*     buffer[i] =0; */
@@ -534,7 +534,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     for(i=tai->sy, tal = tai->lines; tal && i; i--, tal = tal->next)
 	;
 #endif
-    
+
 #if 0
     fprintf(stderr, "otextarea_redraw: gwind %d,%d,%d,%d\n", g->x0, g->y0, g->x1, g->y1);
     fprintf(stderr, "otextarea_redraw: box   %d,%d,%d,%d\n", hpos+8, bline-ti->max_down+8, hpos+ti->width-8, bline+ti->max_up-8);
@@ -556,7 +556,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 
 	TXTDBG(("otexarea_redraw: rows %d n_lines %d sy %d end %d\n", tai->rows, tai->n_lines, tai->sy, end));
 #endif
-	
+
 	bbc_gwindow(gwind_box.x0, gwind_box.y0, gwind_box.x1-dx, gwind_box.y1-dy);
 
 #if NEW_TEXTAREA
@@ -693,7 +693,7 @@ char *otextarea_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x,
 
     tai->caret_line = tal;
 #endif
-    
+
 #if NEW_TEXTAREA
     if (y >= tai->n_lines)
     {
@@ -934,7 +934,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	input_key_action action = lookup_key_action(key);
 
 /* 	DBG(("otextarea_key: key %d action %d\n", key, action)); */
-	
+
 	switch (action)
 	{
 	case key_action_NEWLINE:
@@ -1285,7 +1285,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    cpos += dchar;
 
 	decode_offset(tai, cpos, &tai->cx, &tai->cy);
-	
+
 	/* if wrapping is on then redraw all below here
 	 * this is a bit crude but may do
 	 */
@@ -1295,7 +1295,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #endif
 
     cols = tai->useable_cols;
-    
+
     /* force the horizontal scroll position to be visible */
     if (tai->cx < tai->sx || tai->cx > (tai->sx + cols))
     {
@@ -1391,7 +1391,7 @@ void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *blen
     int i;
 
     flexmem_noshift();
-    
+
     for (i = 0; i < tai->n_lines; i++)
     {
 	int len = line_length(tai, i);
@@ -1414,7 +1414,7 @@ void otextarea_write_to_file(rid_textarea_item *tai, FILE *f)
     int i;
 
     flexmem_noshift();
-    
+
     for (i = 0; i < tai->n_lines; i++)
     {
 	int len = line_length(tai, i);
@@ -1425,6 +1425,27 @@ void otextarea_write_to_file(rid_textarea_item *tai, FILE *f)
 	if (i != tai->n_lines-1 &&
 	    (tai->wrap == rid_ta_wrap_HARD || terminated))
 	    fputs("%0D%0A", f);
+    }
+
+    flexmem_shift();
+}
+
+void otextarea_write_to_file_raw(rid_textarea_item *tai, FILE *f)
+{
+    int i;
+
+    flexmem_noshift();
+
+    for (i = 0; i < tai->n_lines; i++)
+    {
+	int len = line_length(tai, i);
+	BOOL terminated = (tai->lines[i+1] - tai->lines[i]) != len;
+
+        fwrite( tai->text.data + tai->lines[i], 1, len, f );
+
+	if (i != tai->n_lines-1 &&
+	    (tai->wrap == rid_ta_wrap_HARD || terminated))
+	    fprintf(f, "\r\n");
     }
 
     flexmem_shift();

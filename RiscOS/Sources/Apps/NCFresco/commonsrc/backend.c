@@ -114,6 +114,7 @@
 #include "pluginfn.h"
 #include "format.h"
 #include "gbf.h"
+#include "object.h"
 
 #ifdef STBWEB_BUILD
 #include "http.h"
@@ -131,24 +132,15 @@
 #include "rectplot.h"
 #endif
 
+#include "guarded.h"
 
 #ifndef ITERATIVE_PANIC
 #define ITERATIVE_PANIC 0
 #endif
 
-#if defined(FRESCO) && defined(PRODUCTION)
-#define CATCHTYPE5 1
-#else
-#define CATCHTYPE5 0
-#endif
-
 /* This is on its own because the include file that it is in includes lots of others */
 /* Not that this is a good excuse. */
 extern void rid_zero_widest_height_from_item(rid_text_item *item);
-
-/* and these two are here 'cos I'm lazy tonight which is worse */
-extern void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *len);
-extern void otextarea_write_to_file(rid_textarea_item *tai, FILE *f);
 
 /**********************************************************************/
 
@@ -163,6 +155,11 @@ static void be_dispose_doc_contents( be_doc doc );
 
 void be_caption_stream_origin(rid_table_item *table, int *dx, int *dy);
 void be_cell_stream_origin(rid_table_item *table, rid_table_cell *cell, int *dx, int *dy);
+
+#if TIMEOUT
+static void CheckLastModified( be_doc doc );
+extern void TimeoutError(void); /* grody.s */
+#endif
 
 #ifdef BUILDERS
 extern
@@ -207,10 +204,9 @@ void antweb_signal_handler( int sig )
     if ( currentdoc )
     {
         if ( ( currentdoc->flags & doc_flag_WRECKED ) == 0 )
-	{
-	    be_dispose_doc_contents( currentdoc );
-	    currentdoc->flags |= doc_flag_WRECKED;
-
+        {
+            be_dispose_doc_contents( currentdoc );
+    	    currentdoc->flags |= doc_flag_WRECKED;
 	    mm_minor_panic( sig == SIGUSR1 ? "memlow" : "memerror" );
 	}
     }
@@ -627,7 +623,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
 	}
 	else
 	{
-	    e = frontend_open_url(dest, /* new_win?NULL:*/ doc->parent, (char *)target, NULL, 0);
+	    e = frontend_open_url(dest, /* new_win?NULL:*/ doc->parent, (char *)target, NULL, NULL, 0);
 	}
 
 	mm_free(dest);
@@ -1315,7 +1311,7 @@ static BOOL antweb_doc_in_list(be_doc doc)
 
 os_error *backend_dispose_doc(be_doc doc)
 {
-    BENDBG(( "doc%p: dispose_doc called by %s\n", doc, caller(1) ));
+    BENDBG(( "doc%p: dispose_doc called from %s from %s\n", doc, caller(1), caller(2) ));
 
 #if 0
     fprintf(stderr, "dispose_doc: checklist: in %p doc->next %p document_list %p\n", doc, doc->next, document_list);
@@ -1578,7 +1574,7 @@ int antweb_render_background(wimp_redrawstr *rr, void *h, int update)
 		      rr->g.x0, rr->g.y1 - ooy, rr->g.x1, rr->g.y0 - ooy,
 		      &fs, &rr->g, object_redraw_BACKGROUND);
     }
-    
+
     return rc;
 }
 
@@ -1734,7 +1730,7 @@ static void antweb_append_query(char **buffer, char *name, char *value, int *len
     if (name)
     {
 	url_escape_cat(*buffer, name, *len);
-	
+
 /* 	int i; */
 /* 	char *s; */
 /* 	char c; */
@@ -1796,36 +1792,50 @@ static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *l
 #endif
 }
 
-static void antweb_write_query(FILE *f, char *name, char *value, int *first)
+static const char MIME_TYPE[] = "multipart/form-data; boundary=49305B2Fantfresco658FBF78";
+                               /*012345678901234567890123456789*/
+#define MIME_BOUNDARY (MIME_TYPE+30)
+
+static void antweb_write_query(FILE *f, char *name, char *value, int *first, BOOL bMime)
 {
     if (value == NULL)
 	value = "";
 
-    if (*first)
+    if ( bMime )
     {
-	*first = FALSE;
+        /* RFC1867 MIME multipart/form-data response */
+        fprintf( f, "--%s\r\n", MIME_BOUNDARY );
+
+        /* RFC1867 para5.11 says url-escape the name, but Netscape doesn't
+         * so nor do we
+         */
+        fprintf( f, "Content-disposition: form-data; name=\"%s\"\r\n\r\n", name );
+
+        DBG(("  %s(%d) = %s\n", name, strlen(name), value ));
+
+        fprintf( f, "%s\r\n", value );
     }
     else
     {
-	fprintf(f, "&");
-    }
-    if (name)
-    {
-	url_escape_to_file(name, f);
-/* 	char c; */
+        if (*first)
+        {
+	    *first = FALSE;
+        }
+        else
+        {
+	    fprintf(f, "&");
+        }
 
-/* 	while ((c = *name++) != 0) */
-/* 	{ */
-/* 	    if (isspace(c)) */
-/* 		c = '+'; */
-/* 	    fputc(c, f); */
-/* 	} */
-	fputc('=', f);
+        if (name)
+        {
+	    url_escape_to_file(name, f);
+	    fputc('=', f);
+        }
+        url_escape_to_file(value, f);
     }
-    url_escape_to_file(value, f);
 }
 
-static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
+static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first, BOOL bMime)
 {
     char *n;
     char c;
@@ -1835,36 +1845,59 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
     if (tai->name == NULL)
 	return;
 
-    if (*first)
+    if ( bMime )
     {
-	*first = FALSE;
+        /* RFC1867 MIME multipart/form-data response */
+        fprintf( f, "--%s\r\n", MIME_BOUNDARY );
+
+        /* RFC1867 para5.11 says url-escape the name, but Netscape doesn't
+         * so nor do we
+         */
+        fprintf( f, "Content-disposition: form-data; name=\"%s\"\r\n\r\n", tai->name );
+
+#if NEW_TEXTAREA
+        otextarea_write_to_file_raw( tai, f );
+#else
+        /* FIXME: doesn't cope with NEW_TEXTAREA */
+        for(tal = tai->lines; tal; tal = tal->next)
+        {
+	    fprintf( f, "%s\r\n", tal->text);
+        }
+#endif
     }
     else
     {
-	fprintf(f, "&");
-    }
+        if (*first)
+        {
+	    *first = FALSE;
+        }
+        else
+        {
+	    fprintf(f, "&");
+        }
 
-    url_escape_to_file(tai->name, f);
+        url_escape_to_file(tai->name, f);
 /*     for(n = tai->name; (c = *n) != 0; n++) */
 /*     { */
 /* 	if (isspace(c)) */
 /* 	    c = '+'; */
 /* 	fputc(c, f); */
 /*     } */
-    fputc('=', f);
+        fputc('=', f);
 
 #if NEW_TEXTAREA
-    otextarea_write_to_file(tai, f);
+        otextarea_write_to_file(tai, f);
 #else
-    for(tal = tai->lines; tal; tal = tal->next)
-    {
-	url_escape_to_file(tal->text, f);
-	/* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
-	 */
-	if (tal->next)
-	    fputs("%0D%0A", f);
-    }
+        for(tal = tai->lines; tal; tal = tal->next)
+        {
+	    url_escape_to_file(tal->text, f);
+	    /* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
+	     */
+	    if (tal->next)
+	        fputs("%0D%0A", f);
+        }
 #endif
+    }
 }
 
 #ifdef STBWEB
@@ -1998,7 +2031,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		BENDBG(( "Query string is:\n'%s'\n", dest2));
 
 		/* Never get a form query from the cache */
-		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, fe_open_url_NO_CACHE));
+		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, NULL, fe_open_url_NO_CACHE));
 
 		mm_free(dest2);
 	    }
@@ -2014,12 +2047,15 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    char *fname;
 	    int first = TRUE;
 	    char *dest;
+	    BOOL bMime;
 
 	    fname = strdup(rs_tmpnam(0));
 	    dest = strrchr(fname, 'x');
 	    if (dest)
 		*dest = 'y';
 	    f = mmfopen(fname, "w");
+
+            bMime = form->enctype && !strcasecomp( form->enctype, "multipart/form-data" );
 
 	    for (fis = form->kids; fis; fis = fis->next)
 	    {
@@ -2031,7 +2067,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    switch (iis->tag)
 		    {
 		    case rid_it_HIDDEN:
-			antweb_write_query(f, iis->name, iis->value, &first);
+			antweb_write_query(f, iis->name, iis->value, &first, bMime);
 			break;
 		    case rid_it_IMAGE:
 			if (iis->data.image.x != -1)
@@ -2046,28 +2082,28 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 			     */
 			    strcat( buf3, (*buf3) ? ".x" : "x" );
 			    sprintf(buf2, "%d", iis->data.image.x);
-			    antweb_write_query(f, buf3, buf2, &first);
+			    antweb_write_query(f, buf3, buf2, &first, bMime);
 
 			    buf3[strlen(buf3)-1] = 'y';
 			    sprintf(buf2, "%d", iis->data.image.y);
-			    antweb_write_query(f, buf3, buf2, &first);
+			    antweb_write_query(f, buf3, buf2, &first, bMime);
 			}
 			break;
 		    case rid_it_TEXT:
 		    case rid_it_PASSWD:
-			antweb_write_query(f, iis->name, iis->data.str, &first);
+			antweb_write_query(f, iis->name, iis->data.str, &first, bMime);
 			break;
 		    case rid_it_CHECK:
 		    case rid_it_RADIO:
 			if (iis->data.radio.tick)
 			{
-			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first);
+			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first, bMime);
 			}
 			break;
 		    case rid_it_SUBMIT:
 			if (iis->data.button.tick && iis->name)
 			{
-			    antweb_write_query(f, iis->name, strsafe(iis->value), &first);
+			    antweb_write_query(f, iis->name, strsafe(iis->value), &first, bMime);
 			}
 			break;
 		    }
@@ -2080,14 +2116,14 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		    rid_option_item *ois;
 		    for(ois = sis->options; ois; ois = ois->next)
 			if (ois->flags & rid_if_SELECTED)
-			    antweb_write_query(f, sis->name, ois->value ? ois->value : ois->text, &first);
+			    antweb_write_query(f, sis->name, ois->value ? ois->value : ois->text, &first, bMime);
 		    break;
 		}
 
 		case rid_form_element_TEXTAREA:
 		{
 		    rid_textarea_item *tai = (rid_textarea_item *)fis;
-		    antweb_write_textarea(f, tai, &first);
+		    antweb_write_textarea(f, tai, &first, bMime);
 		    break;
 		}
 		}
@@ -2096,12 +2132,20 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 #if 0
 	    fputs("\r\n", f);
 #endif
+            if ( bMime )
+            {
+                fprintf( f, "--%s--\r\n", MIME_BOUNDARY );
+            }
+
 	    mmfclose(f);
 
 	    dest = url_join(BASE(doc), form->action);
 
 	    /* Never get a form query from the cache */
-	    ep = frontend_complain(frontend_open_url(dest, doc->parent, target, fname, fe_open_url_NO_CACHE));
+	    ep = frontend_complain(frontend_open_url(dest, doc->parent, target,
+	                                             fname,
+	                                             bMime ? (char*)MIME_TYPE : NULL,
+	                                             fe_open_url_NO_CACHE));
 	    mm_free(dest);
 	}
 	break;
@@ -3353,7 +3397,7 @@ static void antweb_init_page(antweb_doc *doc)
     {
 	fe_view_dimensions fvd;
 
-	BENDBG(( "antweb_init_page(): doc %p\n", doc));
+	BENDBG(( "doc%p: antweb_init_page: setting displaying\n", doc));
 
 	frontend_view_get_dimensions(doc->parent, &fvd);
 
@@ -3365,7 +3409,7 @@ static void antweb_init_page(antweb_doc *doc)
 
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 
-	BENDBG(( "Calling visit\n"));
+	BENDBG(( "doc%p: calling visit\n", doc));
 
 	/* We assume we can use the title here because it is supposed to be
 	   in the header and the header is supposed to come before the body. */
@@ -3378,6 +3422,8 @@ static void antweb_init_page(antweb_doc *doc)
 
 	antweb_default_caret(doc, FALSE);
     }
+    else
+        BENDBG(( "doc%p: antweb_init_page: already displaying\n", doc ));
 }
 
 
@@ -3426,7 +3472,7 @@ static void antweb_doc_background_change(void *h, void *i, int status, wimp_box 
 	    BENDBG(( "New bg colour is 0x%08x\n", doc->rh->colours.back));
 	}
 
-	antweb_init_page(doc);
+        antweb_init_page(doc);
 
 	if (doc->flags & doc_flag_DISPLAYING)
 	    frontend_view_redraw(doc->parent, NULL);
@@ -3661,7 +3707,11 @@ static void progress_parse_and_format(antweb_doc *doc, int fh, int lastptr, int 
 	    }
 
 	    if (!waiting_for_bg)
+	    {
+	        BENDBG(( "doc%p: calling init_page from parse_and_format\n",
+	                 doc ));
 		antweb_init_page(doc);
+	    }
 	}
 	else
 	{
@@ -3739,6 +3789,10 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
     static antweb_doc *threaded = NULL;
 
     ACCDBG(("doc%p: antweb_doc_progress(%d) called\n", doc, status ));
+
+#if TIMEOUT
+    CheckLastModified( doc );
+#endif
 
     /* Make the world turn a little */
     frontend_view_status(doc->parent, sb_status_WORLD);
@@ -3861,6 +3915,57 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
     threaded = NULL;
 }
 
+#if TIMEOUT
+
+
+/*
+ * Following string is "last-modified" encoded by the following algorithm:
+ *
+ * A$="LAST-MODIFIED"
+ * L%=LENA$
+ * S%=ASC"P"
+ * FOR I%=1 TO L%
+ *   C% = ASCMID$(A$,I%,1)
+ *   D% = C%
+ *   C% = (C%-S%) AND &FF
+ *   S% = D%
+ *   PRINT C%
+ * NEXT
+ */
+static const char lastmodified[] = { 252,245,18,1,217,32,2,245,5,253,3,252,255 };
+
+unsigned int timeout_time_t = TIMEOUT_TIME_T;
+
+static void CheckLastModified( be_doc doc )
+{
+    char header[20];
+    unsigned char c = 'P';
+    const char *answer;
+    int i;
+    time_t t;
+
+    for ( i=0; i<13; i++ )
+    {
+        c += lastmodified[i];
+        header[i] = (char)c;
+    }
+    header[13] = '\0';
+
+    answer = backend_check_meta( doc, header );
+
+    memset( header, 0, sizeof(header) );
+
+    if ( !answer )
+        return;
+
+    t = HTParseTime( answer );
+
+    if ( t > timeout_time_t )       /* unsigned comparison, we hope */
+        TimeoutError();
+}
+
+#endif
+
 
     /*===============================*/
 
@@ -3896,6 +4001,10 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
     int ft, r;
 
     frontend_view_status(doc->parent, sb_status_PROGRESS, status);
+
+#if TIMEOUT
+    CheckLastModified( doc );
+#endif
 
     BENDBG(("doc%p: antweb_doc_complete(%d) called\n", doc, status ));
 
@@ -3937,7 +4046,7 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 	}
 
 #ifndef BUILDERS
-	
+
 	if (status == status_BAD_FILE_TYPE)
 	{
 	    char *name = get_file_type_name(access_get_ftype(doc->ah));	/* unsupported file type */
@@ -3945,7 +4054,7 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 	}
 	else
 	{
-	    frontend_view_visit(doc->parent, NULL, url,	
+	    frontend_view_visit(doc->parent, NULL, url,
 			    status == status_FAIL_REDIAL ?
 				NULL :								/* don't want to display the error in this case */
 			    status == status_FAIL_LOCAL ?
@@ -3955,6 +4064,8 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 				(char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
 	}
 #endif
+
+	BENDBG(("doc%p: fe_view_visit returns, setting ah=NULL\n", doc ));
 
 	doc->ah = NULL;
 
@@ -4003,7 +4114,7 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 
 	if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	{
-	    BENDBG(( "visit called from complete\n"));
+	    BENDBG(( "doc%p: calling init_page from complete\n", doc ));
 	    antweb_init_page(doc);
 	}
 
@@ -4070,7 +4181,7 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 		alarm_set(alarm_timenow()+(doc->rh->refreshtime * 100), be_refresh_document, doc);
 	}
 
-	frontend_view_status(doc->parent, sb_status_FINISHED); 
+	frontend_view_status(doc->parent, sb_status_FINISHED);
 
 	r = access_CACHE;
     }
@@ -4093,7 +4204,7 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 	else
 	{
 	    frontend_pass_doc(doc->parent, doc->url, cfile, ft);
-	}	    
+	}
 #endif
 
 	BENDBG(( "Returned from frontend\n"));
@@ -4298,7 +4409,7 @@ static void be_refresh_document(int at, void *h)
     if (doc->url || doc->rh->refreshurl)
     {
 	char *url = url_join(BASE(doc), doc->rh->refreshurl ? doc->rh->refreshurl : doc->url);
-	frontend_complain(frontend_open_url(url, doc->parent, NULL, NULL, 1));
+	frontend_complain(frontend_open_url(url, doc->parent, NULL, NULL, NULL, 1));
 	mm_free(url);
     }
 }
@@ -4323,7 +4434,8 @@ extern void backend_set_margin(be_doc doc, wimp_box *margin)
 
 
 extern os_error *backend_open_url(fe_view v, be_doc *docp,
-				  char *url, char *bfile, char *referer,
+				  char *url, char *bfile, char *bfiletype,
+				  char *referer,
 				  int flags)
 {
     antweb_doc *new;
@@ -4342,9 +4454,9 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->url = strdup(url);
 
     new->threaded = 1;
-    
-    BENDBG(( "backend_open_url: url '%s' checklist: add %p document_list %p next %p\n",
-	   strsafe(url), new, document_list, document_list ? document_list->next : NULL));
+
+    BENDBG(( "doc%p: new in backend_open_url: url '%s' checklist: document_list %p next %p\n",
+	   new, strsafe(url), document_list, document_list ? document_list->next : NULL));
 
     /* add to list of documents, must do now in case we dispose of doc before returning from access_url */
     new->next = document_list;
@@ -4378,7 +4490,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 		    (flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |
 		    (flags & be_openurl_flag_FAST_LOAD ? access_MAX_PRIORITY : 0) |
 		    access_CHECK_FILE_TYPE | access_PRIORITY,
-		    NULL, bfile, referer,
+		    NULL, bfile, bfiletype, referer,
 		    &antweb_doc_progress, &antweb_doc_complete, new, &new->ah);
 
     mm_free(use_url);
@@ -4432,7 +4544,14 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 #if 1
 	/* check not already marked for deletion just in case */
 	if (!new->pending_delete)
+	{
+	    BENDBG(("doc%p: error, not pending, calling dispose\n", new));
 	    backend_dispose_doc(new);
+	    *docp = NULL;
+	    return ep;
+
+	    /* DON'T drop through and try to dispose again */
+	}
 #else
 	/* only free if still in list in case already freed */
 	if (antweb_doc_in_list(new))
@@ -4447,10 +4566,11 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->threaded--;
     if (new->pending_delete)
     {
+	BENDBG(("doc%p: error, pending=%d, calling dispose\n", new, new->pending_delete));
 	backend_dispose_doc(new);
 	*docp = NULL;
     }
-    
+
     return ep;
 }
 
@@ -4485,6 +4605,21 @@ BOOL backend_image_saver_sprite(char *fname, void *h)
     IMGDBG(("im%p: saving as sprite %s\n", im, fname ));
 
     OK = (frontend_complain(image_save_as_sprite(im, fname)) == NULL);
+
+    if (OK)
+	frontend_saver_last_name(fname);
+
+    return OK;
+}
+
+BOOL backend_image_saver_jpeg(char *fname, void *h)
+{
+    image im = (image) h;
+    int OK;
+
+    IMGDBG(("im%p: saving as jpeg %s\n", im, fname ));
+
+    OK = (frontend_complain(image_save_as_jpeg(im, fname)) == NULL);
 
     if (OK)
 	frontend_saver_last_name(fname);
@@ -4567,6 +4702,10 @@ void backend_temp_file_register(char *url, char *file_name)
 const char *backend_check_meta(be_doc doc, const char *name)
 {
     rid_meta_item *m;
+
+    if ( !doc || !doc->rh )
+        return NULL;
+
     for (m = doc->rh->meta_list; m; m = m->next)
     {
         if ((m->name && strcasecomp(m->name, name) == 0) ||

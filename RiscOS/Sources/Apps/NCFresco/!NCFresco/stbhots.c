@@ -149,7 +149,7 @@ static void hotlist__add(char *url, char *title, time_t t, BOOL in_order)
     /* if we already have this URL in the list then ignore the request */
     if (hotlist__find(url, NULL) != NULL)
 	return;
-    
+
     item = mm_calloc(sizeof(hotlist_item), 1);
 
     /* add to list */
@@ -162,7 +162,7 @@ static void hotlist__add(char *url, char *title, time_t t, BOOL in_order)
     {
 	hotlist_last = hotlist_list = item;
     }
-    
+
     /* fill in data */
     item->url = url;
     item->title = title;
@@ -241,7 +241,7 @@ static void hotlist__sort(int (*compar)(const void *, const void *))
     /* exit unless at least two items */
     if (count < 2)
 	return;
-    
+
     /* allocate an array to hold pointers to each of the hotlist_items */
     item_list = mm_calloc(sizeof(*item_list), count);
 
@@ -288,7 +288,7 @@ static void hotlist__flush_pending_delete(void)
 void hotlist_remove_list(const char *list_orig)
 {
     hotlist_item *item = hotlist_list, *last = NULL;
-    char *list_copy = strdup(list_orig), *list;
+    char *list_copy = mm_strdup(list_orig), *list;
     int current = 0;
 
     list = strtok(list_copy, "&");	/* init strtok, skip initial & */
@@ -301,7 +301,7 @@ void hotlist_remove_list(const char *list_orig)
 	    while (item && index >= current)
 	    {
 		hotlist_item *next = item->next;
-	    
+
 		if (index == current)
 		{
 		    /* mark for removal */
@@ -407,7 +407,7 @@ static void hotlist__write(FILE *out)
     hotlist_item *item;
 
     hotlist__write_header(out);
-    
+
     for (item = hotlist_list; item; item = item->next)
     {
 	STBDBG(("hotlist__write: item %p url %p title %p\n", item, item->url, item->title));
@@ -442,7 +442,7 @@ static BOOL hotlist__write_nvram(void)
     hotlist_item *item;
 
     STBDBG(("hotlist__write_nvram: enter\n"));
-    
+
     /* first read the space available, if error returned then NVRAM module not available */
     if (_swix(NVRAM_Read, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, 0, 0, &size))
 	return FALSE;
@@ -464,7 +464,7 @@ static BOOL hotlist__write_nvram(void)
     data[0] = 1;		/* format */
     data[1] = 4;		/* record size */
     used = 2;
-    
+
     /* add items into buffer if room */
     for (item = hotlist_list; item; item = item->next)
     {
@@ -487,10 +487,10 @@ static BOOL hotlist__write_nvram(void)
     /* terminate block if not filled space */
     if (used < size)
 	data[used++] = 0;
-    
+
     /* write to NVRAM */
     _swix(NVRAM_Write, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, data, used, &rc);
-    
+
     STBDBG(("hotlist__write_nvram: used %d rc=%d\n", used, rc));
 
     /* resort and free buffer */
@@ -506,7 +506,7 @@ static BOOL hotlist__read_nvram(void)
     hotlist_info info;
     int size, rc;
     char *data, *s;
-    
+
     STBDBG(("hotlist__read_nvram: enter\n"));
 
     /* first read the space available, if error returned then NVRAM module not available */
@@ -547,7 +547,7 @@ static BOOL hotlist__read_nvram(void)
 
 		if (nl)
 		    *nl = 0;
-	    
+
 		STBDBG(("hotlist__read_nvram: read line (%d) s %p nl %p '%s'\n", i, s, nl, s));
 
 		switch (i)
@@ -598,7 +598,7 @@ static os_error *hotlist__changed_message(void)
 BOOL hotlist_read(const char *file)
 {
     int rc;
-    
+
     STBDBG(("hotlist_read: %s (%d)\n", file, gstrans_not_null(file)));
 
     visdelay_begin();
@@ -620,7 +620,7 @@ BOOL hotlist_read(const char *file)
     {
 	rc = hotlist__read_nvram();
     }
-    
+
     if (rc)
     {
 	hotlist__trim_length();
@@ -628,7 +628,7 @@ BOOL hotlist_read(const char *file)
     }
 
     visdelay_end();
-    
+
     hotlist_changed = FALSE;
 
     return rc;
@@ -641,11 +641,11 @@ BOOL hotlist_write(const char *file)
     STBDBG(("hotlist_write: %s (%d)\n", file, gstrans_not_null(file)));
 
     visdelay_begin();
-    
+
     if (gstrans_not_null(file))
     {
 	FILE *f;
-    
+
 	f = mmfopen(file, "w");
 	if (f)
 	{
@@ -655,14 +655,13 @@ BOOL hotlist_write(const char *file)
 
 	/* send wimp message to inform others */
 	hotlist__changed_message();
-
 	rc = f != NULL;
     }
     else
     {
 	rc = hotlist__write_nvram();
     }
-    
+
     visdelay_end();
 
     hotlist_changed = !rc;
@@ -676,14 +675,14 @@ os_error *hotlist_add(const char *url, const char *title)
 
     if (url == NULL)
 	return NULL;
-    
-    hotlist__add(strdup(url), strdup(title), time(NULL), TRUE);
+
+    hotlist__add(mm_strdup(url), mm_strdup(title), time(NULL), TRUE);
     hotlist__trim_length();
     hotlist__sort(hotlist__compare_alpha);
 
 /*     if ((ep = ensure_modem_line()) != NULL) */
 /* 	return ep; */
-    
+
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
 
@@ -695,12 +694,12 @@ os_error *hotlist_add(const char *url, const char *title)
 os_error *hotlist_remove(const char *url)
 {
     os_error *ep;
-    
+
     hotlist__remove(NULL, url);
-    
+
 /*     if ((ep = ensure_modem_line()) != NULL) */
 /* 	return ep; */
-    
+
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
 
@@ -712,12 +711,12 @@ os_error *hotlist_remove(const char *url)
 os_error *hotlist_flush_pending_delete(void)
 {
     os_error *ep;
-    
+
     hotlist__flush_pending_delete();
 
 /*     if ((ep = ensure_modem_line()) != NULL) */
 /* 	return ep; */
-    
+
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
 
@@ -753,7 +752,7 @@ void hotlist_write_delete_list(FILE *fout, void *handle)
 /* ---------------------------------------------------------------------- */
 
 void hotlist_return_url(int index, char **url)
-{ 
+{
     hotlist_item *item;
     int i;
     for (item = hotlist_list, i = 0; item && i < index; item = item->next, i++)
@@ -768,7 +767,7 @@ void hotlist_return_url(int index, char **url)
 	hotlist_write(config_hotlist_file);
 
 	/* write out the URL we've found */
-	*url = strdup(item->url);
+	*url = mm_strdup(item->url);
     }
     else
 	*url = NULL;

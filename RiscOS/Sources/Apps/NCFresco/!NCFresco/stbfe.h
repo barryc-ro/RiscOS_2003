@@ -50,6 +50,8 @@ extern void fe_copy_image_to_clipboard(fe_view v);
 extern int fe_copy_text_possible(fe_view v);
 extern void fe_copy_text_to_clipboard(fe_view v);
 
+extern void fe_copy_whatever_to_clipboard(fe_view v);
+
 extern os_error *fe_home(fe_view v);
 extern void fe_move_highlight(fe_view v, int flags);
 extern void fe_move_highlight_frame(fe_view v, BOOL next);

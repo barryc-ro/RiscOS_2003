@@ -34,6 +34,7 @@
 
 #include "stbstatus.h"
 #include "stbutils.h"
+#include "util.h"
 
 /* os coords
  * status win goes from 0 to 220
@@ -61,10 +62,6 @@
 
 #define statuswin_FETCH_X           (fetch_status_box.x0)
 #define statuswin_FETCH_Y           (fetch_status_box.y0)
-
-/* -------------------------------------------------------------------------- */
-
-char *strdup(char *s);
 
 /* -------------------------------------------------------------------------- */
 
@@ -209,7 +206,7 @@ os_error *statuswin_update_fetch_info(fe_view v, char *msg)
     if (info_level >= 2)
     {
         mm_free(statuswin_message);
-        statuswin_message = strdup(msg);
+        statuswin_message = mm_strdup(msg);
 
         return statuswin_draw_title(v, TRUE);
     }

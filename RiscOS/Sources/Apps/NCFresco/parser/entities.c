@@ -26,7 +26,7 @@
 
 /** entities all in lower case */
 
-char *entity_names[] =
+static const char * const entity_names[] =
 {
   "aacute",     /* small a, acute accent */
   "acirc",      /* small a, circumflex accent */
@@ -37,12 +37,14 @@ char *entity_names[] =
   "aring",      /* small a, ring */
   "atilde",     /* small a, tilde */
   "auml",       /* small a, dieresis or umlaut mark */
+  "bdquo",      /* bottom double quote (note name inconsistency with sbquo) */
   "brvbar",     /* broken (vertical) bar */
   "ccedil",     /* small c, cedilla */
   "cedil",      /* cedilla */
   "cent",       /* cent sign */
   "copy",       /* copyright sign */
   "curren",     /* general currency sign */
+  "dagger",     /* dagger (UC is double-dagger) */
   "deg",        /* degree sign */
   "divide",     /* divide sign */
   "eacute",     /* small e, acute accent */
@@ -61,15 +63,21 @@ char *entity_names[] =
   "iquest",     /* inverted question mark */
   "iuml",       /* small i, dieresis or umlaut mark */
   "laquo",      /* angle quotation mark, left */
+  "ldquo",      /* left double quote (66) */
+  "lsaquo",     /* left single angle quote */
+  "lsquo",      /* left single quote (6) */
   "lt",        	/* greater than */
   "macr",       /* macron */
+  "mdash",      /* em rule (v long dash) */
   "micro",      /* micro sign */
   "middot",     /* middle dot */
   "nbsp",       /* no-break space */
+  "ndash",      /* en rule (long dash) */
   "not",        /* not sign */
   "ntilde",     /* small n, tilde */
   "oacute",     /* small o, acute accent */
   "ocirc",      /* small o, circumflex accent */
+  "oelig",      /* oe ligature (diphthong) */
   "ograve",     /* small o, grave accent */
   "ordf",       /* ordinal indicator, feminine */
   "ordm",       /* ordinal indicator, masculine */
@@ -77,11 +85,16 @@ char *entity_names[] =
   "otilde",     /* small o, tilde */
   "ouml",       /* small o, dieresis or umlaut mark */
   "para",       /* pilcrow (paragraph sign) */
+  "permil",     /* per mille */
   "plusmn",     /* plus-or-minus sign */
   "pound",      /* pound sterling sign */
   "quot",       /* double quote sign - June 94 */
   "raquo",      /* angle quotation mark, right */
+  "rdquo",      /* right double quote (99) */
   "reg",        /* registered sign */
+  "rsaquo",     /* right single angle quote */
+  "rsquo",      /* right single quote (9) */
+  "sbquo",      /* single bottom quote (note name inconsistency width dbquo) */
   "sect",       /* section sign */
   "shy",        /* soft hyphen */
   "sup1",       /* superscript one */
@@ -106,7 +119,7 @@ char *entity_names[] =
 **	This MUST match exactly the table above
 **	lower case / upper case
 */
-static char ISO_Latin1[] = {
+static const char ISO_Latin1[] = {
 	'\341', '\301', /* small a, acute accent */
 	'\342', '\302', /* small a, circumflex accent */
 	'\264', '\264', /* acute accent */
@@ -116,12 +129,22 @@ static char ISO_Latin1[] = {
 	'\345', '\305', /* small a, ring */
 	'\343', '\303', /* small a, tilde */
 	'\344', '\304', /* small a, dieresis or umlaut mark */
+#ifdef __acorn
+        '\x96', '\x96', /* bottom double quote */
+#else
+        '\x84', '\x84',
+#endif
 	'\246', '\246', /* broken (vertical) bar */
 	'\347', '\307', /* small c, cedilla */
 	'\270', '\270', /* cedilla */
 	'\242', '\242', /* cent sign */
 	'\251', '\251', /* copyright sign */
 	'\244', '\244', /* general currency sign */
+#ifdef __acorn
+        '\x9C', '\x9D', /* dagger/double dagger */
+#else
+        '\x86', '\x87',
+#endif
 	'\260', '\260', /* degree sign */
 	'\367', '\367', /* divide sign */
 	'\351', '\311', /* small e, acute accent */
@@ -140,15 +163,39 @@ static char ISO_Latin1[] = {
 	'\277', '\277', /* inverted question mark */
 	'\357', '\317', /* small i, dieresis or umlaut mark */
 	'\253', '\253', /* angle quotation mark, left */
+#ifdef __acorn      /* Acorn Extended Latin */
+        '\x94', '\x94', /* left double quote (66) */
+        '\x92', '\x92', /* left single angle quote */
+        '\x90', '\x90', /* left single quote (6) */
+#else               /* Certainly right on PC and Mac, maybe elsewhere too */
+        '\x93', '\x93', /* left double quote (66) */
+        '\x8B', '\x8B', /* left single angle quote */
+        '\x91', '\x91', /* left single quote (6) */
+#endif
 	'\074', '\074',	/* less than */
 	'\257', '\257', /* macron */
+#ifdef __acorn
+	'\x98', '\x98', /* em rule */
+#else
+	'\x97', '\x97', /* em rule */
+#endif
 	'\265', '\265', /* micro sign */
 	'\267', '\267', /* middle dot */
 	'\240', '\240', /* no-break space */
+#ifdef __acorn
+	'\x99', '\x99', /* en rule */
+#else
+	'\x96', '\x96', /* en rule */
+#endif
 	'\254', '\254', /* not sign */
 	'\361', '\321', /* small n, tilde */
 	'\363', '\323', /* small o, acute accent */
 	'\364', '\324', /* small o, circumflex accent */
+#ifdef __acorn
+        '\x9B', '\x9A', /* oe ligature */
+#else
+        '\x9C', '\x8C', /* oe ligature */
+#endif
 	'\362', '\322', /* small o, grave accent */
 	'\252', '\252', /* ordinal indicator, feminine */
 	'\272', '\272', /* ordinal indicator, masculine */
@@ -156,11 +203,30 @@ static char ISO_Latin1[] = {
 	'\365', '\325', /* small o, tilde */
 	'\366', '\326', /* small o, dieresis or umlaut mark */
 	'\266', '\266', /* pilcrow (paragraph sign) */
+#ifdef __acorn
+        '\x8E', '\x8E', /* per mille */
+#else
+        '\x89', '\x89',
+#endif
 	'\261', '\261', /* plus-or-minus sign */
 	'\243', '\243', /* pound sterling sign */
 	'\042', '\042', /* double quote sign - June 94 */
 	'\273', '\273', /* angle quotation mark, right */
+#ifdef __acorn
+        '\x95', '\x95', /* right double quote (99) */
+#else
+        '\x94', '\x94', /* right double quote (99) */
+#endif
 	'\256', '\256', /* registered sign */
+#ifdef __acorn
+        '\x93', '\x93', /* right single angle quote */
+        '\x91', '\x91', /* right single quote (9) */
+        '\x2C', '\x2C', /* single bottom quote (not in Acorn Extended Latin, we use comma) */
+#else
+        '\x9B', '\x9B', /* right single angle quote */
+        '\x92', '\x92', /* right single quote (9) */
+        '\x82', '\x82', /* single bottom quote */
+#endif
 	'\247', '\247', /* section sign */
 	'\255', '\255', /* soft hyphen */
 	'\271', '\271', /* superscript one */
@@ -169,7 +235,11 @@ static char ISO_Latin1[] = {
 	'\337', '\337', /* small sharp s, German (sz ligature) */
 	'\376', '\336', /* small thorn, Icelandic */
 	'\327', '\327', /* multiply sign */
+#ifdef __acorn
 	'\215', '\215', /* trademark sign */
+#else
+	'\x99', '\x99', /* trademark sign */
+#endif
 	'\372', '\332', /* small u, acute accent */
 	'\373', '\333', /* small u, circumflex accent */
 	'\371', '\331', /* small u, grave accent */
@@ -177,7 +247,11 @@ static char ISO_Latin1[] = {
 	'\374', '\334', /* small u, dieresis or umlaut mark */
 	'\375', '\335', /* small y, acute accent */
 	'\245', '\245', /* yen sign */
-	'\377', '\337' /* small y, dieresis or umlaut mark */
+#ifdef __acorn
+	'\377', '\377' /* small y, dieresis or umlaut mark */
+#else
+	'\377', '\x9F' /* small y, dieresis or umlaut mark */
+#endif
 };
 
 #else
@@ -630,7 +704,7 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 			in_ptr++;
 			in_bytes--;
 		    }
-		    *out_ptr++ = ISO_Latin1[ (matchp - entity_names)*2 + (upper_case ? 1 : 0) ];
+		    *out_ptr++ = ISO_Latin1[ (matchp - (char**)(entity_names))*2 + (upper_case ? 1 : 0) ];
 		    out_bytes++;
 		    used = TRUE;
 		}

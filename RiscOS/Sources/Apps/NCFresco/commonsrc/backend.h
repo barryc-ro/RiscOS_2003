@@ -9,9 +9,9 @@ extern int  dummy_tidy_proc(rid_header *rh, rid_pos_item *new, int width, int di
 extern void dummy_table_proc(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt);
 extern pparse_details *be_lookup_parser(int ft);
 extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor);
-extern os_error *backend_open_url(fe_view v, be_doc *docp,
-				  char *url, char *bfile, char *referer,
-				  int flags);
+/* extern os_error *backend_open_url(fe_view v, be_doc *docp, */
+/* 				  char *url, char *bfile, char *referer, */
+/* 				  int flags); */
 
 #ifdef BUILDERS
 extern os_error *antweb_trigger_fetching(antweb_doc *doc);

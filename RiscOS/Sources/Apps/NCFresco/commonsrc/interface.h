@@ -59,7 +59,7 @@ extern int frontend_dx, frontend_dy;
 #define fe_open_url_FROM_FRAME		(1<<3)	/* url was initiated from a frameset */
 #define fe_open_url_NO_REFERER		(1<<4)	/* url is unrelated to current document */
 
-os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *bfile, int flags);
+os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *bfile, char *bfiletype, int flags);
 
 /* Try to make sure that a vertical line from the height top down to
  * height bottom, at a horizontal position x, is visable in the view.
@@ -321,7 +321,7 @@ os_error *backend_screen_changed(int flags);
  * if there is a problem but note that if the URL is punted this is
  * not a problem. */
 os_error *backend_open_url(fe_view v, be_doc *docp,
-			   char *url, char *bfile, char *referer,
+			   char *url, char *bfile, char *bfiletype, char *referer,
 			   int flags);
 #define be_openurl_flag_NOCACHE		(1 << 0)
 #define be_openurl_flag_DEFER_IMAGES	(1 << 1)
@@ -462,6 +462,7 @@ extern BOOL backend_doc_saver_draw(char *fname, void *doc);
 extern BOOL backend_doc_saver_headers(char *fname, void *doc);
 
 extern BOOL backend_image_saver_sprite(char *fname, void *imh);
+extern BOOL backend_image_saver_jpeg(char *fname, void *imh);
 
 /* Search a document for some string */
 extern be_item backend_find(be_doc doc, be_item start, char *text, int flags);
@@ -489,8 +490,12 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 extern void backend_remove_highlight(be_doc doc);
 extern be_item backend_read_highlight(be_doc doc, BOOL *had_caret);
 extern void backend_set_caret(be_doc doc, be_item ti, int offset);
-extern void backend_set_highlight(be_doc doc, be_item item);
 extern int backend_is_selected(be_doc doc, be_item ti);
+
+/* keyhl.c */
+extern void backend_set_highlight(be_doc doc, be_item item, BOOL persistent);
+extern BOOL backend_highlight_is_persistent( be_doc doc );
+
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);

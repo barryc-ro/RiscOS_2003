@@ -166,7 +166,7 @@ static void *rma_dup(const char *s)
 
     if (rma_ptr_list)
 	rma_ptr_list->prev = ptr;
-    
+
     rma_ptr_list = ptr;
 
     memcpy(ptr+1, s, len);
@@ -181,7 +181,7 @@ static void free_rma_strings(int msgref, plugin_private *pp)
     plugin_string_rma_ptr *psrp;
     for (psrp = rma_ptr_list; psrp; psrp = psrp->next)
     {
-	/* if either the msgref oor pointer match then 
+	/* if either the msgref oor pointer match then
 	 * remove from the list and free
 	 */
 	if (psrp->msgref == msgref || psrp->pp == pp)
@@ -240,7 +240,7 @@ static void unlink(plugin *root, plugin pp)
 		prev->next = pp->next;
 		break;
 	    }
-	    
+
 	    prev = prev->next;
 	}
     }
@@ -414,18 +414,18 @@ static void plugin_write_parameter_file(FILE *f, rid_object_item *obj, const cha
     */
     plugin_write_parameter_string(f, "DECLARE", obj->oflags & rid_object_flag_DECLARE ? "" : NULL);
 
-    plugin_write_parameter_url(f, 
-	obj->element == HTML_APPLET ? "CODE" : "CLASSID", 
+    plugin_write_parameter_url(f,
+	obj->element == HTML_APPLET ? "CODE" : "CLASSID",
         obj->classid, obj->classid_mime_type);
 
     plugin_write_parameter_url(f, "CODEBASE", obj->codebase, NULL);
 
-    plugin_write_parameter_url(f, 
-	obj->element == HTML_EMBED ? "SRC" : "DATA", 
+    plugin_write_parameter_url(f,
+	obj->element == HTML_EMBED ? "SRC" : "DATA",
 	obj->data, obj->data_mime_type);
 
-    plugin_write_parameter_string(f, 
-        obj->element == HTML_OBJECT ? "STANDBY" : "ALT", 
+    plugin_write_parameter_string(f,
+        obj->element == HTML_OBJECT ? "STANDBY" : "ALT",
         obj->standby);
 
 /*     plugin_write_parameter_string(f, "ALIGN", align_name(obj->align)); */
@@ -496,8 +496,8 @@ static plugin_private *locate_object(antweb_doc *doc, plugin_private *pp)
     {
 	rid_text_item *ti;
 
-	for (ti = rid_scan(doc->rh->stream.text_list, SCAN_THIS | SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT); 
-	     ti; 
+	for (ti = rid_scan(doc->rh->stream.text_list, SCAN_THIS | SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT);
+	     ti;
 	     ti = rid_scan(ti, SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT))
 	{
 	    rid_text_item_object *tio = (rid_text_item_object *)ti;
@@ -581,7 +581,7 @@ int plugin_send_open(plugin pp, const wimp_box *box, int open_flags)
 #endif
 
     memset(open, 0, sizeof(*open));
-    
+
     /* Write message header */
     msg.hdr.size = sizeof(msg.hdr) + sizeof(*open);
     msg.hdr.action = (wimp_msgaction) MESSAGE_PLUGIN_OPEN;
@@ -658,7 +658,7 @@ int plugin_send_close(plugin pp)
        starting up */
     if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
-    
+
     if (!pp->instance)
 	return 0;
 
@@ -683,15 +683,15 @@ int plugin_send_focus(plugin pp)
 
     if (pp == NULL)
 	pp = first_helper();
-    
+
     OBJDBG(("plugin: send focus %p state %d\n", pp, pp ? pp->state : -1));
 
     if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
-    
+
     if ((pp->opening_flags & plugin_opening_CAN_FOCUS) == 0)
 	return 0;
-    
+
     /* Build message block */
     focus->flags = 0;
 
@@ -714,13 +714,13 @@ int plugin_send_action(plugin pp, int new_action)
     /* if no plugin specified then use the top of the helper list */
     if (pp == NULL)
 	pp = first_helper();
-    
+
     OBJDBG(("plugin: send action %p action %d state %d helper %d\n",
 	    pp, new_action, pp ? pp->state : -1, pp ? pp->priv_flags & plugin_priv_HELPER : -1));
 
     if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
-    
+
     /* Build message block */
     action->flags = 0;
     action->new_state = new_action;
@@ -745,7 +745,7 @@ int plugin_send_abort(plugin pp)
 
     if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
-    
+
     OBJDBG(("plugin: send abort %p state %d\n", pp, pp->state));
 
     /* Build message block */
@@ -790,7 +790,7 @@ static void plugin_send_stream_destroy(plugin_stream_private *psp, int your_ref,
     /* Don't send destroy if known to be closed */
     if (psp->pp->state != plugin_state_OPEN)
 	return;
-    
+
     OBJDBG(("plugin: send stream destroy %p state %d your ref %d reason %d\n", psp, psp->stream_state, your_ref, reason));
 
     msg.hdr.size = sizeof(wimp_msghdr) + sizeof(*sdestroy);
@@ -972,18 +972,18 @@ static access_complete_flags plugin_stream_complete(void *h, int status, char *c
     plugin_stream_private *psp = h;
     os_error *e;
     os_filestr fs;
-       
+
     OBJDBG(("plugin: stream complete psp %p status %d file '%s'\n", psp, status, cfile));
 
     psp->status = (transfer_status)status;
     psp->ah = NULL;
-       
+
     if ((transfer_status)status != status_COMPLETED_FILE)
     {
 	plugin_send_stream_destroy(psp, 0, plugin_reason_NETWORK_ERROR);
 	return 0;
     }
-    
+
     /* get real size of file */
     fs.action = 5;
     fs.name = cfile;
@@ -1001,7 +1001,7 @@ static access_complete_flags plugin_stream_complete(void *h, int status, char *c
     }
 
     plugin_stream_completing(psp);
-       
+
     return access_CACHE;
 }
 
@@ -1038,7 +1038,7 @@ static void plugin_stream__dispose(plugin_stream_private *psp)
 
     /* ensure file closed */
     close_stream_file(psp);
-    
+
     mm_free(psp->file_name);
     mm_free(psp->url);
     mm_free(psp->mime_type);
@@ -1089,7 +1089,7 @@ plugin_stream_private *plugin_stream_create_new(plugin pp, const char *url, cons
     psp->stream_state = plugin_stream_state_STARTED;
 
     /* start the stream going */
-    e = access_url(psp->url, access_MUST_BE_FOUND /* flags */, NULL /* ofile */, (char *)bfile,
+    e = access_url(psp->url, access_MUST_BE_FOUND /* flags */, NULL /* ofile */, (char *)bfile, NULL,
 		   pp->doc ? pp->doc->url : NULL,
 		   plugin_stream_progress, plugin_stream_complete, psp, &ah);
     if (!e && ah)
@@ -1123,14 +1123,14 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
 	mm_free(pp);
 	return NULL;
     }
-    
+
     plugin_write_parameter_file(f, obj, doc ? BASE(doc) : NULL);
     mmfclose(f);
 
 #if LOCK_FILES
     file_lock(pp->parameter_file, TRUE);
 #endif
-    
+
     /* copy useful values out of 'obj' */
     pp->objd.classid = strdup(obj->classid);
     pp->objd.data = strdup(obj->data);
@@ -1138,12 +1138,12 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
 
     pp->objd.data_ftype = obj->data_ftype;
     pp->objd.classid_ftype = obj->classid_ftype;
-    
+
     pp->parent_item = ti;
     pp->doc = doc;
 
     link(&plugin_list, pp);
-    
+
     return pp;
 }
 
@@ -1157,9 +1157,9 @@ void plugin_destroy(plugin pp)
 
 	if (pp->state < plugin_state_SENT_CLOSE)
 	    plugin_send_close(pp);
-	
+
 	free_rma_strings(-1, pp);
-	
+
 	remove_parameter_file(pp);
 
 	/* free objectcopied data */
@@ -1178,7 +1178,7 @@ void plugin_destroy(plugin pp)
 
 	/* unlink from list */
 	unlink(&plugin_list, pp);
-	
+
 	/* remove the message handler for helpers */
 	if ((pp->priv_flags & plugin_priv_HELPER) && --helper_count == 0)
 	    frontend_message_remove_handler(plugin_message_handler, NULL);
@@ -1207,11 +1207,11 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
     obj.data = strdup(url);
     obj.data_ftype = ftype;
     obj.data_mime_type = strdup(mime_type);
-    
+
     obj.classid_ftype = -1;
 
     obj.params = &param;
-    
+
     /* this adds us to the plugin_list */
     pp = plugin_new(&obj, NULL, NULL);
 
@@ -1229,7 +1229,7 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
 /* 	file_lock(cfile, TRUE); */
 	plugin_send_open(pp, NULL, plugin_open_HELPER);
     }
-    
+
     return pp;
 }
 
@@ -1251,7 +1251,7 @@ void plugin_get_info(plugin pp, int *flags, int *state)
 
 	if (pp->opening_flags & plugin_opening_BUSY)
 	    f |= be_plugin_BUSY;
-	
+
 	if (pp->opening_flags & plugin_opening_CAN_ACTION)
 	    f |= be_plugin_CAN_ACTION;
 
@@ -1402,7 +1402,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			/* check for enabling the helper message handler before adding to that list */
 			if (helper_list == NULL)
 			    frontend_message_add_handler(plugin_message_handler, NULL);
-			
+
 			/* then swap list */
 			unlink(&plugin_list, pp);
 			link(&helper_list, pp);
@@ -1413,7 +1413,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			/* check for removing the page message handler */
 			if (pp->doc && --pp->doc->object_handler_count == 0)
 			    frontend_message_remove_handler(plugin_message_handler, pp->doc);
-#endif			
+#endif
 			/* transfer the view handle */
 			if (pp->doc)
 			    pp->helper.parent = pp->doc->parent;
@@ -1432,7 +1432,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    /* set HELPER flag in case they didn't */
 		    if (pp->priv_flags & plugin_priv_HELPER)
 			pp->opening_flags |= plugin_opening_HELPER;
-		    
+
 		    /* were we waiting to send a reformat message */
 		    if (pp->pending_reshape)
 		    {
@@ -1510,7 +1510,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    message_plugin_url_access *url_access = (message_plugin_url_access *)&msg->data;
 
 	    OBJDBG(("plugin: msg url_access %p state %d\n", pp, pp->state));
-		
+
 	    if ((url_access->flags & (plugin_url_access_POST|plugin_url_access_POST_FILE)) == plugin_url_access_POST)
 		frontend_complain((os_error *)"    Can't POST from memory");
 	    else
@@ -1520,7 +1520,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		target = get_ptr(url_access, url_access->target);
 
 		if (target && target[0])
-		{		
+		{
 		    /* open url in browser */
 
 		    /* FIXME: This doesn't allow several things
@@ -1531,15 +1531,15 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 		    frontend_complain(frontend_open_url(get_ptr(url_access, url_access->url),
 							pp->doc ? pp->doc->parent : NULL,
-							target, 
-							url_access->flags & plugin_url_access_POST ? get_ptr(url_access, url_access->data) : 0, 
+							target,
+							url_access->flags & plugin_url_access_POST ? get_ptr(url_access, url_access->data) : 0, NULL,
 							0));
 		}
 		else
-		{		
+		{
 		    plugin_stream_private *psp;
 		    /* send data to plugin */
-		    psp = plugin_stream_create_new(pp, get_ptr(url_access, url_access->url), 
+		    psp = plugin_stream_create_new(pp, get_ptr(url_access, url_access->url),
 						   url_access->flags & plugin_url_access_POST ? get_ptr(url_access, url_access->data) : 0);
 
 		    if (psp)
@@ -1582,7 +1582,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			/* set the streaming type */
 			if (psp->ah)
 			    access_set_streaming(psp->ah, psp->stream_type != plugin_stream_TYPE_ASFILEONLY);
-			
+
 			if (psp->status == status_COMPLETED_FILE)
 			    plugin_stream_completing(psp);
 		    }
@@ -1590,7 +1590,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    }
 	    else
 	    {
-		/* New message so they want a new stream 
+		/* New message so they want a new stream
 		 * FIXME: todo
 		 */
 	    }
@@ -1676,9 +1676,9 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    if (pp->doc)
 	    {
 		message_plugin_status *status = (message_plugin_status *)&msg->data;
-		
+
 		OBJDBG(("plugin: msg status %p state %d\n", pp, pp->state));
-		
+
 		frontend_view_status(pp->doc->parent, sb_status_HELP,
 				     get_ptr(status, status->message) );
 	    }
@@ -1693,8 +1693,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 		OBJDBG(("plugin: msg focus %p state %d\n", pp, pp->state));
 
-		backend_set_highlight(pp->doc, pp->parent_item);
-	    }	    
+		backend_set_highlight(pp->doc, pp->parent_item, FALSE);
+	    }
 	    break;
 
 	/* ------------------------------------------------------------ */
@@ -1724,7 +1724,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	break;
 	}
     }
-    else 
+    else
     {
 	/* Free any strings referenced by this msg reference */
 	free_rma_strings(msg->hdr.my_ref, NULL);
@@ -1739,7 +1739,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    message_plugin_open *open = (message_plugin_open *)&msg->data;
 
 	    OBJDBG(("plugin: msg open bounce %p state %d refs %d/%d\n", pp, pp->state, msg->hdr.my_ref, pp->msgref));
-	    
+
 	    if (msg->hdr.my_ref == pp->msgref)
 	    {
 		/* Plugin open message has bounced, run task and try again */
@@ -1757,7 +1757,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			    OBJDBG(("plugin: plugin %p already started task for %03x\n", ppp, open->file_type));
 			    break;
 			}
-			
+
 		    if (!ppp)
 		    {
 			OBJDBG(("plugin: msg open run filetype %03x\n", open->file_type));

@@ -29,6 +29,8 @@
 #include "gbf.h"
 #include "profile.h"
 
+#include "guarded.h"
+
 #ifndef ITERATIVE_PANIC
 #define ITERATIVE_PANIC 0
 #endif
@@ -40,7 +42,7 @@
 #include "mallinfo.h"
 #else
 #include "../memlib/memheap.h"
-/* #include "../memlib/mallinfo.h" */
+#include "../memlib/mallinfo.h"
 #endif
 
 /* ISTR that ANSI sez you shouldn't do this... */
@@ -100,12 +102,6 @@ static int num_malloc = 0,
     num_free0 = 0;
 #endif
 
-#if defined(FRESCO) && defined(PRODUCTION)
-#define CATCHTYPE5 1
-#else
-#define CATCHTYPE5 0
-#endif
-
 #define MEMWATCH_MIN_INTEREST	0
 #define MEMZERO_VALUE		0x69
 
@@ -141,7 +137,7 @@ static int mm_no_more_memory(void)
 extern void mm_minor_panic( char *token )
 {
     /* pdh: just an error reporting thing really, but takes advantage of
-     * memwatch's nice static os_error so we don't have to allocate 
+     * memwatch's nice static os_error so we don't have to allocate
      * anything.
      */
     strcpy( panicerr.errmess, msgs_lookup(token) );

@@ -1,7 +1,5 @@
 /* > keyhl.c
-
  *
-
  */
 
 
@@ -85,7 +83,7 @@ static void aref_union_box(be_doc doc, rid_aref_item *aref, int flags, wimp_box 
 	backend_doc_item_bbox(doc, item, &box);
 	coords_union(&box, box_out, box_out);
     }
-    
+
     /* this will force multi-line links to only extend the height of
        the first item when moving up and down. */
     if (flags & be_link_VERT)
@@ -124,7 +122,7 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
     }
     else
     {
-	/* if moving highlight forwards (down) then item is onscreen if bottom line is on screen */ 
+	/* if moving highlight forwards (down) then item is onscreen if bottom line is on screen */
 	if (box.y1 > bounds->y0 && box.y1 <= bounds->y1)
             return TRUE;
     }
@@ -192,7 +190,7 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 	if (aref_valid && !aref_changed_enough)
 	    return match_item_NONE;
 
-	return tag == rid_it_TEXT || tag == rid_it_PASSWD ? 
+	return tag == rid_it_TEXT || tag == rid_it_PASSWD ?
 		((tii->flags & (rid_if_NUMBERS|rid_if_PBX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
 	    match_item_LINK;
     }
@@ -833,7 +831,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	{
 	    ti = scan_links_linear(doc, item, flags, &bounds);
 	}
-    }    
+    }
 
     /* check for highlighting needed */
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
@@ -851,7 +849,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
 	    if ((flags & be_link_VISIBLE) == 0 || (flags & be_link_MOVE_POINTER))
 		stream_find_item_location(ti, &x, &y);
-	    
+
 	    /* removed the test on the basis that if VISIBLE was set then the item must be partially on screen
 	     * so we's like it to be totally on screen
 	     */
@@ -885,7 +883,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		}
 		else
 		{
-		    backend_set_highlight(doc, ti);
+		    backend_set_highlight(doc, ti, FALSE);
 		}
 
 		if (flags & be_link_MOVE_POINTER)
@@ -917,7 +915,7 @@ static void be_update_link(be_doc doc, antweb_selection_t *selection, int select
     be_item ti;
 
     LNKDBG(("be_update_link: doc %p type %d selected %d\n", doc, selection ? selection->tag : -1, selected));
-    
+
     if (selection == NULL)
 	return;
 
@@ -935,7 +933,7 @@ static void be_update_link(be_doc doc, antweb_selection_t *selection, int select
 	ti->flag = adjust_flag(ti->flag, selected, NULL);
 
 	be_update_item_highlight(doc, ti, selected);
-	
+
 	break;
 
     case doc_selection_tag_AREF:
@@ -1063,40 +1061,46 @@ BOOL be_item_has_caret(be_doc doc, be_item ti)
 
 /* ----------------------------------------------------------------------------- */
 
-void backend_set_highlight(be_doc doc, be_item item)
+void backend_set_highlight(be_doc doc, be_item item, BOOL bPersist)
 {
     if (item == NULL)
-	backend_remove_highlight(doc);
-
-    if (item->aref)
     {
-	if (doc->selection.tag == doc_selection_tag_AREF &&
-	    doc->selection.data.aref == item->aref)
-	    return;
-
 	backend_remove_highlight(doc);
-
-	doc->selection.tag = doc_selection_tag_AREF;
-	doc->selection.data.aref = item->aref;
-#ifndef BUILDERS
-	highlight_boundary_build(doc);
-#endif
+	doc->bHighlightPersistent = FALSE;
     }
     else
     {
-	if (doc->selection.tag == doc_selection_tag_TEXT &&
-	    doc->selection.data.text.item == item)
-	    return;
+        if (item->aref)
+        {
+	    if (doc->selection.tag == doc_selection_tag_AREF &&
+	        doc->selection.data.aref == item->aref)
+    	    return;
 
-	backend_remove_highlight(doc);
+    	    backend_remove_highlight(doc);
 
-	doc->selection.tag = doc_selection_tag_TEXT;
-	doc->selection.data.text.item = item;
-	doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
+    	    doc->selection.tag = doc_selection_tag_AREF;
+    	    doc->selection.data.aref = item->aref;
+#ifndef BUILDERS
+    	    highlight_boundary_build(doc);
+#endif
+        }
+        else
+        {
+	    if (doc->selection.tag == doc_selection_tag_TEXT &&
+	        doc->selection.data.text.item == item)
+	        return;
+
+    	    backend_remove_highlight(doc);
+
+	    doc->selection.tag = doc_selection_tag_TEXT;
+	    doc->selection.data.text.item = item;
+	    doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
 
 #ifndef BUILDERS
-	highlight_boundary_build(doc);
+	    highlight_boundary_build(doc);
 #endif
+        }
+        doc->bHighlightPersistent = bPersist;
     }
 
 #if NEW_HL
@@ -1104,6 +1108,11 @@ void backend_set_highlight(be_doc doc, be_item item)
 #else
     be_update_link(doc, &doc->selection, TRUE);
 #endif
+}
+
+BOOL backend_highlight_is_persistent( be_doc doc )
+{
+    return doc->bHighlightPersistent;
 }
 
 void backend_set_caret(be_doc doc, be_item ti, int offset)
@@ -1165,7 +1174,7 @@ void backend_remove_highlight(be_doc doc)
 #else
     be_update_link(doc, &old_sel, FALSE);
 #endif
-    
+
     /* tell the object the caret has been removed */
     if (old_ti)
     {

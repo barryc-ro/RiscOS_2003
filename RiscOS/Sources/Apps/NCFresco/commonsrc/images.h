@@ -122,6 +122,10 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
 
 os_error *image_save_as_sprite(image i, char *fname);
 
+os_error *image_save_as_jpeg(image i, const char *fname);
+
+int image_preferred_save_filetype( image i );
+
 /* Find out the X and Y scaling factors for the given image */
 void image_get_scales(image i, int *dx, int *dy);
 

@@ -244,7 +244,7 @@ static void sn_12pass_back(bits96 *bits)
 extern int VerifySerial(char *buffer)
 {
   bits96 bns;
-  int i;
+  int i,j;
 
   /* Decode 4 x 96 bits of buffer (destructive action on the buffer, leaving
    * the real name & serial strings in plain ASCII text).
@@ -267,9 +267,12 @@ extern int VerifySerial(char *buffer)
 #endif
   }
 
+  j = bns.i[0];
+
   sn_12pass_forw(&bns);
   sn_ascii_encode(&bns, &buffer[31]);
 
-  return(1);
+  return j;
 }
 
+/* eof */

@@ -74,7 +74,7 @@ typedef struct _access_item *access_handle;
  */
 
 extern os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile,
-			    char *referer,
+			    char *bfiletype, char *referer,
 			    access_progress_fn progress, access_complete_fn complete,
 			    void *h, access_handle *result);
 
