@@ -6,6 +6,9 @@
 #############################################################################
 #
 # $Log$
+# Revision 1.1.2.1  1997/02/18 15:40:07  smiddle
+# NCFresco 1.06 in cross-compile form (!RunImage form only)
+#
 # Revision 1.104  1996/10/28 18:01:25  fresco
 # Version frozen for NCFresco for ROM
 #
@@ -475,7 +478,7 @@ FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
 NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -DSTBWEB $(NCFRESCO_INCS) $(RISCOS_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0
+NCFRESCO_BASECFLAGS= -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0
 
 # Production flag set
 NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -787,14 +790,23 @@ NCFRESCO:		NCFRESCO_RISCOS
 NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/inetlib/inetlib.o
+			$(RISCOS_BUILD_EXPORT)/Lib/InetLib/inetlib.o
+
+NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
+			$(RISCOS_BUILD_EXPORT)/Lib/CLib/romstubs.o \
+			$(RISCOS_BUILD_EXPORT)/Lib/InetLib/inetlibzm.o
 
 NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/AUN/include \
+			-I$(RISCOS_BUILD_EXPORT)/Lib/InetLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-#			-I../include/unix -I../tcpiplibs \
+NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa \
+			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
+			-I$(RISCOS_BUILD_EXPORT)/Lib/InetLib \
+			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
+
+NCFRESCO_ROM_LDFLAGS=	-aof
 
 # This one is for NCFresco in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)
@@ -805,6 +817,16 @@ NCFRESCO_BUILD:		$(PREDEPS)
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(NCFRESCO_BUILD_CFLAGS)" \
 		LDFLAGS="$(NCFRESCO_LDFLAGS)"
+		$(POSTACTS)
+
+NCFRESCO_BUILD_ROM:	$(PREDEPS)
+		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
+		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
+		LIBS="$(NCFRESCO_ROM_LIBS)" \
+		OBJS="$(NCFRESCO_ROM_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
 		$(POSTACTS)
 
 NCFRESCO_RISCOS:	$(PREDEPS)

@@ -10,6 +10,7 @@
 #define BOOL int
 #define TRUE 1
 #define FALSE 0
+#define NULL 0
 
 enum			/* Dynamic area reason codes */
 {
