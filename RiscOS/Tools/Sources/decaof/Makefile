@@ -12,8 +12,9 @@
 # Paths
 #
 VPATH=  @ riscos
-EXP_DIR		= <Tools$Dir>.Acorn
-INSTDIR         = ${INSTDIR}.!${CAP_COMP}
+
+LIBDIR	= ${INSTDIR}.Library.Acorn
+INSTAPP    = ${INSTDIR}.Apps.!DecAOF
 
 #
 # Generic options:
@@ -29,7 +30,7 @@ LB      = libfile
 SQZ	= squeeze
 TOUCH   = create
 WIPE    = -wipe
-MKDIR   = mkdir -p
+MKDIR   = do mkdir -p
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
@@ -61,7 +62,6 @@ DFLAGS    =
 # Program specific options:
 #
 COMPONENT  = decaof
-CAP_COMP   = DecAOF
 TARGET     = ${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
@@ -116,19 +116,23 @@ export_libs:
         @echo ${COMPONENT}: export complete (libs)
 
 install_tool: ${TARGET}
-	${SQZ} ${SQZFLAGS} ${TARGET} ${EXP_DIR}.${COMPONENT}
-        @echo ${COMPONENT}: installing in library
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+        @echo ${COMPONENT}: installed in library
 
-install: ${TARGET}
-	${MKDIR} ${INSTDIR}
-	${CP} LocalRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
-	${CP} LocalRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
-	${CP} LocalRes:!Help ${INSTDIR}.!Help ${CPFLAGS}
-	${CP} LocalRes:!Sprites ${INSTDIR}.!Sprites ${CPFLAGS}
-	${CP} LocalRes:!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
-	${CP} LocalRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
-	${CP} LocalRes:Templates ${INSTDIR}.Templates ${CPFLAGS}
-	${CC} -C++ -E >${INSTDIR}.Desc LocalRes:Desc
+install: install_tool install_dirs
+	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
+	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
+	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
+	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
+	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
+	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
+
+install_dirs:
+	${MKDIR} ${LIBDIR}
+	${MKDIR} ${INSTAPP}
 
 ${DIRS}:
 	${MKDIR} o
@@ -150,6 +154,6 @@ instrument: ${OBJSINST} inst.instlib ${DIRS}
 #
 ${TARGET}: ${OBJS} ${LIBS} ${HDRS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
-
+	${SQZ} ${SQZFLAGS} $@
 
 # Dynamic dependencies:
