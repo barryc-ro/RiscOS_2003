@@ -126,4 +126,3 @@ ${TARGETZ}:	$(OBJSZ) local_dirs
 		$(LIBFILE) -c -o $(TARGETZ) $(OBJSZ)
 
 # Dynamic dependencies:
-

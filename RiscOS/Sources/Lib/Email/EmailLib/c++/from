@@ -4,7 +4,7 @@
 
 	FILE:		from.c++
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.07 for RISC OS
+	VERSION:	0.08 for RISC OS
 
 	OVERVIEW
 	========
@@ -24,12 +24,15 @@
 					or address are not set, ELIB_ENODATAPRESENT
 					is returned and not ELIB_EDATAMUSTBEPARSED error
 	18/02/98	0.07	RDW	#include DebugLib path added
+	28/09/98	0.08	RDW	Changed to use mailbox class to hold RFC822
+					mailbox tokens to given multiple address support
+					Not fully RFC822 compliant, but closer.
 */
 
 
 /* ************************************************************************** */
 /*                                                                            */
-/* Include from files - System                                              */
+/* Include header files - System                                              */
 /*                                                                            */
 /* ************************************************************************** */
 extern "C"
@@ -42,11 +45,12 @@ extern "C"
 
 /* ************************************************************************** */
 /*                                                                            */
-/* Include from files - Project defined                                     */
+/* Include header files - Project defined                                     */
 /*                                                                            */
 /* ************************************************************************** */
 #include "from.h"
 #include "header.h"
+#include "mailbox.h"
 #include "822parser.h"
 extern "C"
 {
@@ -94,10 +98,10 @@ extern "C"
    VARIABLES:      NONE
  */
 /* ************************************************************************** */
-from::from(bool f, char *membase, uint32 offset, uint32 length, bool owner) : header(f, membase, offset, length, ELIB_HDR_FROM, owner),
-                                                                      realname(0),
-                                                                      address(0),
-                                                                      parsed(false)
+from::from(bool f, char *membase, uint32 offset, uint32 length, bool owner)
+     :header(f, membase, offset, length, ELIB_HDR_FROM, owner),
+      unfoldedbody(0),
+      parsed(false)
 {
   if ((owner) && (length==0))
   {
@@ -108,35 +112,39 @@ from::from(bool f, char *membase, uint32 offset, uint32 length, bool owner) : he
 
 
 // copy constructor
-from::from(const from &object) : header(object),
-                                 realname(0),
-                                 address(0),
-                                 parsed(false)
+from::from(from &object)
+     :header(object),
+      unfoldedbody(0),
+      parsed(false)
 {
   copyfromobject(object);
 }
 
 
 // copy constructor from header object
-from::from(const header &object) : header(object),
-                                   realname(0),
-                                   address(0),
-                                   parsed(false)
+from::from(const header &object)
+     :header(object),
+      unfoldedbody(0),
+      parsed(false)
 {
   type = ELIB_HDR_FROM;
 }
 
 
-from &from::operator=(const from &object)
+from &from::operator=(from &object)
 {
   header::operator=(object);
   if (this != &object)
   {
     // do destructor things
-    if (realname)
-      delete[] realname;
-    if (address)
-      delete[] address;
+    TRAVERSE(list)
+    {
+      mailbox *m = (mailbox*)list.Current();
+      if (m)
+         delete m;
+    }
+    if (unfoldedbody)
+      delete[] unfoldedbody;
     copyfromobject(object);
   }
   return *this;
@@ -149,202 +157,291 @@ from &from::operator=(const header &object)
   if (this != &object)
   {
     // do destructor things
-    if (realname)
-      delete[] realname;
-    realname = 0;
-    if (address)
-      delete[] address;
-    address = 0;
+    TRAVERSE(list)
+    {
+      mailbox *m = (mailbox*)list.Current();
+      if (m)
+         delete m;
+    }
     parsed = false;
+    if (unfoldedbody)
+    {
+      delete[] unfoldedbody;
+      unfoldedbody = 0;
+    }
   }
   return *this;
 }
 
 
-void from::copyfromobject(const from &object)
+void from::copyfromobject(from &object)
 {
-  if (object.realname)
+  if (object.unfoldedbody)
   {
-    realname = new char[strlen(object.realname)+1];
-    strcpy(realname, object.realname);
+    unfoldedbody = new char[strlen(object.unfoldedbody)+1];
+    strcpy(unfoldedbody, object.unfoldedbody);
   }
-  if (object.address)
+
+  TRAVERSE(object.list)
   {
-    address = new char[strlen(object.address)+1];
-    strcpy(address, object.address);
+    mailbox *m = (mailbox*)(object.list.Current());
+    if (m)
+    {
+      mailbox *m2 = 0;
+
+      m2 = new mailbox(*m);
+      if (m2)
+        list.Insert(m2);
+    }
   }
   parsed = object.parsed;
 }
 
 
-/*// constructor, file version
-from::from(char *filename, uint32 offset, bool owner) : header(filename, offset, ELIB_HDR_FROM, owner),
-                                                        realname(0),
-                                                        address(0),
-                                                        parsed(false)
-{
-
-}
-*/
-
 // Implementation of destructor for from
 from::~from()
 {
-  // nothing to do
-  if (realname)
-    delete[] realname;
-  if (address)
-    delete[] address;
+  TRAVERSE(list)
+  {
+    mailbox *m = (mailbox*)list.Current();
+    if (m)
+      delete m;
+  }
+  if (unfoldedbody)
+    delete[] unfoldedbody;
 }
 
 
 ELib_rcode from::parse(ELIB_CONTEXT &context, clock_t t_slice)
 {
-  ELib_rcode rc    = ELIB_COMPLETED;
+  ELib_rcode retcode    = ELIB_COMPLETED;
   bool      error = false;
 
   if (!header::Parsed())
-    rc = header::parse(context, t_slice);
-  if (rc != ELIB_COMPLETED)
+    retcode = header::parse(context, t_slice);
+  if (retcode < ELIB_COMPLETED)
     error = true;
+
+  parsed = false;
 
   if (!error)
   {
     uint32 size = 0;
-    rc = GetBodyLen(size);
+    retcode = GetBodyLen(size);
     size+=2;
-    char *temp = new char[size];
-    if (temp)
+    unfoldedbody = new char[size];
+    if (unfoldedbody)
     {
-      rc = GetUnfoldedNoCommentsBody(temp, size);
-      dprintf(("", "GetUnfoldedNoCommentsBody(): %s   size:%d\n", temp, size));
-      if (rc == ELIB_COMPLETED)
+      retcode = GetUnfoldedNoCommentsBody(unfoldedbody, size);
+      dprintf(("", "GetUnfoldedNoCommentsBody(): %s   size:%d\n", unfoldedbody, size));
+      if (retcode >= ELIB_COMPLETED)
       {
-        uint32 realsize = size;
-        char *ptr = temp;
-        char *realname_start = 0;
-        char *realname_end = 0;
-        char *address_start = 0;
-        char *address_end = 0;
+        uint32 beginning = 0;							// set beginning of next mailbox as 0 to start with
+        uint32 end = 0;								// set end of next mailbox to 0
+        uint32 tmplen = size - 1;							// potential length of current mailbox object
+        									// -1 as size includes null char.
 
-        error = consume_all_LWSP(ptr, size);
-        char *start = ptr;
-        while ( (*ptr != '<') && (*ptr != '@') && (size))		// search for < or @.
+        // PARSE the mailboxes
+        while ( (!error) && (tmplen >0))					// while no error and still data to parse, do
         {
-          ptr++;
-          size--;
-        }
-        if (size)							// if not off end of the data
-        {
-          if (*ptr == '<')						// if <, then we've found the start of the address
-          {
-            address_start = ptr+1;					// set address start as 1st char after <
-            while ( (*ptr != '>') && (size))				// search until > found (end of address)
-            {
-              ptr++;
-              size--;
-            }
-            address_end = ptr;						// set address end
-            realname_start = start;					// set realname at start
-            realname_end = address_start - 2;				// set realname end at
-            ptr = realname_end;
-            while ( ((*ptr == 32) || (*ptr == '\t')) && (ptr != realname_start))	// go backwards until not a LWSP found
-              ptr--;
-            if (ptr != realname_start)					// if we've not gone back to the start, then
-              realname_end = ptr + 1;					// adjust realname end
-            else
-              realname_end = 0;
-          }
-          else if (*ptr == '@')						// if found @, then we're in the middle of the address
-          {
-            address_start = start;					// set address start as the start
-            while ( (*ptr != 32) && (*ptr != '\t') && (size))		// search through string until we drop off the end of the address
-            {
-              ptr++;
-              size--;
-            }
-            address_end = ptr;						// set address end
-          }
-        }
-        else
-          error = true;
+          ELIB_CONTEXT c;							// context to call mailbox object parsing with
+          ELib_rcode   rc     = ELIB_COMPLETED;					// assume success for mailbox parsing
+          mailbox*     m      = 0;						// current mailbox object
+          char*        ptr    = unfoldedbody + beginning;
 
-        if (address_start)
-        {
-          *address_end = 0;  // terminate the string
-          address = new char[strlen(address_start)+1];
-          strcpy(address, address_start);
-        }
-        if ((realname_end) && (realname_start))
-        {
-          *realname_end = 0;	// terminate the string
-          realname = new char[strlen(realname_start)+1];
-          strcpy(realname, realname_start);
-        }
+          tmplen = (size - 1) - beginning;					// potential length of current mailbox object
+
+          bool found_next = false;
+
+          while ((!error) && (tmplen > 0) && (found_next == false))		// Find start of next mailbox object
+          {
+            error = consume_all_LWSP(ptr, tmplen);				// Skip LWSP
+            if (!error)								// Skip ','
+            {
+              if (*ptr == ',')
+              {
+                ptr++;
+                tmplen--;
+              }
+              else
+              {
+                found_next = true;
+              }
+            }
+          }
+
+          if ((!error) && (tmplen > 0))
+          {
+  	    beginning = ptr - unfoldedbody;
+            									// ie. length of the header - current position
+            dprintf(("", "BEFORE new mailbox, ptr[pos]: %c\npos: %d\n", ptr[pos], pos));
+            m = new mailbox(false, unfoldedbody, beginning, tmplen);		// create a new mailbox object
+
+            if (m)								// if mailbox created okay, then
+              rc = m->ParseData(c, 0);						// parse that mailbox
+            else									// else
+              rc = ELIB_EMALLOCFAILED;						// set rc MALLOCFAILED
+            if (rc < ELIB_COMPLETED)						// if parse NOT OK, then
+            {
+              dprintf(("", "from:mailbox->ParseData failed\n"));
+              if (m)								// if mailbox object exists, then
+                delete m;							// delete it
+              m = 0;								// clear m
+              error = true;
+            }
+            else								// else mailbox parse was OK, so
+            {
+              m->GetLen(tmplen);						// Get the actual length of the current mailbox
+              dprintf(("", "m->GetLen(tmplen): %d\n", tmplen));
+              beginning += tmplen;						// goto end of this mailbox
+              dprintf(("", "from:ptr[pos]: %c\npos: %d\n", ptr[pos], pos));
+
+              // add new mailbox to list
+              if (!list.Insert(m))
+              {
+                dprintf(("", "from:list.Insert failed\n"));
+                error = true;
+                rc = ELIB_EMALLOCFAILED;
+              }
+              else
+              {
+                parsed = true;
+              }
+            }
+          }
+          if (retcode == ELIB_COMPLETED)					// If outer return code is still success
+            retcode = rc;							// Copy out this return code for this mailbox parse
+        } // endwhile
       }
-      delete[] temp;
-      temp = 0;
-      parsed = true;
     }
     else
-      rc = ELIB_EMALLOCFAILED;
+      retcode = ELIB_EMALLOCFAILED;
   }
 
-  return rc;
+  return retcode;
 }
+
+
 void from::Display(void)
 {
   header::Display();
   uint32 i = 0;
 
-  if (realname)
-    printf("REAL NAME: %sEND\n", realname);
-  if (address)
-    printf("ADDRESS:   %sEND\n", address);
-  printf("\n");
+  TRAVERSE(list)								// Traverse this list
+  {
+    printf("Mailbox:\n");
+    mailbox* m = (mailbox*)list.Current();
+    if (m)
+      m->Display();					// Call Display method for each object
+  }
 }
 
 
+// This method is for backwards compatiblity for old clients of the library which
+// expect the library only to implement single address support
+// so, we act on the 1st item in the list of mailboxes
 ELib_rcode from::SetRealName(char *n)
 {
   ELib_rcode rc = ELIB_COMPLETED;
+  int32 curpos = list.Rank();							// Remember current position
 
-  if (n)
+  list.Start();									// Goto start
+  mailbox *m = (mailbox*)list.Current();					// Get 1st
+
+  if (m)
   {
-    if (realname)
-      delete[] realname;
-    realname = new char[strlen(n)+1];
-    if (realname)
-    {
-      strcpy(realname, n);
-      rc = UpdateBody();
-    }
-    else
-      rc = ELIB_EMALLOCFAILED;
+    m->SetRealName(n);
   }
   else
-    rc = ELIB_ENULLADDR;
+    rc = ELIB_ENODATAPRESENT;
+
+  list.GoTo(curpos);								// Return to position in list
 
   return rc;
 }
 
 
+// This method is for backwards compatiblity for old clients of the library which
+// expect the library only to implement single address support
+// so, we act on the 1st item in the list of mailboxes
 ELib_rcode from::SetAddress(char *n)
 {
   ELib_rcode rc = ELIB_COMPLETED;
+  int32 curpos = list.Rank();							// Remember current position
 
-  if (n)
+  list.Start();									// Goto start
+  mailbox *m = (mailbox*)list.Current();					// Get 1st
+
+  if (m)
   {
-    if (address)
-      delete[] address;
-    address = new char[strlen(n)+1];
-    if (address)
+    m->SetAddress(n);
+  }
+  else
+    rc = ELIB_ENODATAPRESENT;
+
+  list.GoTo(curpos);								// Return to position in list
+
+  return rc;
+}
+
+
+// This method is for backwards compatiblity for old clients of the library which
+// expect the library only to implement single address support
+// so, we act on the 1st item in the list of mailboxes
+ELib_rcode from::GetRealName(char*& n, uint32 &len)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+
+  list.Start();									// Goto start
+  mailbox *m = (mailbox*)list.Current();					// Get 1st
+
+  if (m)
+  {
+    m->GetRealName(n, len);
+  }
+  else
+    rc = ELIB_ENODATAPRESENT;
+
+  return rc;
+}
+
+
+// This method is for backwards compatiblity for old clients of the library which
+// expect the library only to implement single address support
+// so, we act on the 1st item in the list of mailboxes
+ELib_rcode from::GetAddress(char*& n, uint32 &len)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+
+  list.Start();									// Goto start
+  mailbox *m = (mailbox*)list.Current();					// Get 1st
+
+  if (m)
+  {
+    m->GetAddress(n, len);
+  }
+  else
+    rc = ELIB_ENODATAPRESENT;
+
+  return rc;
+}
+
+
+// function to write out the object to file
+ELib_rcode from::WriteOut(ELIB_CONTEXT &context, clock_t t_slice, FILE *f)
+{
+  ELib_rcode rc = ELIB_COMPLETED;
+
+  if (f)
+  {
+    list.Start();
+    while ((!list.Nul()) && (rc >= ELIB_RUNNING))
     {
-      strcpy(address, n);
-      rc = UpdateBody();
+      mailbox *m = (mailbox*)list.Current();
+      if (m)
+        rc = m->WriteOut(context, t_slice, f);
+      list.Next();
     }
-    else
-      rc = ELIB_EMALLOCFAILED;
   }
   else
     rc = ELIB_ENULLADDR;
@@ -353,80 +450,29 @@ ELib_rcode from::SetAddress(char *n)
 }
 
 
-ELib_rcode from::UpdateBody(void)
-{
-  ELib_rcode rc = ELIB_COMPLETED;
-  uint32 realnamelen = 0;
-  uint32 addresslen = 0;
-  char *temp = 0;
-
-  if (realname)	realnamelen = strlen(realname);
-  if (address)	addresslen  = strlen(address);
-
-  temp = new char[realnamelen + addresslen + 4];		// space + < + > + NULL = 4 chars!
-  if (temp)
-  {
-    if ((realname) && (address))
-      sprintf(temp, "%s <%s>", realname, address);
-    else if (address)
-    {
-      sprintf(temp, "<%s>", address);
-    }
-    else
-      rc = ELIB_EFAILED;
-    if (rc == ELIB_COMPLETED)
-      rc = SetBody(temp);
-    delete[] temp;
-  }
-  else
-    rc = ELIB_ENULLADDR;
-
-  return rc;
-}
-
-
-ELib_rcode from::GetRealName(char *n, uint32 &len) const
+// function to write out the object to memory
+ELib_rcode from::WriteOut(ELIB_CONTEXT &context, clock_t t_slice, char *mem, uint32 &l)
 {
   ELib_rcode rc = ELIB_COMPLETED;
 
-  if (n)
+  if (mem)
   {
-    if (realname)
+    if (l >= len + 1)
     {
-      if (len >= strlen(realname))
+      list.Start();
+      while ((!list.Nul()) && (rc >= ELIB_RUNNING))
       {
-        strcpy(n, realname);
+        mailbox *m = (mailbox*)list.Current();
+        if (m)
+          rc = m->WriteOut(context, t_slice, mem, l);
+        list.Next();
       }
-      else
-        rc = ELIB_ENOSPACE;
     }
     else
-      rc = ELIB_ENODATAPRESENT;
-  }
-  else
-    rc = ELIB_ENULLADDR;
-
-  return rc;
-}
-
-
-ELib_rcode from::GetAddress(char *n, uint32 &len) const
-{
-  ELib_rcode rc = ELIB_COMPLETED;
-
-  if (n)
-  {
-    if (address)
     {
-      if (len >= strlen(address))
-      {
-        strcpy(n, address);
-      }
-      else
-        rc = ELIB_ENOSPACE;
+      l = len + 1;
+      rc = ELIB_ENOSPACE;
     }
-    else
-      rc = ELIB_ENODATAPRESENT;
   }
   else
     rc = ELIB_ENULLADDR;
@@ -435,3 +481,18 @@ ELib_rcode from::GetAddress(char *n, uint32 &len) const
 }
 
 
+uint32 from::GetNumMailboxes(void)
+{
+  return list.Size();
+}
+
+
+mailbox* from::GetMailbox(uint32 pos)
+{
+  mailbox *m = 0;
+
+  list.GoTo(pos);
+  m = (mailbox*)list.Current();
+
+  return m;
+}
