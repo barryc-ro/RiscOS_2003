@@ -9,7 +9,8 @@
 # 17-Dec-97      BJGA   Tidied up
 # 20-Jan-98      BJGA   Added objasm support
 # 06-Apr-98      BJGA   Replaced Common directory with ConfigLib
-#
+# 29-Jun-20      JRF    Updated to use srccommit.
+# See CVS for future logs
 
 #
 # Program specific options:
@@ -18,7 +19,6 @@ COMPONENT  = Installer
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 RAM_MODULE = rm.${COMPONENT}
-INSTDIR    = ${INSTDIR}
 
 #
 # Generic options:
@@ -35,6 +35,7 @@ WIPE    = -wipe
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+CMHGFLAGS = ${OPTIONS}
 
 CFLAGS   = -c -depend !Depend -ffah -gflv ${INCLUDES} -throwback -zM
 INCLUDES = -IC:,<Lib$Dir>.ConfigLib.
@@ -82,10 +83,10 @@ ${RAM_MODULE}: ${OBJS} ${CONLIB} ${CLIB}
         access $@ RW/R
 
 ModHdr.h: cmhg.ModHdr
-	${CMHG} -o o.ModHdr cmhg.ModHdr h.ModHdr
+	${CMHG} -p ${CMHGFLAGS} -o o.ModHdr cmhg.ModHdr h.ModHdr
 
 ModHdr.o: cmhg.ModHdr
-	${CMHG} -o o.ModHdr cmhg.ModHdr h.ModHdr
+	${CMHG} -p ${CMHGFLAGS} -o o.ModHdr cmhg.ModHdr h.ModHdr
 
 ResMess.o: ${LDIR}.Messages
 	ResGen resourcesfiles o.ResMess ${LDIR}.Messages Resources.Installer.Messages
