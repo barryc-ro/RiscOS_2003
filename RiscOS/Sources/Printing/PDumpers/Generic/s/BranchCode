@@ -10,9 +10,13 @@
 ; in    R11 reason code
 
 BranchCode ROUT
-
-
         TEQ     PC,#SVC_mode            ;Enable IRQs
+
+	DebugEscState BranchCode
+
+	Debug	Calls, "+BranchCode", r11
+
+	Push	"lr"
 
 ;for OutputDump, check width is multiple of 8 (assumed by newer code)
 ;ie. prevent old PDriverDP causing crash
@@ -20,9 +24,9 @@ BranchCode ROUT
         BNE     bc_checkw_done
         TST     R3,#7
         BEQ     bc_checkw_done
-        ADR     R0,bc_old_pdriverdp
+        ADRL	R0,bc_old_pdriverdp
         SETV
-        MOV     PC,LR
+        Pull	"pc"
 
 bc_checkw_done
         TEQ     R11,#PDumperReason_SetDriver
@@ -31,12 +35,37 @@ bc_checkw_done
 
         CMP     R9,#StripType_MAX
         BCS     BadStripType            ;Complain about the bad strip type
-                     
+
         MOV     R10,#(%10-%00)/4
         CMP     R11,R10                 ;Is the reason code valid?
-        MLACC   R11,R9,R10,R11          ;If it is then index via n*strip type, where n is the number of jumps
-        ADDCC   PC,PC,R11,LSL #2     
-        B       BadPDumperCall          ;Complain about an invalid operation
+	BCS	BadPDumperCall          ;Complain about an invalid operation
+
+	;Check that escape is enabled
+	Push	"r0-r2"
+	MOV	r0, #229
+	MOV	r1, #0
+	MOV	r2, #255
+	SWI	XOS_Byte
+	TEQ	r1, #0
+	Pull	"r0-r2"
+	BNE	EscDisabled
+
+	;Check reentrancy (must be last test, or the bit will get set in error).
+	;JRC Mon 28th April 1997
+	Push	"r0, r1"
+	ADR	r1, pd_error_flag_set
+	LDR	r0, [r1]
+	TST	r0, #1 :SHL: 2
+	ORREQ	r0, r0, #1 :SHL: 2	;if the bit is clear, set it
+	STREQ	r0, [r1]
+	Pull	"r0, r1"
+	BNE	InUse			;otherwise, it's a mistake
+
+	ADR	lr, unthread
+	ORR	lr, lr, #SVC_mode	;must be in SVC mode
+        MLA	r11, r9, r10, r11	;Index via n*strip type, where n is the number of jumps
+        ADD	pc, pc, r11, LSL #2
+	&	0			;filler
 00
         B       SetDriver_Monochrome
         B       OutputStrip_Monochrome
@@ -65,9 +94,20 @@ bc_checkw_done
         B       AbortJob_Colour256
         B       MiscOp_Colour256
 
-        GET     s.24Bit
+unthread
+	Push	"r0, r1"
+	ADR	r1, pd_error_flag_set
+	LDR	r0, [r1]
+	BIC	r0, r0, #1 :SHL: 2	;clear the reentrancy bit
+	STR	r0, [r1]
+	Pull	"r0, r1"
 
-   
+	DebugIf	VC, Calls, "-BranchCode"
+	DebugE	Calls, "-BranchCode"
+	;NB flags preserved from subroutine
+	Pull	"pc"
+
+        GET     s.24Bit
 
 ;..............................................................................
 
@@ -77,9 +117,17 @@ bc_old_pdriverdp
         DCB     "$PDumperTitle needs newer PDriverDP (illegal strip width)",0
         ALIGN
 
+InUse
+        ADR     R0,ErrorBlock_PDumperInUse
+        B       %FT95
+
 BadStripType
         ADR     R0,ErrorBlock_PDumperBadStrip
         B       %FT95
+
+EscDisabled
+	ADR	R0,ErrorBlock_PDumperEscDisabled
+	B	%FT95
 
 BadPDumperCall
         ADR     R0,ErrorBlock_PDumperBadCall
@@ -87,9 +135,14 @@ BadPDumperCall
         Push    "R1,LR"                 
         ADDR    R1,title                ;->Title string 
         SWI     XPDumper_LookupError     
-        Pull    "R1,PC"
+        Pull    "R1,LR"
+        DebugE	Calls, "-BranchCode"
+        Pull	"pc"
 
-        MakeInternatErrorBlock PDumperBadCall,,BadCall
-        MakeInternatErrorBlock PDumperBadStrip,,BadStrp
+
+        MakeInternatErrorBlock	PDumperInUse,,InUse
+        MakeInternatErrorBlock	PDumperBadCall,,BadCall
+        MakeInternatErrorBlock	PDumperBadStrip,,BadStrp
+        MakeInternatErrorBlock	PDumperEscDisabled,,NoEsc
 
         END
