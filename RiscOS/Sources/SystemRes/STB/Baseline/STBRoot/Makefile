@@ -47,8 +47,6 @@ translate:
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Root.!TFTPBoot       -o ${INSTDIR}.!TFTPBoot
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.SendMsg.Demo         -o ${INSTDIR}.Content.HTML.SendMsg.Demo/html
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.SendMsg.Heartbeat    -o ${INSTDIR}.Content.HTML.SendMsg.Heartbeat/html
-	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.SendMsg.InStby       -o ${INSTDIR}.Content.HTML.SendMsg.InStby/html
-	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.SendMsg.OutStby      -o ${INSTDIR}.Content.HTML.SendMsg.OutStby/html
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Test.Audio           -o ${INSTDIR}.Content.HTML.Test.Audio/html
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Test.EnvVar          -o ${INSTDIR}.Content.HTML.Test.EnvVar/html
 
