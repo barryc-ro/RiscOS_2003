@@ -100,9 +100,17 @@
 ;
 ; ********************  See SrcFiler log file for changes since version 1.41.
 ;
+; 1.53 14-Apr-97  MT    Merge in changes for StrongARM compatibility, mono output and
+;                       oversampling performance improvement.  Change default sample rate
+;                       to 22.05Khz, if hardware support is available for this (STB/NC).
+; 1.54 22-Apr-97  MT    Fix to allow mono output to be controlled (Sound_Mode 3) - although
+;                       the implementation was present, the code to recognise and act on
+;                       the specific SWI function code had been omitted by accident in the
+;                       code merge.
+;
 
-          GBLL    StrongARM
-StrongARM SETL    {TRUE}
+              GBLL    StrongARM
+StrongARM     SETL    {TRUE}
               GBLL    ARM810support
 ARM810support SETL    {FALSE}
 
@@ -138,6 +146,7 @@ ARM810support SETL    {FALSE}
         GET     Hdr:Portable
 
         GET     Version
+
 
 ;
 ; Define the VIDC specific things
@@ -282,16 +291,23 @@ SoundGain_C # 1 ; value of additional gain as currently compiled into conv code
 
 ; Constants
 ; SC prefix for SoundConstant
+ [ STB
+SCPeriod     * 45                       ; use 45us (22.05kHz) for STBs & NCs
+ |
 SCPeriod     * 48                       ; default, i.e. 20.8333 kHz
+ ]
+
 SCBufferLen  * 208                      ; 208 bytes/channel (&D0: multiple of 16)
 SCLogChannel * 0                        ; default log2nchan = 0 -> 1 channel
 SCSoundGain  * 0                        ; default soundgain is 0
 
 ; Flags bits in NChannels/Flags byte: bottom 2 bits are log2nchan, next 2 bits are
 ; Lin16 flags, 1 bit for auto-oversampling flag, 1 bit for "oversampling active" flag,
-; 1 bit spare, with top bit reserved (probably unnecessarily) for Level1Fill handler
-; call "Level0 updated" flag.
+; 1 bit for mono-isation flag, top bit reserved (probably unnecessarily) for Level1Fill
+; handler call "Level0 updated" flag.
+DoMono          *       &40             ; mono-isation control bit
 DoOversample    *       &20             ; oversampling active bit
+OverMonoShift   *       5               ; shift to get to OS/Mono as 2-bit field
 OversampleFlag  *       &10             ; AutoOversampling flag from CMOS
 Lin16Bits       *       &0C             ; flags for 16-bit linear mode (VIDC20)
 Lin16Shift      *       2               ; low bit of field is bit 2
@@ -380,7 +396,11 @@ Help_String
  ]
  [ VIDC_Type = "VIDC20"
   [ MEMC_Type = "IOMD"
-        DCB     " VIDC20/IOMD version"
+   [ STB
+        DCB     " STB/NC version"
+   |
+        DCB     " Generic"
+   ]
   |
         DCB     " VIDC20/MEMC1 version"
   ]
@@ -1902,12 +1922,16 @@ Sound0Stereo ENTRY "r0, r2"
 ;     = 2: (NOT YET IMPLEMENTED) set external sound clock handler
 ;          function (for format/status value 3)
 ;          R1 = external sound clock handler address, or 0 to cancel
+;     = 3: set/clear mono flag, returning previous state (0 or 1)
+;	   R1 = 0: stereo mode
+;	   R1 <> 0: mono mode (convert stereo to mono for output)
 ;     other function code values not defined
 ;
 ;   R10 = SoundLevel0Base
 ;   IRQs disabled
 ;
 ; Out:
+;  For function code 0:
 ;       R0      = 0: mu-law sound system only; SWIs Sound_LinearHandler and
 ;                    Sound_SampleRate, and all other functions of Sound_Mode, are
 ;                    not supported.  Contents of r1 are unchanged.
@@ -1923,6 +1947,8 @@ Sound0Stereo ENTRY "r0, r2"
 ;       R1[4]: oversampling control
 ;               = 0: automatic linear 2x oversampling disabled
 ;               = 1: automatic linear 2x oversampling enabled
+;       R1[5]   = 0: stereo output
+;		= 1: mono conversion on output
 ;       R1[31:5]: reserved for expansion
 ;
 ; For all rates <= 25kHz, if auto-oversampling is on, the output data stream
@@ -1943,6 +1969,8 @@ Sound0Mode      ENTRY   "r2"
         MOV     r1, lr, LSR #Lin16Shift ; get mode (1..3) in right place
         TST     r2, #OversampleFlag     ; check for oversampling
         ORRNE   r1, r1, #1 :SHL: 4      ; set flag if so
+        TST	r2, #DoMono		; check for mono mode
+        ORRNE	r1, r1, #1 :SHL: 5	; set flag if enabled
         EXITS
 
 10      CMP     r0, #1
@@ -1973,8 +2001,22 @@ Sound0Mode      ENTRY   "r2"
         EXITS
 
 20      CMP     r0, #2
-        BNE     %FT99
+        BNE     %FT30
 ; FUNCTION CODE 2: NOT YET IMPLEMENTED!
+	B	%FT99
+30	CMP	r0, #3
+	BNE	%FT40
+; Function code 3: enable/disable mono-isation (allows overriding CMOS value)
+        LDRB    r2, [r10, #Flags]	; get flags byte
+        MOV     lr, r2                  ; preserve original value
+        CMP     r1, #0                  ; check requested state
+        ORRNE   r2, r2, #DoMono         ; set bit if enabling mono conversion
+        BICEQ   r2, r2, #DoMono         ; or clear bit if disabling it
+        ANDS    r1, lr, #DoMono         ; get old state of flag into r1 (wrong bit pos)
+        MOVNE   r1, #1                  ; if not zero, set 1, else 0 already there...
+        STRB    r2, [r10, #Flags]       ; store out new flag value
+        EXITS
+40
 99
         EXITS
 
@@ -3327,48 +3369,45 @@ Module_VectorCode ROUT
  ]
 
 87
-        LDMFD   sp!, {r0,r1}            ; reload up phys base & limit now
-        ; Finally, perform oversampling if required.  Ideally, the mu-law-to-
-        ; linear code would do this itself, but it would get messy if 16-bit
-        ; output is also being generated (which sample rate to use for 16-bit?)
+        LDMFD   sp, {r0,r1}            ; reload (no pop) phys base & limit now
+
+        ; Finally, perform mono mix-down and/or oversampling, if required.
 
         LDR     r11, =SoundLevel0Base
-        LDR     r9, [r11, #SoundRMA]
-        LDR     r10, [r9, #SavedSample] ; pick up saved sample from prev buffer, for use below
-        LDR     r6, [r1, #-4]!          ; get last pair of samples in this buffer
-        STR     r6, [r9, #SavedSample]  ; save off for next time round, anyway
-        LDRB    r2, [r11, #Flags]       ; now check for oversamping
-        TST     r2, #DoOversample       ; oversampling in effect?
-        BEQ     %98                     ; nowt more to do if not
+        LDRB    r3, [r11, #Flags]       ; now check for oversamping/mono
+	MOV	r3, r3, LSR #OverMonoShift
+	ANDS	r3, r3, #3		; bit 0 -> oversamp. bit 1 -> mono
+	BEQ	BufferDone		; nowt to do if both bits clear (r3 = 0)
+
+	; OK, doing some sort of filtering operation.  Set up some constants
+	; used in all cases...
+
+	; Set up 0x80008000 in r12, to perform signed/unsigned swap overs
+ 	MOV	r12, #1<<15
+ 	ORR	r12, r12, #1<<31
+
+	; Create 0xFFFEFFFE in r11 for masking off LSBs, to isolate LH and RH
+	; parts during parallel additions.
+ 	MVN	r11, r12, ROR #15	; can derive from r12 in one go!
+
+	CMP	r3, #2			; check which proc we need to call (1,2,3)
+	BEQ	MonoOnly		; if r3 = 2, do just mono conversion
+					; else doing oversampling...
         SUB     r2, r1, r0              ; determine phys length of buffer at Fs*1
-        ADD     r2, r2, #4              ; correct for decr of r1 above
         ADD     r2, r0, r2, LSL #1      ; and compute end of buffer at Fs*2
+	STR	r2, [sp, #4]		; store out for later use also
+					; switch to appropriate oversampling code
+	BLT	OverOnly		; if r3 < 2 (i.e. 1), only oversample
+	B	MonoOver		; if r3 > 2 (i.e. 3), do mono + oversample
 
-        MOV     r4, r6, ASR #16         ; split last sample of this buffer into L and R
-        MOV     r5, r6, LSL #16
-        MOV     r5, r5, ASR #16
+BufferDone	; return here after any buffer processing
+	Pull	"r3,r4" 		; pop phys base+real limit (@Fs*2 if oversampling)
+	LDR	r6, [r4, #-4]		; pick up last sample pair from this buffer
+	LDR	r11, =SoundLevel0Base 	; address sound work area
+	LDR	r7, [r11, #SoundRMA]	; address RMA area
+	STR	r6, [r7, #SavedSample]	; save sample pair for possible oversampling next time
 
-88      CMP     r1, r0                  ; on last sample?  (SETS CC FOR TEST AT END)
-        LDRNE   r3, [r1, #-4]!          ; if not, get next pair from this buffer (backwards)
-        MOVEQ   r3, r10                 ; else use saved pair from end of prev buffer
-        MOV     r7, r3, ASR #16         ; and split up
-        MOV     r8, r3, LSL #16
-        MOV     r8, r8, ASR #16
 
-        ADD     r4, r4, r7              ; add left values
-        ADD     r5, r5, r8              ; and right values
-        MOV     r4, r4, ASR #1          ; divide by 2 (left)
-        MOV     r5, r5, ASR #1          ; divide by 2 (right)
-        MOV     r4, r4, LSL #16         ; recombine
-        MOV     r5, r5, LSL #16
-        ORR     r4, r4, r5, LSR #16
-        STMDB   r2!, {r4, r6}           ; save out previous pair and intermediate pair
-        MOV     r6, r3                  ; cycle values for next set
-        MOV     r4, r7
-        MOV     r5, r8
-        CMP     r2, r0                  ; have we just written last sample?
-        BNE     %B88                    ; round again if not
-98
   [ EnableIRQsIn16bit
         Pull    lr                      ; Restore SVC_lr.
         TEQP    pc, #IRQ_mode+I_bit     ; Back to IRQ mode, IRQs disabled.
@@ -3401,6 +3440,173 @@ Module_VectorCode ROUT
         MOV     r11, #0
         STR     r11, [wp, #Semaphore]   ; clear semaphore
         Pull    "r11, pc"               ; Return from interrupt
+
+
+; Buffer processing routines - 3 off, done as out-of-line code sequences which
+; all return to "BufferDone" above....
+
+; MonoOnly
+;
+;     Convert stereo into mono (in same buffer space) for use with mono sound devices
+;     (e.g. TV with only mono sound input, attached to NC).
+;     NB: output data is still 2x16bit/sample.
+;
+;   r0 = base address of current buffer
+;   r1 = limit address (last+1) of source (Fs*1)
+;   r2-r10 free for general use
+;   r11 = 0xFFFEFFFE
+;   r12 = 0x80008000
+;   r14 = free for use
+; On exit:
+;   r0-r10,r14 corrupted
+
+MonoOnly	ROUT
+01	LDMDB	r1!, {r2,r3,r4,r5}
+	; convert from signed to unsigned format
+	EOR	r2, r2, r12
+	EOR	r3, r3, r12
+	EOR	r4, r4, r12
+	EOR	r5, r5, r12
+	; clear off LSB from each value (two in each reg)
+	AND	r2, r2, r11
+	AND	r3, r3, r11
+	AND	r4, r4, r11
+	AND	r5, r5, r11
+	; Add the left and right samples together, simultaneously in both upper and
+	; halves of each stereo pair. There will be no
+	; interference between carry out from the RHS MSB into bit 16 (LSB of
+	; LHS sample), and no carry from bit 16 into bit 17, since we cleared
+	; bit 16 in both sources (i.e. bit 16 and bit 0 of pre-rotated single source!)
+	; beforehand; therefore the subsequent right shift will correctly put the
+	; average of the two channel samples back into bits 15..0 (and also into
+	; bits 31..16, using RRX to recover carry out from bit 31).
+	; Get back to signed 16 bit result for each channel afterwards by EOR'ing
+	; with 0x80008000.
+	ADDS	r2, r2, r2, ROR #16
+	EOR	r2, r12, r2, RRX
+	ADDS	r3, r3, r3, ROR #16
+	EOR	r3, r12, r3, RRX
+	ADDS	r4, r4, r4, ROR #16
+	EOR	r4, r12, r4, RRX
+	ADDS	r5, r5, r5, ROR #16
+	EOR	r5, r12, r5, RRX
+	STMIA	r1, {r2,r3,r4,r5}	; store them all out
+	CMP	r1, r0                  ; have we just done last loop?
+        BNE     %B01                    ; round again if not
+	B	BufferDone		; we're all done
+
+
+
+; OverOnly:
+;     Oversample, expanding buffer by factor of 2 by performing linear interpolation
+;     between each pair of samples.  For the very first case, this uses a saved copy
+;     of the last stereo sample pair word (2x16-bit) from the end of the previous
+;     buffer, to interpolate against.  Note that this process is done in reverse
+;     order (working from end of buffer back to start) to avoid overwriting the
+;     initial data as would happen if we went forwards..
+OverOnly 	ROUT
+	LDR	r14, [r1, #-4]!		; get last sample in source buffer now
+	EOR	r14, r14, r12		; convert signed to unsigned
+	AND	r14, r14, r11		; mask LSB bits from this sample-pair
+	ADD	r0, r0, #8*4		; need to do last group separately, so move base
+
+01	LDMDB	r1!, {r3,r5,r7,r9}	; load 4 new samples
+
+02	; convert from signed to unsigned format (into separate regs apart from r3)
+	EOR	r3, r3, r12
+	EOR	r6, r5, r12
+	EOR	r8, r7, r12
+	EOR	r10, r9, r12
+	; clear off LSB from each value (two in each reg)
+	AND	r3, r3, r11
+	AND	r6, r6, r11
+	AND	r8, r8, r11
+	AND	r10, r10, r11
+	; oversampling: average pairs and turn back to signed format
+	ADDS	r4, r3, r6
+	EOR     r4, r12, r4, RRX
+	ADDS	r6, r6, r8
+	EOR	r6, r12, r6, RRX
+	ADDS	r8, r8, r10
+	EOR	r8, r12, r8, RRX
+  	ADDS	r10, r10, r14
+	EOR     r10, r12, r10, RRX
+	EOR	r14, r12, r14			; put r14 back to signed format also
+	STMDB	r2!, {r4,r5,r6,r7,r8,r9,r10,r14} ; store final results interleaved with originals
+	MOV	r14, r3			; set lowest sample for end of next group
+	CMP	r2, r0                  ; have we just done last normal loop?
+        BHI     %B01                    ; round again if not
+	BLO	BufferDone		; all done if done extra, special loop
+
+ 	; (r2==r0) for last special loop, pick up very first 3 samples from this buffer
+ 	LDMDB	r1!, {r5,r7,r9}
+ 	; get last sample from previous buffer, to interpolate for first new sample of this
+ 	LDR	r3, =SoundLevel0Base
+ 	LDR	r3, [r3, #SoundRMA]
+ 	LDR	r3, [r3, #SavedSample]
+	B	%B02			; use main loop code to do it
+
+
+; Convert to mono and oversample also
+MonoOver	ROUT
+	ADD	r0, r0, #8*4		; need to do last group separately, so move base
+
+	LDR	r14, [r1, #-4]!		; get last sample in source buffer now
+	EOR	r14, r14, r12		; convert signed to unsigned
+	AND	r14, r14, r11		; mask LSB bits from this sample-pair
+    	ADDS	r14, r14, r14, ROR #16	; convert to mono
+    	AND	r14, r11, r14, RRX
+
+01	LDMDB	r1!, {r3,r5,r7,r9}	; get four new samples: signed, full 16-bit, stereo
+
+02	; convert from signed to unsigned format
+	EOR	r3, r3, r12
+	EOR	r5, r5, r12
+	EOR	r7, r7, r12
+	EOR	r9, r9, r12
+	; clear off LSB from each value (two in each reg)
+	AND	r3, r3, r11
+	AND	r5, r5, r11
+	AND	r7, r7, r11
+	AND	r9, r9, r11
+	; Monoise unsigned masked versions of input data; since we're also oversampling,
+	; leave in unsigned form and mask off LSBs again
+	ADDS	r3, r3, r3, ROR #16
+	AND	r3, r11, r3, RRX
+	ADDS	r5, r5, r5, ROR #16
+	AND	r5, r11, r5, RRX
+	ADDS	r7, r7, r7, ROR #16
+	AND	r7, r11, r7, RRX
+	ADDS	r9, r9, r9, ROR #16
+	AND	r9, r11, r9, RRX
+	; then oversample, generating new intermediate values in r4,r6,r8,r10, in signed format
+	ADDS	r4, r3, r5
+	EOR     r4, r12, r4, RRX
+	ADDS	r6, r5, r7
+	EOR	r6, r12, r6, RRX
+	ADDS	r8, r7, r9
+	EOR	r8, r12, r8, RRX
+  	ADDS	r10, r9, r14
+	EOR     r10, r12, r10, RRX
+	; must convert monoised unsigned masked originals back to signed format also
+	EOR	r5, r12, r5
+	EOR	r7, r7, r12
+	EOR	r9, r9, r12
+	EOR	r14, r12, r14		; put r14 back to signed format also for store-out
+	STMDB	r2!, {r4,r5,r6,r7,r8,r9,r10,r14} ; store final results, interleaved with originals
+	MOV	r14, r3			; copy lo sample (mono,still unsigned & masked) for next group
+	CMP	r2, r0                  ; have we just done last normalloop?
+        BHI     %B01                    ; round again if not
+	BLO	BufferDone		; return if just done extra, special loop
+
+ 	; r2==r0: finally, pick up very first 3 samples from this buffer
+ 	LDMDB	r1!, {r5,r7,r9}
+ 	; and last sample from previous buffer, to interpolate for first new sample of this
+ 	LDR	r3, =SoundLevel0Base
+ 	LDR	r3, [r3, #SoundRMA]
+ 	LDR	r3, [r3, #SavedSample]
+ 	; use main loop code to do final (earliest) 8 samples of output
+ 	B	%B02
 
 
 ;

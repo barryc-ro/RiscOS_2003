@@ -50,10 +50,18 @@ clean:
         ${RM} s.TokHelpSrc
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.SoundDMA
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.SoundDMA.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.SoundDMA.Messages }
 
 ${TARGET}: ${SOURCE} s.TokHelpSrc
         ${MKDIR} rm.${MACHINE}
@@ -125,3 +133,32 @@ rm.Omega.Sound0: Hdr:Sound
 rm.Omega.Sound0: Hdr:Portable
 rm.Omega.Sound0: Version
 rm.Omega.Sound0: s.TokHelpSrc
+rm.RCA.Sound0: Hdr:ListOpts
+rm.RCA.Sound0: Hdr:Macros
+rm.RCA.Sound0: Hdr:System
+rm.RCA.Sound0: Hdr:SWIs
+rm.RCA.Sound0: Hdr:CPU.Generic26
+rm.RCA.Sound0: Hdr:IO.GenericIO
+rm.RCA.Sound0: Hdr:RISCOS
+rm.RCA.Sound0: Hdr:Machine.<Machine>
+rm.RCA.Sound0: Hdr:VIDC.VIDC20
+rm.RCA.Sound0: Hdr:MEMM.ARM600
+rm.RCA.Sound0: Hdr:IO.IOMDL
+rm.RCA.Sound0: Hdr:CMOS
+rm.RCA.Sound0: Hdr:ModHand
+rm.RCA.Sound0: Hdr:Services
+rm.RCA.Sound0: Hdr:FSNumbers
+rm.RCA.Sound0: Hdr:NewErrors
+rm.RCA.Sound0: Hdr:PublicWS
+rm.RCA.Sound0: Hdr:Tokens
+rm.RCA.Sound0: Hdr:DevNos
+rm.RCA.Sound0: Hdr:Proc
+rm.RCA.Sound0: Hdr:VduExt
+rm.RCA.Sound0: Hdr:MsgTrans
+rm.RCA.Sound0: Hdr:HostFS
+rm.RCA.Sound0: Hdr:DDVMacros
+rm.RCA.Sound0: Hdr:NDRDebug
+rm.RCA.Sound0: Hdr:Sound
+rm.RCA.Sound0: Hdr:Portable
+rm.RCA.Sound0: Version
+rm.RCA.Sound0: s.TokHelpSrc
