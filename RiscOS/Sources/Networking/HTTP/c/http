@@ -27,6 +27,7 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 #include "kernel.h"
 #include "swis.h"
@@ -56,11 +57,6 @@ extern void riscos_SSLLib_Init( void );
 
 #include "httppub.h"
 #include "http.h"
-
-#if REMOTE_DEBUG
-#include <stdarg.h>
-#endif
-
 #include "files.h"
 #include "mimemap.h"
 
@@ -238,12 +234,14 @@ int cert_verify_callback( int ok, X509 *xs, X509 *xi, int depth, int error);
 #endif
 
 #if DEBUG && REMOTE_DEBUG
-int debug_socket=0;
+debug_session *db=NULL;
+#else
+extern void *db;
 #endif
 
 #if DEBUG
 # if REMOTE_DEBUG
-#  define fdebugf  debug_printf
+#  define fdebugf  _debug_printf
 # else
 #  define fdebugf fprintf
 # endif
@@ -303,12 +301,12 @@ static http_connection proto_con = {
  * calls.  I just pass them through to the memXXX versions.
  */
 
-int bcmp(void *s1, void *s2, size_t s)
+/* int bcmp(void *s1, void *s2, size_t s)
 {
     return memcmp(s1, s2, s);
-}
+} */
 
-void bzero(void *p, int s)
+void http_bzero(void *p, int s)
 {
     memset(p, 0, s);
 }
@@ -486,68 +484,7 @@ void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 }
 #endif
 
-#if REMOTE_DEBUG && DEBUG
 
-void
-debug_printf(FILE *dummy,char *format, ...)
-{
-  va_list list;
-  char debug_line[256];
-
-  if (debug_socket)
-  {
-    va_start (list, format);
-    vsprintf(debug_line,format, list);
-    va_end(list);
-
-    send(debug_socket, debug_line, strlen(debug_line), 0);
-  }
-}
-
-void
-debug_socket_open(void)
-{
-  int rc;
-  struct sockaddr_in sockaddr;
-  struct hostent *hostent;
-
-again:
-  debug_socket = socket(AF_INET, SOCK_STREAM, 0);
-  if (debug_socket == 0)
-    goto again;
-
-  memset(&sockaddr, 0, sizeof(sockaddr));
-
-  hostent = gethostbyname(REMOTE_DEBUG_HOST);
-  if (hostent == NULL)
-    goto exit_gracefully;
-
-  sockaddr.sin_family = AF_INET;
-  sockaddr.sin_port = htons(REMOTE_DEBUG_PORT);      /* debug server */
-  sockaddr.sin_addr.s_addr = *(u_long*)hostent->h_addr;
-
-  rc = connect(debug_socket, (struct sockaddr *)&sockaddr, sizeof(sockaddr) );
-  if (rc<0)
-    goto exit_gracefully;
-
-  debug_printf(NULL,"HTTP: debug socket opened\n");
-
-  return;
-
-exit_gracefully:
-  if (debug_socket >= 0)
-    socketclose(debug_socket);
-  debug_socket = 0;
-}
-
-void
-debug_socket_close(void)
-{
-  if (debug_socket >= 0)
-    socketclose(debug_socket);
-  debug_socket = 0;
-}
-#endif
 
 /**********************************************************************/
 /*
@@ -572,9 +509,8 @@ static void module_final(void)
         fdebugf(log_file, "%p: being closed by finalisation\n", c );
         http_close_handle(c, http_close_DELETE_FILE | http_close_FATAL );
     }
-#if REMOTE_DEBUG && DEBUG
-    debug_socket_close();
-#endif
+    debug_printf(db,"(5) finalisation");
+    remote_debug_close(db);
 
 #ifdef CSFS
     reg.r[0] = 0;
@@ -590,6 +526,21 @@ static void module_final(void)
         SSL_CTX_free( ssl_context );
 #endif
 }
+
+#if REMOTE_DEBUG && DEBUG
+void
+_debug_printf(FILE *file, char *format, ...)
+{
+  char debug_line[256];
+  va_list list;
+
+  va_start (list, format);
+  vsprintf(debug_line,format, list);
+  va_end(list);
+
+  debug_printf(db,"%s",debug_line);
+}
+#endif
 
 /**********************************************************************/
 /*
@@ -614,9 +565,7 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
     {
         log_file = stderr;
     }
-#if REMOTE_DEBUG && DEBUG
-    debug_socket_open();
-#endif
+    remote_debug_open("HTTP",&db);
 
     fdebugf(log_file, "Module initialisation called.\n");
 
@@ -624,7 +573,7 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
     ERR_load_crypto_strings();
 #endif
 
-    bzero(http_cons, sizeof(http_cons));
+    http_bzero(http_cons, sizeof(http_cons));
     http_cons_list = NULL;
 
     callback_pending = 0;
@@ -875,6 +824,7 @@ http_csfs_service(_kernel_swi_regs *r)
   static int status=0;
 #endif
   http_connection *handle;
+  static progress_info file_progress;
 
   memset(&sockaddr_in, 0, sizeof(sockaddr_in));
   handle = (http_connection*)r->r[2];
@@ -893,7 +843,7 @@ http_csfs_service(_kernel_swi_regs *r)
       if (status_args.out.status!=status)
       {
         status=status_args.out.status;
-        fdebugf(log_file,"HTTP: CSFS new status %d\n",status);
+        fdebugf(log_file,"(7) CSFS new status %d\n",status);
       }
 #endif
       if (status_args.out.status >= status_COMPLETED_FILE)
@@ -919,6 +869,7 @@ http_csfs_service(_kernel_swi_regs *r)
                   while (!ro_eof(handle->fh) && i<252)
                     err->errmess[i++]= _kernel_osbget(handle->fh);
                   err->errmess[i-1] = 0; /* terminate */
+                  goto exit_gracefully;
                 }
               hdr = hdr->next;
             }
@@ -932,6 +883,12 @@ http_csfs_service(_kernel_swi_regs *r)
        r->r[0] = -1;  /* still progressing */
 
       r->r[3] = NULL;
+      if (handle->data_size == -1)
+        break;
+
+      file_progress.total = handle->data_size;
+      file_progress.sofar = handle->data_so_far;
+      r->r[3] = (int)&file_progress;
 
       break;
     default :
@@ -985,9 +942,6 @@ http_csfs_service(_kernel_swi_regs *r)
       open_args.in.bname = NULL;
       open_args.in.flags = 0;
 
-/*       fdebugf(log_file,"HTTP: path '%s'\n",path); */
-/*       fdebugf(log_file,"HTTP: host 0x%08x\n",addr); */
-
       switch (r->r[0])
       {
         case CSFS_GET :
@@ -1014,8 +968,6 @@ exit_gracefully:
     free(new_path);
 
   return (err);
-
-
 }
 #endif
 /**********************************************************************/
@@ -1678,7 +1630,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             else
                 rc = http_recv( c, tmp_buffer, block );
 
-            fdebugf(log_file, "%p: recv (body %d) gave %d\n", c, block, rc);
+/*             fdebugf(log_file, "%p: recv (body %d) gave %d\n", c, block, rc); */
 
             if (rc <= 0)
             {
@@ -1786,8 +1738,8 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
             c->data_so_far += rc;
 
-            fdebugf( log_file, "%p: adding %d to so_far (now %d)\n",
-                     c, rc, c->data_so_far );
+/*             fdebugf( log_file, "%p: adding %d to so_far (now %d)\n",
+                     c, rc, c->data_so_far ); */
         }
 
         if ( c->status != status_COMPLETED_FILE )
@@ -2758,9 +2710,6 @@ static _kernel_oserror *http_status(http_status_args *args)
     else
         args->out.rc = c->rc;
 
-    fdebugf( log_file, "%p: http_status returning status=%d rc=%d\n",
-             c, args->out.status, args->out.rc );
-
     args->out.message = c->message ;
 
     return NULL;
@@ -2980,7 +2929,7 @@ int http_send_request_headers( http_connection *c )
             sprintf( tmp_buffer, "%s: %s\r\n", c->sendhead->key,
                                  c->sendhead->value );
 
-            fdebugf( log_file, "%p: txheader %s: %s\n", c, c->sendhead->key,
+            fdebugf( log_file, "(7) %p: txheader %s: %s\n", c, c->sendhead->key,
                                c->sendhead->value );
         }
         else
@@ -2998,7 +2947,7 @@ int http_send_request_headers( http_connection *c )
                     c->data_size = http_file_size(c->bname);
                 sprintf(tmp_buffer, "Content-length: %d\r\n", c->data_size);
 
-                fdebugf( log_file, "%p: txheader Content-length: %d\n",
+                fdebugf( log_file, "(7) %p: txheader Content-length: %d\n",
                                    c, c->data_size );
             }
 
@@ -3009,7 +2958,7 @@ int http_send_request_headers( http_connection *c )
                  || !strchr( c->object, ':' ) )
             {
                 strcat( tmp_buffer, "Connection: Keep-Alive\r\n" );
-                fdebugf( log_file, "%p: txheader Connection: Keep-Alive\n", c );
+                fdebugf( log_file, "(7) %p: txheader Connection: Keep-Alive\n", c );
             }
 
             /* If this is an image, and isn't a priority (ie isn't the
@@ -3028,7 +2977,7 @@ int http_send_request_headers( http_connection *c )
 
                 sprintf( ptr, "Range: bytes=" IMAGE_HEADER1_T "-%d\r\n",
                               c->total_size-1 );
-                fdebugf( log_file, "%p: txheader Range: bytes=" IMAGE_HEADER1_T
+                fdebugf( log_file, "(7)%p: txheader Range: bytes=" IMAGE_HEADER1_T
                                    "-%d\n", c, c->total_size-1 );
                 c->flags &= ~http_open_flags_IMAGE;
             }
@@ -3038,7 +2987,7 @@ int http_send_request_headers( http_connection *c )
                       && !c->bh )
             {
                 strcat( tmp_buffer, "Range: bytes=0-" IMAGE_HEADER_T "\r\n" );
-                fdebugf( log_file, "%p: txheader Range: bytes=0-"
+                fdebugf( log_file, "(7) %p: txheader Range: bytes=0-"
                                    IMAGE_HEADER_T "\n", c );
             }
             else
