@@ -1,0 +1,748 @@
+; >s.Module
+; Copyright © Pace Micro Technology plc, 2003
+; All rights reserved.
+;
+; Main module body of the MPEGDescramble module. This is a glue layer between
+; the MPEGControl (version 3 and above) module and a descrambler module. It
+; registers with interfaces in MPEGControl and collates data from them to pass
+; relevant information to the client.
+;
+; NOTE: throughout this source, all routines which return an error should be
+; assumed to have corrupted any registers which are not specified explicitly as
+; being "preserved" on exit. All routines should be assumed to corrupt flags
+; unless explicitly specified as doing otherwise.
+
+
+	GET	Hdr:ListOpts
+	GET	Hdr:Macros
+	GET	Hdr:System
+	GET	Hdr:ModHand
+	GET	Hdr:Proc
+	GET	Hdr:MsgTrans
+	GET	Hdr:Services
+	GET	Hdr:MPEGCtrl
+	GET	VersionASM
+	GET	Debug.s
+
+
+; Module workspace...
+			^	0
+WS_Flags		#	4		; Flags word
+FL_ClientRegistered	*	2_00000001	; If set: a client module has registered with us
+FL_PDHRegistered	*	2_00000010	; If set: we have registered a PDH handler with MPEGCtrl for our client
+FL_DCIRegistered	*	2_00000100	; If set: direct-call interface with MPEGCtrl is established
+FL_StreamCount		*	16		; Top 16 bits are count of number of open streams (i.e. WS_Flags :SHR: FL_StreamCount)
+WS_RelocModifiers	#	8		; Copy of the client's relocation modifiers (copied from base of SVC stack when they register)
+WS_OpenHandler		#	4		; Pointer to the client's OpenStream_Handler() C function
+WS_ResetHandler		#	4		; Pointer to the client's ResetStream_Handler() C function
+WS_CloseHandler		#	4		; Pointer to the client's CloseStream_Handler() C function
+WS_DescrambleHandler	#	4		; Pointer to the client's Descrambler_Handler() C function
+WS_FreeList		#	4		; Pointer to our free list of bitstream packets (and descriptors)
+WS_BufUsageRtn		#	4		; Pointer to the buffer usage modification routine in MPEGControl (not used at present)
+  [ DEBUG
+WS_DAnum		#	4		; Debug dynamic area's number
+WS_DAbase		#	4		; Debug dynamic area's base address
+  ];DEBUG
+WS_SIZE			*	@		; Size in bytes of the module workspace
+  [ DEBUG
+  ! 0, "Module workspace offsets..."
+  ! 0, "  WS_Flags             &" :CC: :STR: WS_Flags
+  ! 0, "  WS_RelocModifiers    &" :CC: :STR: WS_RelocModifiers
+  ! 0, "  WS_OpenHandler       &" :CC: :STR: WS_OpenHandler
+  ! 0, "  WS_ResetHandler      &" :CC: :STR: WS_ResetHandler
+  ! 0, "  WS_CloseHandler      &" :CC: :STR: WS_CloseHandler
+  ! 0, "  WS_DescrambleHandler &" :CC: :STR: WS_DescrambleHandler
+  ! 0, "  WS_FreeList          &" :CC: :STR: WS_FreeList
+  ! 0, "  WS_BufUsageRtn       &" :CC: :STR: WS_BufUsageRtn
+  ! 0, "  WS_DAnum             &" :CC: :STR: WS_DAnum
+  ! 0, "  WS_DAbase            &" :CC: :STR: WS_DAbase
+  ! 0, "  WS_SIZE              &" :CC: :STR: WS_SIZE
+  ! 0, ""
+  ];DEBUG
+
+
+; Per-stream block (Stream Block) of stuff...
+			^	0
+SB_ClientHandle		#	4		; Handle to pass to our client's function calls
+SB_BitstreamPtr		#	4		; Pointer to our bitstream packet descriptor (with payload buffer following in memory)
+SB_SIZE			*	@		; Size in bytes of a stream block
+  [ DEBUG
+  ! 0, "Stream block offsets..."
+  ! 0, "  SB_ClientHandle      &" :CC: :STR: SB_ClientHandle
+  ! 0, "  SB_BitstreamPtr      &" :CC: :STR: SB_BitstreamPtr
+  ! 0, ""
+  ];DEBUG
+
+
+; Miscellaneous variables and constants...
+			GBLA	ErrBase
+ErrBase			SETA	0x008A1D00	; Assigned base of our error number range (upto ErrBase+&FF)
+SWIBase			*	0x000566C0	; Assigned base of our SWI chunk
+TAB			*	9		; A tab character!
+LF			*	10              ; A line-feed character!
+CR			*	13              ; A carriage-return character!
+|_Lib$Reloc$Off|	*	540		; Funny, I can't get this from any global Hdr file :(
+InfoWord_SubReason	*	2_11111110	; Mask to extract sub-reason code from Service_MPEGControlStarting
+
+
+; Constants relating to MPEG and the MPEG software stack...
+DESCRIPTOR_SIZE		*	PacketDescriptorSize + 8	; Size (bytes) of one of our bitstream packet descriptors (with padding)
+TS_PAYLOAD_SIZE		*	184				; Size (bytes) of a transport stream packet's payload
+BITSTREAM_SIZE		*	DESCRIPTOR_SIZE + TS_PAYLOAD_SIZE ; Size of our bitstream packet descriptor + packet payload
+  [ DEBUG
+  ! 0, "Bitstream packet buffer..."
+  ! 0, "  DESCRIPTOR_SIZE      &" :CC: :STR: DESCRIPTOR_SIZE
+  ! 0, "  TS_PAYLOAD_SIZE      &" :CC: :STR: TS_PAYLOAD_SIZE
+  ! 0, "  BITSTREAM_SIZE       &" :CC: :STR: BITSTREAM_SIZE
+  ! 0, ""
+  ];DEBUG
+
+
+	; When we claim a block for a bitstream packet descriptor, we include
+	; space for the packet payload at the end. This should start on a
+	; quad-word boundary (assuming RMA blocks are always *16+4).
+	ASSERT	( (DESCRIPTOR_SIZE + 4) :AND: 2_111) = 0
+
+
+	AREA	|Asm$$Code|, CODE, READONLY, PIC
+
+
+; ******************************************************
+; *
+; * Module header block
+; *
+Module_BaseAddr
+	DCD	Mod_Start-Module_BaseAddr	; Module start entry point offset
+	DCD	Mod_Init-Module_BaseAddr	; Module initialisation entry point offset
+	DCD	Mod_Die-Module_BaseAddr		; Module finalisation entry point offset
+	DCD	Mod_Service-Module_BaseAddr	; Module service call entry point offset
+	DCD	Mod_Title-Module_BaseAddr	; Module title string offset
+	DCD	Mod_HelpStr-Module_BaseAddr	; Module version info string offset
+	DCD	Mod_HC_Table-Module_BaseAddr	; Help and command keyword table offset
+	DCD	SWIBase				; SWI chunk
+	DCD	Mod_SWIHandler-Module_BaseAddr	; Module SWI handler entry point offset
+	DCD	Mod_SWITable-Module_BaseAddr	; Module SWI table offset
+	DCD	0				; No SWI name decode entry
+	DCD	0				; No messages file
+	DCD	Mod_Flags-Module_BaseAddr	; Module flags word offset
+
+
+; ******************************************************
+; *
+; * Module flags word.
+; *
+Mod_Flags
+  [ No32bitCode
+	DCD	0
+  |
+	DCD	ModuleFlag_32bit
+  ];No32bitCode
+
+
+; ******************************************************
+; *
+; * Module version, date (and copyright) string.
+; *
+Mod_HelpStr
+	DCB	"$Module_ComponentName", TAB
+	DCB	"$Module_MajorVersion ($Module_Date)"
+  [ Module_MinorVersion <> ""
+	DCB	" $Module_MinorVersion"
+  ];Module_MinorVersion <> ""
+  [ DEBUG
+	DCB	" (debug)"
+  ];DEBUG
+	DCB	0
+
+
+; ******************************************************
+; *
+; * Module title string and module SWI table.
+; *
+Mod_Title
+Mod_SWITable
+	DCB	"$Module_ComponentName", 0	; Prefix
+	DCB	"RegisterHandlers", 0		; 0
+	DCB	"DeregisterHandlers", 0		; 1
+  [ DEBUG
+	DCB	"DebugStuff", 0			; 2
+	DCB	"DebugWrite0", 0		; 3
+  ];DEBUG
+	DCB	0
+
+
+; ******************************************************
+; *
+; * Module help and command keyword table.
+; *
+Mod_HC_Table
+	Command	MPEGDescramble_Handlers, 0, 0
+  [ DEBUG
+	Command	MPEGDescramble_DebugSave, 1, 1
+  ];DEBUG
+	DCB	0
+MPEGDescramble_Handlers_Help
+	DCB	"This command will output the installed $Module_ComponentName handler pointers.", CR
+MPEGDescramble_Handlers_Syntax
+	DCB	"Syntax: *$Module_ComponentName._Handlers", 0
+  [ DEBUG
+MPEGDescramble_DebugSave_Help
+	DCB	"This command saves the $Module_ComponentName debug dynamic area as a text file.", CR
+MPEGDescramble_DebugSave_Syntax
+	DCB	"Syntax: *$Module_ComponentName._DebugSave <filename>", 0
+  ];DEBUG
+	ALIGN
+
+
+; ******************************************************
+; *
+; * Module execution start entry point.
+; *
+; * In...
+; *   R0	= pointer to command string, including module title
+; *   R12	= pointer to private word for preferred instance
+; * Out...
+; *   SHOULD NOT RETURN. Call SWI OS_Exit or start another application.
+; *
+Mod_Start * Module_BaseAddr
+
+
+; ******************************************************
+; *
+; * Module initialisation entry point.
+; *
+; * In...
+; *   R10	= pointer to environment string
+; *   R11	= I/O base or instantiation number
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R6	= can be corrupted
+; *   R7-R11	= must be preserved
+; *   R12	= can be corrupted
+; *   R13	= must be preserved
+; *   R14	= can be corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+Mod_Init Entry
+	; Claim our module workspace...
+	MOV	R0, #ModHandReason_Claim
+	MOV	R3, #WS_SIZE
+	SWI	XOS_Module
+	EXIT	VS
+	; If claim was successful, initialise the workspace...
+	STR	R2, [R12]
+	MOV	R12, R2
+	MOV	R0, #0
+  [ DEBUG
+	; Zero-initialise whole WS for debug builds...
+	BICS	R3, R3, #2_11
+	BEQ	%FT99
+98	SUBS	R3, R3, #4
+	STR	R0, [R12, R3]
+	BNE	%BT98
+99
+  |
+	STR	R0, [R12, #WS_Flags]
+	STR	R0, [R12, #WS_FreeList]
+  ];DEBUG
+	DInit	"$Module_ComponentName"
+  [ BUF_USAGE
+  ! 0, "WARNING: BUF_USAGE has been set to TRUE - untested code!"
+	; Stuff for modifying the buffer usage counters via direct-call to MPEGControl?
+	; This is a fix for problems on client-pull systems where RMA can become
+	; exhausted because when we free bitstream packets, the system goes and fetches
+	; more right away.
+	;
+	; DANGER: this has not been completely implemented. You should use these []
+	; sections of code as a guide. See: MPEGNDS - this is where the problem was
+	; first spotted.
+	DWriteS	"Init:Init DCI", LF
+	BL	Init_DCI
+  ];BUF_USAGE
+	; Create a CallBack for issuing our "starting" service call...
+	DWriteS	"Init:CallBack", LF
+	ADR	R0, CallBack_Handler
+	MOV	R1, #1 :OR: (CtrlStarting_DescrambleInit :SHL: 1)
+	SWI	XOS_AddCallBack
+	EXIT
+
+
+; ******************************************************
+; *
+; * Module finalisation entry point. If our private word points to our workspace
+; * in RMA on exit, the Kernel will free it for us. If we've freed it ourselves,
+; * we should set our private word contents to zero.
+; *
+; * In...
+; *   R10	= fatality indication: 0 is non-fatal, 1 is fatal
+; *   R11	= instantiation number
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R6	= can be corrupted
+; *   R7-R11	= must be preserved
+; *   R12	= can be corrupted
+; *   R13	= must be preserved
+; *   R14	= can be corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+Mod_Die	Entry
+	LDR	R12, [R12]
+	TEQ	R12, #0
+	EXIT	EQ
+	; Are there open streams that we're handling? If so, error...
+	LDR	R0, [R12, #WS_Flags]
+	MOVS	R0, R0, LSR #FL_StreamCount
+	BNE	NoDie_Err
+	; Remove our CallBack (if it is still active)...
+	DWriteS	"Final:RemvCB", LF
+	ADR	R0, CallBack_Handler
+	MOV	R1, R12
+	SWI	XOS_RemoveCallBack
+	; Remove the PDH handler...
+	DWriteS	"Final:PDH", LF
+	BL	Remove_PDH
+	; Release our bitstream packet free list...
+	DWriteS	"Final:Free list", LF
+	BL	Release_Free_List
+  [ BUF_USAGE
+	; Tear-down the direct-call interface with MPEGCtrl...
+	DWriteS	"Final:DCI", LF
+	BL	Remove_DCI
+  ];BUF_USAGE
+	; Issue a service call to inform everyone that we've died...
+	DWriteS	"Final:CallBack", LF
+	MOV	R0, #1 :OR: (CtrlStarting_DescrambleDie :SHL: 1)
+	MOV	R1, #Service_MPEGControlStarting
+	SWI	XOS_ServiceCall
+  [ DEBUG
+	; Free our debugging dynamic area...
+	EXIT	VS
+	DKill
+  ];DEBUG
+	EXIT
+
+
+; ******************************************************
+; *
+; * Module service call entry point.
+; *
+; * In...
+; *   R1	= service call reason code
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= may be altered to return a result
+; *   R1	= 0 if we claimed it
+; *   R2-R8	= may be altered to return a result
+; *   R9-R11	= must be preserved
+; *   R12	= can be corrupted
+; *   R13-R14	= must be preserved
+; *
+; * Do NOT return V set errors from this routine!
+; *
+FastSvc_Table
+	DCD	0
+	DCD	FastSvc - Module_BaseAddr
+	DCD	Service_MPEGControlStarting
+	DCD	0
+FastSvc_Pos
+	DCD	FastSvc_Table - Module_BaseAddr
+Mod_Service ROUT
+	NOP
+	; Eliminate service calls that we're not interested in...
+	TEQ	R1, #Service_MPEGControlStarting
+	MOVNE	PC, LR
+FastSvc	Entry	"R0"
+	LDR	R12, [R12]
+	DWriteS	"Svc:In", LF
+	; The service call is "MPEGControlStarting"...
+	AND	R0, R0, #InfoWord_SubReason
+	; If it is the MPEGCtrl module which has killed, clear some flags...
+	TEQ	R0, #CtrlStarting_CtrlDie :SHL: 1
+	BEQ	ClrFlgs
+	; If it is the MPEGCtrl module which has (re)initialised, re-establish any handlers...
+	TEQ	R0, #CtrlStarting_CtrlInit :SHL: 1
+  [ BUF_USAGE
+	BNE	%FT00
+	DWriteS	"Svc:PDH", LF
+	BL	Init_PDH
+	DWriteS	"Svc:DCI", LF
+	BL	Init_DCI
+  |
+	BLEQ	Init_PDH
+  ];BUF_USAGE
+00	; Do not return with V set...
+	DWriteS	"Svc:Out", LF
+	CLRV
+	EXIT
+ClrFlgs	; When MPEGCtrl dies, we don't want these flags to still be set. We can't
+	; deregister because MPEGCtrl has been killed!
+	DWriteS	"Svc:Clear flags", LF
+	LDR	R0, [R12, #WS_Flags]
+	BIC	R0, R0, #FL_PDHRegistered :OR: FL_DCIRegistered
+	STR	R0, [R12, #WS_Flags]
+	EXIT
+
+
+; ******************************************************
+; *
+; * Module CallBack handler. Issue a service call to inform interested parties
+; * when we have been (re)initialised or killed.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R13	= preserved
+; *   R14	= corrupted
+; *
+CallBack_Handler Entry "R0-R12"
+	MOV	R0, R12
+	MOV	R1, #Service_MPEGControlStarting
+	SWI	XOS_ServiceCall
+	EXIT
+
+
+; ****************************************************
+; *
+; * *MPEGDescramble_Handlers
+; *
+; * Output information about each registered MPEG NDS client.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= may be corrupted (or pointer to error block)
+; *   R1-R6	= may be corrupted
+; *   R7-R11	= must be preserved
+; *   R12	= may be corrupted
+; *   R13	= must be preserved
+; *   R14	= may be corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+MPEGDescramble_Handlers_Code Entry
+	LDR	R12, [R12]
+	DWriteS	"*$Module_ComponentName._Handlers", LF
+	; Output the list heading...
+	SWI	XOS_WriteS
+	DCB	"$Module_ComponentName registered handlers:", CR, LF, 0
+	ALIGN
+	; Early exit if there are no registered clients...
+	LDR	R4, [R12, #WS_Flags]
+	TST	R4, #FL_ClientRegistered
+	BNE	%FT00
+	DWriteS	"No client", LF
+	SWI	XOS_WriteS
+	DCB	"  <none>", CR, LF, 0
+	ALIGN
+	EXIT
+00	; Output some information about this client...
+	ADR	R0, OPEN_STR
+	DWrite0	R0
+	SWI	XOS_Write0
+	LDR	R0, [R12, #WS_OpenHandler]
+	DHex3	R0
+	BL	Hex8
+	ADR	R0, RESET_STR
+	DWrite0	R0
+	SWI	XOS_Write0
+	LDR	R0, [R12, #WS_ResetHandler]
+	DHex3	R0
+	BL	Hex8
+	ADR	R0, CLOSE_STR
+	DWrite0	R0
+	SWI	XOS_Write0
+	LDR	R0, [R12, #WS_CloseHandler]
+	DHex3	R0
+	BL	Hex8
+	ADR	R0, DESCRAM_STR
+	DWrite0	R0
+	SWI	XOS_Write0
+	LDR	R0, [R12, #WS_DescrambleHandler]
+	DHex3	R0
+	BL	Hex8
+	SWIVC	XOS_NewLine
+	DWriteC	LF
+	EXIT
+OPEN_STR DCB	CR, LF, "  OpenStream_Handler()  - &", 0
+RESET_STR DCB	CR, LF, "  ResetStream_Handler() - &", 0
+CLOSE_STR DCB	CR, LF, "  CloseStream_Handler() - &", 0
+DESCRAM_STR DCB	CR, LF, "  Descrambler_Handler() - &", 0
+	ALIGN
+
+
+; ****************************************************
+; *
+; * Output the number in R0 to all active output streams as an eight-nibble
+; * hexadecimal string.
+; *
+; * In...
+; *   R0	= number to output
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R13	= preserved
+; *   R14	= corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+Hex8	Entry
+	SUB	SP, SP, #12
+	MOV	R1, SP
+	MOV	R2, #12
+	SWI	XOS_ConvertHex8
+	SWIVC	XOS_Write0
+	ADD	SP, SP, #12
+	EXIT
+
+
+  [ DEBUG
+; ****************************************************
+; *
+; * *MPEGDescramble_DebugSave <filename>
+; *
+; * Save the debug dynamic area as a text file. DEBUG BUILDS ONLY.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= may be corrupted (or pointer to error block)
+; *   R1-R6	= may be corrupted
+; *   R7-R11	= must be preserved
+; *   R12	= may be corrupted
+; *   R13	= must be preserved
+; *   R14	= may be corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+MPEGDescramble_DebugSave_Code Entry
+	LDR	R12, [R12]
+	DWriteS	"*$Module_ComponentName._DebugSave", LF
+	TEQ	R1, #1
+	BNE	DebugSave_Err
+	MOV	R1, R0
+	BL	SWI_DebugStuff
+	DSave
+	EXIT
+DebugSave_Err
+	ADR	R0, DebugSave_ErrBlk
+	SETV
+	EXIT
+DebugSave_ErrBlk
+	DCD	490
+	DCB	"Syntax: *$Module_ComponentName._DebugSave <filename>", 0
+	ALIGN
+  ];DEBUG
+
+
+; ****************************************************
+; *
+; * Module SWI handler entry point.
+; *
+; * In...
+; *   R0-R9	= passed in from caller
+; *   R11	= SWI number offset from SWI chunk base
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R9	= values to return to caller
+; *   R10-R12	= can be corrupted
+; *   R13	= must be preserved
+; *   R14	= can be corrupted
+; *   N,Z,C	= corrupted
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+Mod_SWIHandler
+	ROUT
+	LDR	R12, [R12]
+	RSBS	R11, R11, #(swi_end - swi_start) :SHR: 2
+	ADDHS	PC, PC, R11, LSL #2
+	B	BadSWI_Err
+swi_start				; SWI:
+  [ DEBUG
+	B	SWI_DebugWrite0		; 3
+	B	SWI_DebugStuff		; 2
+  ];DEBUG
+	B	SWI_DeregisterHandlers	; 1
+swi_end;B	SWI_RegisterHandlers	; 0
+
+
+; ****************************************************
+; *
+; * SWI RegisterHandlers (0)
+; *
+; * This SWI will register a block of APCS-compatible functions with this
+; * module. Each word in the block pointed to by R1 on entry contains a
+; * pointer to a C function which this module will call.
+; *
+; * In...
+; *   R0	= flags (should be zero)
+; *   R1	= pointer to function pointer block
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R9	= preserved
+; *   R10-R12	= corrupted
+; *   R13	= preserved
+; *   R14	= corrupted
+; *
+SWI_RegisterHandlers Entry "R1"
+	DWriteS	"SWI:Reg", LF
+	; Is there already a client registered?
+	LDR	R0, [R12, #WS_Flags]
+	TST	R0, #FL_ClientRegistered
+	BNE	Reg_Err
+	; No. Is the handler block pointer OK (non-null and word-aligned)?
+	DWriteS	"SWI:Reg:Check R1", LF
+	TEQ	R1, #0
+	BEQ	Null_Err
+	TST	R1, #2_11
+	BNE	Align_Err
+	; Yes. Are the function pointers OK (non-null and word-aligned)?
+	DWriteS	"SWI:Reg:Check ptrs", LF
+	LDMIA	R1, {R1, R10, R11, R14}
+	TEQ	R1, #0
+	TEQNE	R10, #0
+	TEQNE	R11, #0
+	TEQNE	R14, #0
+	BEQ	PtrNull_Err
+	TST	R1, #2_11
+	TSTEQ	R10, #2_11
+	TSTEQ	R11, #2_11
+	TSTEQ	R14, #2_11
+	BNE	PtrAlign_Err
+	; Yes. Store our copy of the function pointers...
+  [ DEBUG
+	Push	LR
+	DWriteS	"SWI:Reg:Store ptrs", LF
+	Pull	LR
+  ]
+	ADD	R0, R12, #WS_OpenHandler
+	STMIA	R0, {R1, R10, R11, R14}
+	; Store the RelocModifiers of the client so we can call its C functions...
+	DWriteS	"SWI:Reg:Copy reloc", LF
+	MOV	R0, SP, LSR #20
+	MOV	R0, R0, LSL #20
+	LDMIA	R0, {R10-R11}
+	ADD	R0, R12, #WS_RelocModifiers
+	STMIA	R0, {R10-R11}
+	; Flag the fact that we've now got a registered client...
+	DWriteS	"SWI:Reg:Set flag", LF
+	LDR	R0, [R12, #WS_Flags]
+	ORR	R0, R0, #FL_ClientRegistered
+	STR	R0, [R12, #WS_Flags]
+	; Now, register our handlers with MPEGCtrl (may return an error)...
+	BL	Init_PDH
+	EXIT
+
+
+; ****************************************************
+; *
+; * SWI DeregisterHandlers (1)
+; *
+; * This SWI is used to deregister a block of functions with this module.
+; * The function pointers within the block should match those passed into
+; * the RegisterHandlers SWI call.
+; *
+; * In...
+; *   R0	= flags (should be zero)
+; *   R1	= pointer to function pointer block
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R9	= preserved
+; *   R10-R11	= corrupted
+; *   R12-R13	= preserved
+; *   R14	= corrupted
+; *
+SWI_DeregisterHandlers Entry "R1"
+	DWriteS	"SWI:Dereg", LF
+	; Is there a client registered?
+	LDR	R0, [R12, #WS_Flags]
+	TST	R0, #FL_ClientRegistered
+	BEQ	Dereg_Err
+	; Yes. Is the handler block pointer OK (non-null and word-aligned)?
+	DWriteS	"SWI:Dereg:Check R1", LF
+	TEQ	R1, #0
+	BEQ	Null_Err
+	TST	R1, #2_11
+	BNE	Align_Err
+	; Yes. Do the function pointers match the registered ones?
+	DWriteS	"SWI:Dereg:Check ptrs", LF
+	Push	"R2-R5"
+	ADD	R0, R12, #WS_OpenHandler
+	LDMIA	R0, {R2-R5}		; Load the ones from our workspace
+	LDMIA	R1, {R1, R10, R11, R14} ; and the ones passed into this SWI
+	TEQ	R1, R2
+	TEQEQ	R10, R3
+	TEQEQ	R11, R4
+	TEQEQ	R14, R5
+	Pull	"R2-R5"
+	BNE	Dereg_Err
+	; Yes. Clear the flag indicating that we've got a registered client...
+	DWriteS	"SWI:Dereg:Clear flag", LF
+	LDR	R0, [R12, #WS_Flags]
+	BIC	R0, R0, #FL_ClientRegistered
+	STR	R0, [R12, #WS_Flags]
+	; Deregister our handlers from MPEGCtrl (if any)...
+	BL	Remove_PDH
+	EXIT
+
+
+  [ DEBUG
+SWI_DebugStuff Entry "R0-R6"
+	LDMIA	R12, {R0-R6}
+	DWriteS	"Flags          = &"
+	DHex3	R0
+	DWriteC	LF
+	DWriteS	"RelocModifiers = &"
+	DHex3	R1
+	DWriteS	" &"
+	DHex3	R2
+	DWriteC	LF
+	DWriteS	"OpenStream()   = &"
+	DHex3	R3
+	DWriteC	LF
+	DWriteS	"ResetStream()  = &"
+	DHex3	R4
+	DWriteC	LF
+	DWriteS	"CloseStream()  = &"
+	DHex3	R5
+	DWriteC	LF
+	DWriteS	"Descramble()   = &"
+	DHex3	R6
+	DWriteC	LF
+	EXIT
+SWI_DebugWrite0 Entry
+	DWrite0	R0
+	EXIT
+  ];DEBUG
+
+
+	GET	Support.s
+	GET	PDH.s
+
+  [ DEBUG
+  ! 0, ""
+  ];DEBUG
+
+	END

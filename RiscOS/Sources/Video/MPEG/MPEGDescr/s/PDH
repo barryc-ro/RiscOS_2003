@@ -1,0 +1,370 @@
+; >s.PDH
+; Copyright © Pace Micro Technology plc, 2003
+; All rights reserved.
+;
+; All routines related to our PayloadDescramblingHandler with MPEGControl.
+
+
+; ******************************************************
+; *
+; * Claim whatever handlers with MPEGControl we require.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted
+; *   R4-R13	= preserved
+; *   R14	= corrupted
+; *
+Init_PDH Entry "R1-R3"
+	DWriteS	"Init_PDH", LF
+	; Is there a PDH registered already?
+	LDR	R1, [R12, #WS_Flags]
+	TST	R1, #FL_PDHRegistered
+	EXIT	NE
+	; No. Register one...
+	DWriteS	"Init_PDH:Do it", LF
+	MOV	R0, #0
+	ADR	R2, PayloadDescramblingHandler
+	MOV	R3, R12
+	SWI	XMPEGControl_RegisterPayloadDescramblingHandler
+  [ DEBUG
+	EXIT	VS
+	DWriteS	"Init_PDH:Flag", LF
+	CLRV
+  ];DEBUG
+	ORRVC	R1, R1, #FL_PDHRegistered
+	STRVC	R1, [R12, #WS_Flags]
+	EXIT
+
+
+; ******************************************************
+; *
+; * Release whatever handlers with MPEGControl we have claimed.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R4	= corrupted
+; *   R5-R13	= preserved
+; *   R14	= corrupted
+; *
+Remove_PDH Entry "R1-R3"
+	DWriteS	"Rmv_PDH", LF
+	; Is there a PDH registered at all?
+	LDR	R1, [R12, #WS_Flags]
+	TST	R1, #FL_PDHRegistered
+	EXIT	EQ
+	; Yes. Remove it...
+	DWriteS	"Rmv_PDH:Do it", LF
+	MOV	R0, #0
+	ADR	R2, PayloadDescramblingHandler
+	MOV	R3, R12
+	SWI	XMPEGControl_DeregisterPayloadDescramblingHandler
+  [ DEBUG
+	EXIT	VS
+	DWriteS	"Rmv_PDH:Flag", LF
+	CLRV
+  ];DEBUG
+	BICVC	R1, R1, #FL_PDHRegistered
+	STRVC	R1, [R12, #WS_Flags]
+	EXIT
+
+
+; ******************************************************
+; *
+; * Despatch the appropriate routine for this payload descrambling handler based
+; * upon the reason code passed in R0. Try to do the most speed-critical
+; * things fastest.
+; *
+; * In...
+; *   R0	= reason code
+; *   R1-R3	= depends upon R0 on entry
+; *   R8-R9	= depends upon R0 on entry
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R2	= depends upon R0 on entry
+; *   R3-R11	= preserved
+; *   R12	= corrupted
+; *   R13	= preserved
+; *   R14	= corrupted
+; *
+PayloadDescramblingHandler ROUT
+	CMP	R0, #PSHReason_DescramblePacket
+	BEQ	PayloadDescramblingHandler_DataTransfer
+	BLO	PayloadDescramblingHandler_OpenStream
+	CMP	R0, #PSHReason_ResetStream
+	BEQ	PayloadDescramblingHandler_ResetStream
+	BLO	PayloadDescramblingHandler_CloseStream
+	; Unknown reason codes do nothing.
+	MOV	PC, LR
+
+
+; ******************************************************
+; *
+; * PAYLOAD DESCRAMBLING HANDLER - OPEN STREAM (REASON 0)
+; *
+; * In...
+; *   R0	= reason code (0)
+; *   R1	= stream flags (as passed to MPEGControl_OpenStream)
+; *   R2	= control stream handle
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= descrambler handle (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R11	= preserved
+; *   R12	= corrupted
+; *   R13	= preserved
+; *   R14	= corrupted
+; *
+PayloadDescramblingHandler_OpenStream Entry "R4"
+	DWriteS	"PDH_Open:Increment", LF
+	; Increment our count of open streams...
+	LDR	R0, [R12, #WS_Flags]
+	ADD	R0, R0, #1 :SHL: FL_StreamCount
+	STR	R0, [R12, #WS_Flags]
+	; Call the client's OpenStream_Handler() function...
+	DWriteS	"PDH_Open:Call", LF
+	MOV	R0, #0
+	MOV	R1, R2
+	LDR	R4, [R12, #WS_OpenHandler]
+	BL	Call_Veneer
+	; Claim and initialise a stream block for this stream...
+	DWriteS	"PDH_Open:Claim SB", LF
+	MOV	R1, R0
+	BL	Claim_SB
+	EXIT
+
+
+; ******************************************************
+; *
+; * PAYLOAD DESCRAMBLING HANDLER - DATA TRANSFER (REASON 1)
+; *
+; * In...
+; *   R0	= reason code (1)
+; *   R1	= flags (should be zero)
+; *   R2	= descrambler handle (stream block pointer)
+; *   R3	= pointer to bitstream packet descriptor chain
+; *   R8	= number of bytes following the bitstream packets in R3 that form part of the same TS packet
+; *   R9	= transport_scrambling_control field for this TS packet, in bits 6 and 7; other bits undefined
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3	= pointer to descriptor for descrambled packet (or zero if descramble failed or we're not done)
+; *   R4-R11	= preserved
+; *   R12	= corrupted
+; *   R13	= preserved
+; *   R14	= corrupted
+; *
+PayloadDescramblingHandler_DataTransfer Entry "R0-R2,R4-R12"
+ DWriteS "PDH_Data:In", LF
+	; Set up registers
+	MOV	R11, R2
+	MOV	R7, R3
+	; Load output buffer pointer
+	LDR	R10, [R11, #SB_BitstreamPtr]
+ Push "R0-R1"
+ DWriteS "  Pkt=&"
+ DHex3	R3
+ DWriteS " Rmn=&"
+ DHex1	R8
+ LDR	R0, [R3, #PacketDescriptor_Flags]
+ DWriteS " Flg=%"
+ DBin2	R0
+ LDR	R0, [R3, #PacketDescriptor_Link]
+ DWriteS " Lnk=&"
+ DHex3	R0
+ LDR	R0, [R3, #PacketDescriptor_Start]
+ DWriteS " Src=&"
+ DHex3	R0
+ LDR	R0, [R3, #PacketDescriptor_Length]
+ DWriteS " Len="
+ DDec3	R0
+ DWriteS " Dst=&"
+ DHex3	R10
+ DNewLine
+; ADRL	R1, DA_FILE
+; DSave
+ Pull	"R0-R1"
+	; Load write pointer
+	LDR	R1, [R10, #PacketDescriptor_Start]
+	; Copy significant bits of descriptor
+ DWriteS "  Init desc", LF
+	LDR	R0, [R3, #PacketDescriptor_Flags]
+	LDR	R14, [R3, #PacketDescriptor_BufferDescriptor]
+	STR	R0, [R10, #PacketDescriptor_Flags]
+	STR	R14, [R10, #PacketDescriptor_BufferDescriptor]
+	; Only copy other stuff if we have to
+	EOR	R0, R0, #PacketDescriptorFlags_FullLengthUnknown
+	TST	R0, #PacketDescriptorFlags_PTSValid :OR: PacketDescriptorFlags_DTSValid :OR: PacketDescriptorFlags_FullLengthUnknown
+	BEQ	Copy
+	ADD	R0, R3, #PacketDescriptor_PTS
+	Push	"R6-R7"
+	LDMIA	R0, {R4-R7, R14}
+	ADD	R0, R10, #PacketDescriptor_PTS
+	STMIA	R0, {R4-R7, R14}
+	Pull	"R6-R7"
+Copy	; Load read pointer and bytes to copy
+	LDR	R0, [R3, #PacketDescriptor_Start]
+	LDR	R2, [R3, #PacketDescriptor_Length]
+	; Avoid overflow
+	ADD	R4, R10, #BITSTREAM_SIZE
+	ADD	R5, R1, R2
+	CMP	R4, R5		; Will copy go past end of buffer?
+	BHS	OK
+	SUBS	R2, R4, R1	; Yes. Make copy smaller
+	MOVMI	R2, #0		; Is there any space at all?
+	BLE	Skip		; No. Don't bother with the copy?
+OK	; Copy bytes
+ DWriteS "  Block_Copy", LF
+ Push	"R0-R1"
+ DWriteS "  Block_Copy Src=&"
+ DHex3	R0
+ DWriteS " Dst=&"
+ DHex3	R1
+ DWriteS " Len="
+ DDec3	R2
+ DNewLine
+; ADRL	R1, DA_FILE
+; DSave
+ Pull	"R0-R1"
+	Push	"R1-R3"
+	BL	Block_Copy
+	Pull	"R1-R3"
+Skip	; Update read pointer
+	ADD	R1, R1, R2
+	; More in chain?
+	LDR	R3, [R3, #PacketDescriptor_Link]
+	TEQ	R3, #0
+	BNE	Copy		; Yes. Loop back to copy
+	; Free the source descriptor chain
+	MOVS	R0, R7
+	BLNE	Call_Bitstream_Free
+	; More bytes to copy?
+	TEQ	R8, #0
+	BNE	Wait		; Yes. Exit with no packet
+	; Got all. Send to client
+	ADD	R2, R10, #DESCRIPTOR_SIZE
+	SUB	R3, R1, R2
+	MOV	R0, R9, LSR #6
+	AND	R0, R0, #2_11
+	LDR	R1, [R11, #SB_ClientHandle]
+	LDR	R4, [R12, #WS_DescrambleHandler]
+ Push	"R0-R1"
+ DWriteS "  Pass to client Flg=%"
+ DBin1	R0
+ DWriteS " Han=&"
+ DHex3	R1
+ DWriteS " Blk=&"
+ DHex3	R2
+ DWriteS " Len="
+ DDec3	R3
+ DNewLine
+; ADRL	R1, DA_FILE
+; DSave
+ Pull	"R0-R1"
+	BL	Call_Veneer
+	; Did descramble work?
+	TEQ	R0, #0
+	BEQ	Wait		; No. Reset packet and exit
+	; Yes. Finish buffer init
+	STR	R3, [R10, #PacketDescriptor_Length]
+	STR	R2, [R10, #PacketDescriptor_Start]
+	MOV	R3, R10
+	; Claim new buffer for next data
+	BL	Bitstream_Claim
+	STR	R2, [R11, #SB_BitstreamPtr]
+ DWriteS "  Pass to Ctrl", LF
+	; Pass finished buffer to MPEGCtrl
+	EXIT
+Wait	; Store new write pointer and wait for more data
+	STRNE	R1, [R10, #PacketDescriptor_Start]	; More bytes to go (update)
+	STREQ	R2, [R10, #PacketDescriptor_Start]	; Descramble failed (reinit)
+ DWriteS "  Wait", LF
+	MOV	R3, #0					; No packet for MPEGCtrl (yet)
+	EXIT
+
+
+; ******************************************************
+; *
+; * PAYLOAD DESCRAMBLING HANDLER - CLOSE STREAM (REASON 2)
+; *
+; * In...
+; *   R0	= reason code (2)
+; *   R1	= flags (as passed to MPEGControl_CloseStream)
+; *   R2	= descrambler handle (stream block pointer)
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R14	= preserved
+; *
+PayloadDescramblingHandler_CloseStream Entry
+	; Decrement our count of open streams (unless zero for some reason)...
+	DWriteS	"PDH_Close:Decrement", LF
+	LDR	R0, [R12, #WS_Flags]
+	MOVS	R14, R0, LSR #FL_StreamCount
+	SUBNE	R0, R0, #1 :SHL: FL_StreamCount
+	STRNE	R0, [R12, #WS_Flags]
+	; Call the client's CloseStream_Handler() function...
+	DWriteS	"PDH_Close:Call", LF
+	MOV	R0, #0
+	LDR	R1, [R2, #SB_ClientHandle]
+	LDR	R4, [R12, #WS_CloseHandler]
+	BL	Call_Veneer
+	; Release the stream block for this stream...
+	DWriteS	"PDH_Close:Free_SB", LF
+	BL	Free_SB
+	EXIT
+
+
+; ******************************************************
+; *
+; * PAYLOAD DESCRAMBLING HANDLER - RESET STREAM (REASON 3)
+; *
+; * In...
+; *   R0	= reason code (3)
+; *   R1	= flags (as passed to MPEGControl_ResetStream)
+; *   R2	= descrambler handle (stream block pointer)
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R11	= preserved
+; *   R12	= corrupted
+; *   R13	= preserved
+; *   R14	= corrupted
+; *
+PayloadDescramblingHandler_ResetStream Entry "R4"
+	; Call the client's ResetStream_Handler() function...
+	DWriteS	"PDH_Reset:Call", LF
+	MOV	R0, #0
+	LDR	R1, [R2, #SB_ClientHandle]
+	LDR	R4, [R12, #WS_ResetHandler]
+	BL	Call_Veneer
+	; Reinitialise the contents of our stream block...
+	DWriteS	"PDH_Reset:Reinit", LF
+	LDR	R1, [R2, #SB_BitstreamPtr]
+;	MOV	R0, #TS_PAYLOAD_SIZE
+;	STR	R0, [R1, #PacketDescriptor_Length]
+	ADD	R0, R1, #DESCRIPTOR_SIZE
+	STR	R0, [R1, #PacketDescriptor_Start]
+;	ADD	R1, R1, #DESCRIPTOR_SIZE
+;	STR	R1, [R2, #SB_BitstreamWrite]
+	EXIT
+
+
+	END

@@ -1,0 +1,571 @@
+; >s.Support
+; Copyright © Pace Micro Technology plc, 2003
+; All rights reserved.
+;
+; Various support routines, mainly those routines which are common
+; to more than one source file.
+
+
+; ******************************************************
+; *
+; * Claim a block of RMA which is specific to the current stream (i.e. the
+; * one we've just had our OpenStream handler called for). Ensure that the
+; * block is sensibly initialised before returning.
+; *
+; * The only way this block will get freed is by a call to our CloseStream
+; * handler for this stream.
+; *
+; * If MPEGDescramble gets killed, we deregister our PDH. This will cause
+; * our CloseStream handler to be called by MPEGCtrl for each open stream.
+; *
+; * In...
+; *   R1	= client's handle
+; *   R12	= module workspace pointer
+; * Out...
+; *   R0	= pointer to claimed stream block (or pointer to error block)
+; *   R1-R13	= preserved
+; *   R14	= corrupted
+; *
+Claim_SB Entry	"R2-R3"
+	DWriteS	"Claim_SB:In", LF
+	; Claim...
+	MOV	R0, #ModHandReason_Claim
+	MOV	R3, #SB_SIZE
+	SWI	XOS_Module
+  [ DEBUG
+	EXIT	VS
+	; Initialise...
+	DWriteS	"Claim_SB:Init", LF
+  ];DEBUG
+	MOVVC	R0, #0
+	MOVVC	R3, R2
+	STRVC	R1, [R3, #SB_ClientHandle]
+	; Claim a bitstream packet (and descriptor) to get started with...
+	DWriteS	"Claim_SB:Bitstream", LF
+	BLVC	Bitstream_Claim
+	STRVC	R2, [R3, #SB_BitstreamPtr]
+	MOVVC	R0, R3
+	; Format of our stream block...
+	;
+	;  0: client handle for calls to it's functions
+	;  4: pointer to the initial bitstream buffer for us to use
+	;
+	EXIT
+
+
+; ******************************************************
+; *
+; * A stream has been closed so we can free our block of data for it.
+; *
+; * In...
+; *   R2	= pointer to stream block
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R13	= preserved
+; *   R14	= corrupted
+; *
+Free_SB	Entry	"R2"
+	DWriteS	"Free_SB:In", LF
+	; Free any bitstream packet that we're using...
+	LDR	R0, [R2, #SB_BitstreamPtr]
+	BL	Bitstream_Free
+	; Now we can free the stream block itself...
+	DWriteS	"Free_SB", LF
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
+	EXIT
+
+
+; ******************************************************
+; *
+; * Pop the head bitstream packet from the free list. Claim a new one if the
+; * free list is empty. Careful with interrupts to preserve atomicity where
+; * necessary.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1	= preserved
+; *   R2	= pointer to bitstream packet descriptor
+; *   R3-R13	= preserved
+; *   R14	= corrupted
+; *
+Bitstream_Claim Entry "R3"
+	; Pop the head item from the free list, if it is not empty...
+	SCPSR	I_bit, 0, R14,, R3
+	LDR	R2, [R12, #WS_FreeList]
+	TEQ	R2, #0
+	LDRNE	R0, [R2, #PacketDescriptor_Link]
+	STRNE	R0, [R12, #WS_FreeList]
+	RestPSR	R3
+	; We've got one. Semi-initialise and return it...
+	TEQ	R2, #0
+	ADDNE	R0, R2, #DESCRIPTOR_SIZE
+	STRNE	R0, [R2, #PacketDescriptor_Start]
+	MOVNE	R0, #0
+	STRNE	R0, [R2, #PacketDescriptor_Link]
+	EXIT	NE
+	; Otherwise, claim and initialise a block of RMA...
+	MOV	R0, #ModHandReason_Claim
+	MOV	R3, #BITSTREAM_SIZE
+	SWI	XOS_Module
+	; Initialise the descriptor for this bitstream buffer...
+	MOVVC	R0, #0
+	STRVC	R0, [R2, #PacketDescriptor_Link]
+	ADRVC	R0, Bitstream_Free
+	STRVC	R0, [R2, #PacketDescriptor_FreeRoutine]
+	STRVC	R12, [R2, #PacketDescriptor_FreeWorkspace]
+	ADDVC	R0, R2, #DESCRIPTOR_SIZE
+	STRVC	R0, [R2, #PacketDescriptor_Start]
+	; Format of our bitstream buffer...
+	;
+	;  0: PacketDescriptor_Link		- next pointer when in free list (zero)
+	;  4: PacketDescriptor_FreeRoutine	- pointer to free routine (Bitstream_Free)
+	;  8: PacketDescriptor_FreeWorkspace	- pointer to free routine's workspace (our module workspace)
+	; 12: PacketDescriptor_Start		- pointer to start of buffered contents
+	; 16: PacketDescriptor_Length		- number of bytes of payload (not initialised yet)
+	; 20: PacketDescriptor_BufferDescriptor	- pointer to buffer descriptor copied when we start filling this buffer (not initialised yet)
+	; 24: PacketDescriptor_Flags		- flags word (not initialised yet)
+	; 28... 184 undefined bytes to accumulate TS packet payload into
+	;
+	EXIT
+
+
+; ******************************************************
+; *
+; * Add the specified bitstream packet(s) to the free list for our module.
+; * This whole thing is an interrupts-off job. It is called directly by
+; * MPEGDriver when the world has finished with this packet.
+; *
+; * This will almost certainly blow-up if we've been killed in the mean
+; * time because it will try to put the packet(s) onto the end of our
+; * free list, which won't exist any more.
+; *
+; * In...
+; *   R0	= bitstream buffer descriptor pointer
+; * Out...
+; *   R0	= corrupted
+; *   R1-R13	= preserved
+; *   R14	= corrupted
+; *
+Bitstream_Free Entry "R1, R11-R12"
+	LDR	R12, [R0, #PacketDescriptor_FreeWorkspace]
+	SCPSR	I_bit, 0, R14,, R11
+00	; Put at head of our free list...
+	LDR	R14, [R0, #PacketDescriptor_Link]
+	LDR	R1, [R12, #WS_FreeList]
+	STR	R0, [R12, #WS_FreeList]
+	STR	R1, [R0, #PacketDescriptor_Link]
+  [ BUF_USAGE
+	; Decrement the usage counter for the buffer from which we originally
+	; copied data, so that client-pull systems know that they may now
+	; free that buffer and fetch more data...
+	LDR	R0, [R0, #PacketDescriptor_BufferDescriptor]
+	LDR	R1, [R0, #BufferDescriptor_Packets]
+	SUB	R1, R1, #1
+	STR	R1, [R0, #BufferDescriptor_Packets]
+  ];BUF_USAGE
+	MOVS	R0, R14
+	BNE	%BT00
+	RestPSR	R11
+	EXIT
+
+
+; ******************************************************
+; *
+; * Free all of the bitstream packets which are in the free list back into the
+; * RMA. Store zero as the free list head pointer to indicate that there are no
+; * packets available.
+; *
+; * Any which are still hanging-around (not in our free list) when we're killed
+; * will be freed later by MPEGDriver by calling the above routine (see note).
+; *
+; * In...
+; *   R12	= module workspace pointer
+; * Out...
+; *   R0-R13	= preserved
+; *   R14	= corrupted
+; *
+Release_Free_List Entry "R0-R3"
+	DWriteS	"ReleaseFreeList:In", LF
+	; Disable interrupts...
+	SCPSR	I_bit, 0, R14,, R3
+	LDR	R2, [R12, #WS_FreeList]
+	; Check that there are entries...
+	TEQ	R2, #0
+	BEQ	%F01
+	; Traverse list and free all...
+	MOV	R0, #ModHandReason_Free
+00	LDR	R1, [R2, #PacketDescriptor_Link]
+	SWI	XOS_Module
+	MOVS	R2, R1
+	BNE	%BT00
+	STR	R2, [R12, #WS_FreeList]
+01	; Restore interrupts and exit...
+	RestPSR	R3
+	DWriteS	"ReleaseFreeList:Out", LF
+	EXIT
+
+
+; ******************************************************
+; *
+; * Call the free routine for the owner of the specified bitstream packet
+; * descriptor chain for each descriptor in turn.
+; *
+; * This is used in the case when we are freeing a bitstream packet
+; * descriptor chain because we've swallowed the packet contents into one
+; * of our own buffers, rather than letting some other part of the MPEG
+; * system free it (i.e. if we'd let it go).
+; *
+; * In...
+; *   R0	= pointer to bitstream packet descriptor chain
+; * Out...
+; *   R0	= corrupted
+; *   R1-R2	= preserved
+; *   R3	= contents of the link field of freed packet
+; *   R4-R14	= preserved
+; *
+Call_Bitstream_Free Entry "R1, R12"
+00	LDR	R1, [R0, #PacketDescriptor_Link]
+	MOV	R12, #0
+	STR	R12, [R0, #PacketDescriptor_Link]
+	LDR	R12, [R0, #PacketDescriptor_FreeWorkspace]
+	MOV	LR, PC
+	LDR	PC, [R0, #PacketDescriptor_FreeRoutine]
+	MOVS	R0, R1
+	BNE	%BT00
+	EXIT
+
+
+  [ BUF_USAGE
+; ******************************************************
+; *
+; * Record a pointer to the buffer usage routine in MPEGControl, which we
+; * require if we're going to stop client-pull systems from exhausting the
+; * RMA.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R13	= preserved
+; *   R14	= corrupted
+; *
+Init_DCI Entry "R0-R5"
+	DWriteS	"Init_DCI:In", LF
+	LDR	R5, [R12, #WS_Flags]
+	TST	R5, #FL_DCIRegistered
+	EXIT	NE
+	DWriteS	"Init_DCI:Do it", LF
+	SUB	SP, SP, #12
+	MOV	R0, #0
+	MOV	R1, #0
+	ADR	R2, TagList
+	MOV	R3, SP
+	MOV	R4, #12
+	SWI	XMPEGControl_Stats
+	LDRVC	R3, [SP, #8]
+	STRVC	R3, [R12, #WS_BufUsageRtn]
+	ADD	SP, SP, #12
+	DWriteS	"Init_DCI:Flags", LF
+	ORR	R5, R5, #FL_DCIRegistered
+	STR	R5, [R12, #WS_Flags]
+	DWriteS	"Init_DCI:Out", LF
+	EXIT
+TagList	DCD	0x000D	; Bitstream buffer usage count modification routine
+	DCD	-1
+
+
+; ******************************************************
+; *
+; * Clear our pointer to the buffer usage routine in MPEGControl.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R13	= preserved
+; *   R14	= corrupted
+; *
+Remove_DCI Entry "R0-R1"
+	DWriteS	"Remove_DCI", LF
+	LDR	R1, [R12, #WS_Flags]
+	TST	R1, #FL_DCIRegistered
+	ADRNE	R0, BufUse_Err
+	STRNE	R0, [R12, #WS_BufUsageRtn]
+	BICNE	R1, R1, #FL_DCIRegistered
+	STRNE	R1, [R12, #WS_Flags]
+	EXIT
+  ];BUF_USAGE
+
+
+; ******************************************************
+; *
+; * Veneer for calling the C function pointed to by R4 on entry. Any parameters
+; * to the function should be passed in R0-R3. On exit, R0 will contain the
+; * result returned by the function (if any).
+; *
+; * As an aside, while the semantics of a register's contents apply to our module,
+; * or are scratch values, we use normal ARM register names. When the contents are
+; * significant to the C function call we're making, we use the APCS register naming
+; * convention.
+; *
+; * In...
+; *   R0-R3	= parameters to pass into C function
+; *   R4	= pointer to C function to call
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= return value or corrupted
+; *   R1-R13	= preserved
+; *   R14	= corrupted
+; *
+Call_Veneer Entry "R1-R3, R10-R12"
+	; Preserve whatever stuff is at the base of the SVC stack...
+	MOV	R10, sp, LSR #20
+	MOV	sl, R10, LSL #20
+	LDMIA	sl, {R11, R14}
+	Push	"R11, R14"
+	; Load our client's relocation modifiers from our module workspace...
+	ADD	R12, R12, #WS_RelocModifiers
+	LDMIA	R12, {R12, R14}
+	MOV	fp, #0
+	; Store them at the base of the SVC stack...
+	STMIA	sl, {R12, R14}
+	ADD	sl, sl, #|_Lib$Reloc$Off|
+	; Branch (with link) into the client function...
+	MOV	fp, #0
+	MOV	lr, pc
+	MOV	pc, R4
+	; Restore the original stuff to the base of the SVC stack...
+	Pull	"R11, R14"
+	SUB	sl, sl, #|_Lib$Reloc$Off|
+	STMIA	sl, {R11, R14}
+	EXIT
+
+
+; ******************************************************
+; *
+; * Copy bytes from one location to another. These blocks are not allowed to
+; * overlap. The size of the block to copy can be from 0 to 0x7FFFFFFF bytes.
+; *
+; * The alignment of the source and destination can be any byte boundary. If
+; * the two blocks are at the same byte alignment, and the block to copy is
+; * sufficiently large, we perform a fast copy using four word LDM/STM pairs.
+; *
+; * If it's a small block (i.e. smaller than 16 bytes), we do a very simple
+; * byte load/store copy loop.
+; *
+; * For larger blocks where the source and destination pointers are not
+; * co-aligned, we do a copy loop using a non-word-aligned load and a
+; * word-aligned store.
+; *
+; * In...
+; *   R0	= pointer to base of source block
+; *   R1	= pointer to base of destination block
+; *   R2	= number of bytes to copy
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0-R1	= corrupted
+; *   R2	= zero
+; *   R3-R5	= corrupted
+; *   R6-R13	= preserved
+; *   R14	= corrupted
+; *
+Block_Copy ROUT
+	; Early exit if there are no bytes to copy...
+	CMP	R2, #0
+	MOVLE	PC, LR
+	; Are there enough bytes to copy to warrent the heavy-duty routine?
+	CMP	R2, #16
+	BLO	%FT09
+	; Early exit if start and end pointers are the same
+	EORS	R4, R0, R1
+	MOVEQ	PC, LR
+	;
+	; *** PUSH LR ONTO STACK ***
+	;
+	Entry
+	; Are both pointers at the same byte alignment?
+	ANDS	R4, R4, #2_11
+	BEQ	%FT06
+	; We've got more than a few bytes to copy and the source and destination
+	; pointers are not at the same byte alignment. So we'll word-align the
+	; destination pointer first, dump any trailing bytes at the end of the
+	; block to copy (leaving only whole words of the destination block). We
+	; can then do the rest of the copy with word loads and stores and some
+	; register shuffling.
+	ANDS	R4, R1, #2_11
+	BEQ	%FT00
+	; Get the destination pointer up to a word boundary...
+	CMP	R4, #2_10
+	LDRB	R3,  [R0], #1
+	LDRLSB	R5,  [R0], #1
+	LDRLOB	R14, [R0], #1
+	STRB	R3,  [R1], #1
+	STRLSB	R5,  [R1], #1
+	STRLOB	R14, [R1], #1
+	RSB	R4, R4, #4
+	SUB	R2, R2, R4
+00	; Get the number of bytes to copy down to a whole number of words...
+	ANDS	R3, R2, #2_11
+	BEQ	%FT01
+	BIC	R2, R2, #2_11
+	ADD	R5, R0, R2
+	ADD	R14, R1, R2
+	CMP	R3, #2_10
+	LDRB	R3, [R5]
+	LDRHSB	R4, [R5, #1]
+	LDRHIB	R5, [R5, #2]
+	STRB	R3, [R14]
+	STRHSB	R4, [R14, #1]
+	STRHIB	R5, [R14, #2]
+01	; Load the first (non-word-aligned) word of the source...
+	AND	R3, R0, #2_11
+	LDR	R4, [R0], #4
+	CMP	R3, #2_10
+	BHI	%FT05
+	BEQ	%FT03
+02	; When dest ptr is word-aligned, src ptr is at word + 1 byte...
+	BIC	R5, R4, #&FF000000
+	LDR	R4, [R0], #4	; Unaligned load
+	SUBS	R2, R2, #4
+	AND	R3, R4, #&FF000000
+	ORR	R3, R3, R5
+	STR	R3, [R1], #4	; Word-aligned store
+	BNE	%BT02
+	EXIT
+03	; When dest ptr is word-aligned, src ptr is at word + 2 bytes...
+	MOV	R14, #&FF00
+	ORR	R14, R14, #&00FF
+04	AND	R5, R4, R14
+	LDR	R4, [R0], #4	; Unaligned load
+	SUBS	R2, R2, #4
+	BIC	R3, R4, R14
+	ORR	R3, R3, R5
+	STR	R3, [R1], #4	; Word-aligned store
+	BNE	%BT04
+	EXIT
+05	; When dest ptr is word-aligned, src ptr is at word + 3 bytes...
+	AND	R5, R4, #&000000FF
+	LDR	R4, [R0], #4	; Unaligned load
+	SUBS	R2, R2, #4
+	BIC	R3, R4, #&000000FF
+	ORR	R3, R3, R5
+	STR	R3, [R1], #4	; Word-aligned store
+	BNE	%BT05
+	EXIT
+06	; The source and destination pointers are at the same alignment.
+	; Get both of the base addresses up to a word boundary...
+	ANDS	R4, R0, #2_11
+	BEQ	%FT07
+	CMP	R4, #2_10
+	LDRB	R3,  [R0], #1
+	LDRLSB	R5,  [R0], #1
+	LDRLOB	R14, [R0], #1
+	STRB	R3,  [R1], #1
+	STRLSB	R5,  [R1], #1
+	STRLOB	R14, [R1], #1
+	RSB	R4, R4, #4
+	SUB	R2, R2, R4
+07	; Copy any bytes at the end of the block so we're left with word
+	; copies...
+	ANDS	R3, R2, #2_11
+	BEQ	%FT08
+	BIC	R2, R2, #2_11
+	ADD	R5, R0, R2
+	ADD	R14, R1, R2
+	CMP	R3, #2_10
+	LDRB	R3, [R5]
+	LDRHSB	R4, [R5, #1]
+	LDRHIB	R5, [R5, #2]
+	STRB	R3, [R14]
+	STRHSB	R4, [R14, #1]
+	STRHIB	R5, [R14, #2]
+08	; The source and destination pointers are both on a word boundary and
+	; any trailing bytes at the end of the block to copy have been copied.
+	; This leaves a simple block of word copies. Keep copying quad-word
+	; blocks until there are less than 16 bytes remaining...
+	CMP	R2, #16
+	ADDLO	PC, PC, R2, LSL #2
+	; Copy four words and loop (or exit if finished)...
+	LDMIA	R0!, {R3-R5, R14}
+	SUBS	R2, R2, #16
+	STMIA	R1!, {R3-R5, R14}
+	BNE	%BT08
+	EXIT
+	; Copy the last word and exit...
+	LDR	R3, [R0], #4
+	Pull	"LR"
+	STR	R3, [R1], #4
+	MOV	PC, LR
+	; Copy the last two words and exit...
+	LDMIA	R0!, {R2, R5}
+	STMIA	R1!, {R2, R5}
+	EXIT
+	DCI	0
+	; Copy the last three words and exit...
+	LDMIA	R0!, {R3-R5}
+	STMIA	R1!, {R3-R5}
+	EXIT
+	DCI	0
+09	; Simple byte copy for when source and destination blocks are at a
+	; different byte alignment and the number of bytes to copy is fairly
+	; small. Simple byte load, byte store loop.
+	LDRB	R4, [R0], #1
+	SUBS	R2, R2, #1
+	STRB	R4, [R1], #1
+	BNE	%BT09
+	MOV	PC, LR
+
+
+; ******************************************************
+; *
+; * Returning errors and defining error blocks.
+; *
+	MACRO
+$lbl	ErrBlk	$str, $regs
+$lbl	ADR	R0, %FT00
+	SETV
+  [ "$regs" = ""
+	MOV	PC, LR
+  |
+	Pull	"$regs"
+  ]
+00	;
+	DCD	ErrBase
+	DCB	"$Module_ComponentName: ", "$str", 0
+	ALIGN
+ErrBase	SETA	ErrBase+1
+	MEND
+
+
+BadSWI_Err Entry
+	ADR	R0, %FT00
+	MOV	R1, #0
+	MOV	R2, #0
+	ADRL	R4, Mod_Title
+	SWI	XMessageTrans_ErrorLookup
+	SETV
+	EXIT
+00	;
+	DCD	0x1E6
+	DCB	"BadSWI", 0
+	ALIGN
+
+NoDie_Err	ErrBlk "Module cannot be killed whilst streams are open", "PC"
+BufUse_Err	ErrBlk "Direct call interface with MPEGControl is not established", ""
+Dereg_Err	ErrBlk "No client has been registered (or function pointers don't match)", "R1,PC"
+Reg_Err		ErrBlk "A descrambling client is already registered", "R1, PC"
+Null_Err	ErrBlk "Handler block pointer (R1) is null", "R1, PC"
+Align_Err	ErrBlk "Handler block pointer (R1) is not word-aligned", "R1, PC"
+PtrNull_Err	ErrBlk "Handler function pointer is null", "R1, PC"
+PtrAlign_Err	ErrBlk "Handler function pointer is not word-aligned", "R1, PC"
+
+
+	END
