@@ -106,6 +106,9 @@ Module_Base
  |
         &       0
  ]
+ [ :LNOT: No32bitCode
+        &       ModuleFlags          - Module_Base
+ ]
 
 Module_Name
         =       "SoundScheduler", 0
@@ -154,6 +157,10 @@ Module_Keywords
 
         ALIGN
 
+ [ :LNOT: No32bitCode
+ModuleFlags
+        DCD     1       ; 32-bit compatible
+ ]
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0-r6 trashable
 
@@ -165,10 +172,10 @@ Tempo_Code ENTRY
         SWI     XOS_ReadUnsigned
         BVS     Parse_Error
         MOVS    r0, r2, LSR #16
-        BNE     Parse_Error
-        MOV     r0, r2
-        SWI     XSound_QTempo
-        EXITS
+        MOVEQ   r0, r2
+        SWIEQ   XSound_QTempo
+        CLRV
+        EXIT
 
 
 Parse_Error
@@ -176,9 +183,9 @@ Parse_Error
 
 ReturnError ; For star command entries
 
-        BL      CopyError
+        BL      CopyError       ; sets V
         PullEnv
-        ORRS    pc, lr, #V_bit
+        MOV     pc, lr
 
         MakeInternatErrorBlock BadSoundParameter,,M00
 
@@ -220,7 +227,8 @@ QSound_Code ALTENTRY
         MOV     r3, r3, LSR #16
         ORR     r3, r3, r6, LSL #16
         SWI     XSound_QSchedule
-        EXITS
+        CLRV
+        EXIT
 
 
 90      ADR     r0, ErrorBlock_BadSoundChannel
@@ -290,12 +298,26 @@ QWrap   *       NBuckets
 ; In    r10, r11 trashable, r12 is QWorkSpace^
 
 SoundQ_SWI_Code ROUT
-
         LDR     wp, [r12]
-        TEQP    pc, #I_bit + SVC_mode   ; Disable IRQ, I think we expect it
+        Push    "R0,R14"
+        MOV     R10, R14, LSR #IF32_26Shift     ; caller I_bit in I32_bit position
+        mrs    ,R10, CPSR               ; Get real PSR if we can
+        AND     R10, R10, #I32_bit      ; R10 now non-zero if interrupts were off
+        PHPSEI  R14, R0
+        Pull    R0
+        BL      Original_SWI_Code
+        Pull    R14
+        MOV     R10,#0
+        mrs  AL,R10,CPSR                ; NOP on pre-ARM6
+        TST     R10,#2_11100            ; EQ if in 26-bit mode - C,V unaltered
+        MOVNE   PC,R14                  ; 32-bit exit: NZ corrupted, CV passed back
+        MOVVCS  PC,R14                  ; 26-bit exit: NZC preserved, V clear
+        ORRVSS  PC,R14,#V_bit           ; 26-bit exit: NZC preserved, V set
+
+Original_SWI_Code
         CMP     r11, #(EndOfJumpTable-JumpTable)/4
         ADDCC   pc, pc, r11, LSL #2
-        MOVS    pc, lr                  ; Reenable caller's IRQ state
+        MOV     pc, lr
 
 JumpTable
         B       SoundQInit
@@ -322,10 +344,10 @@ EndOfJumpTable
 
 SoundQInterface ROUT
 
-        MOV     r0, wp
+        ADDS    r0, wp, #0      ; clears V
         ADR     r1, SoundQSchedule_External
         ADR     r2, SoundQBeat_External
-        MOVS    pc, lr
+        MOV     pc, lr
  ]
 
 ; *****************************************************************************
@@ -333,12 +355,14 @@ SoundQInterface ROUT
 ;       SoundQFullInit - Initialise queue, ignoring whether we're already
 ;                        inside a QInit (called on module init, die, reset)
 
-SoundQFullInit ENTRY
-        TEQP    PC, #SVC_mode + I_bit
+SoundQFullInit ENTRY "r2,r10"
+        PHPSEI  r2, r14
         MOV     r0, #0
         STR     r0, [wp, #TimeSlot]     ; indicate not already in QInit
+        MOV     r10, #I32_bit           ; indicate don't want IRQs enabled
         BL      SoundQInit
-        EXITS                           ; exit restoring I_bit
+        PLP     r2                      ; restore I_bit
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SoundQInit - Initialise Q data structures
@@ -351,11 +375,11 @@ SoundQFullInit ENTRY
 
 SoundQInit ENTRY
         LDR     r0, [wp, #TimeSlot]     ; save so we can spot reentrant QInits
-        MOV     r10, #-1
-        STR     r10, [wp, #TimeSlot]    ; Clear slot
+        MOV     r11, #-1
+        STR     r11, [wp, #TimeSlot]    ; Clear slot
 
-        TST     r14, #I_bit             ; If caller had IRQs on
-        TEQEQP  PC, #SVC_mode
+        TST     r10, #I32_bit           ; If caller had IRQs on
+        WritePSRc SVC_mode, r10, EQ
 
         ADD     r11, wp, #TimeBucket
         LDR     r14, =QWrap
@@ -376,7 +400,7 @@ SoundQInit ENTRY
         CMP     r11, r14
         BLT     %BT20
 
-        TEQP    PC, #SVC_mode+I_bit     ; turn IRQs off again
+        WritePSRc I_bit :OR: SVC_mode, r10 ; turn IRQs off again
         MOV     r10, #DefaultTempo
         STR     r10, [wp, #QTempo]
         CMP     r0, #0                  ; if not in the middle of a QInit ...
@@ -386,7 +410,7 @@ SoundQInit ENTRY
         STR     r0, [wp, #QBeatCount]   ; Disable beat counter
         STR     r0, [wp, #QBeat]        ; And clear beats
         STR     r0, [wp, #QDepth]
-        EXITS                           ; r0=0 to indicate success
+        EXIT                            ; r0=0 to indicate success
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SoundQTempo - Set/Get Sound Q Tempo
@@ -413,7 +437,7 @@ SoundQTempo ROUT
 
 20      MOV     r0, r11, LSL #16        ; return previous value
         MOV     r0, r0, LSR #16
-        MOVS    pc, lr
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  [ bltype
@@ -422,13 +446,15 @@ SoundQTempo ROUT
 ;       r12 = QWorkspace
 ;       r14 = return address, with bits
 
-SoundQBeat_External ROUT
+SoundQBeat_External
+        PHPSEI  r10, r11
+        Push    "r10,lr"
+        BL      SoundQBeat_SWI
+        Pull    "r10,lr"
+        PLP     r10
+        MOV     pc, lr
 
-        MOV     r10, pc                 ; Ensure IRQ disabled
-        ORR     r10, r10, #I_bit
-        TEQP    r10, #0
-
-; .............................................................................
+; ..............................................................................
  ]
 ; SoundQBeat - Set/Get Sound Q Tempo Beat count
 
@@ -448,11 +474,11 @@ SoundQBeat_SWI ROUT
 
         CMP     r0, #0
         LDREQ   r0, [wp, #QBeat]
-        MOVEQS  pc, lr                  ; [read current beat]
+        BEQ     %FT90                   ; [read current beat]
 
         CMN     r0, #1                  ; check for -1 (CMN is like ADDS)
         LDREQ   r0, [wp, #QBeatCount]
-        MOVEQS  pc, lr                  ; [read current beat limit]
+        BEQ     %FT90                   ; [read current beat limit]
 
 ; still MI if negative
 
@@ -462,7 +488,8 @@ SoundQBeat_SWI ROUT
         LDR     r0,  [wp, #QBeatCount]  ; return previous beat count
         STR     r11, [wp, #QBeatCount]
         STRMI   r11, [wp, #QBeat]
-        MOVS    pc, lr
+90      ADDS    r0, r0, #0              ; clear V
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SoundQFree - Check no. of Guaranteed slots!
@@ -482,7 +509,7 @@ SoundQFree ROUT
                                         ; worst case is size/3*16
         LDR     r11, [wp, #QDepth]
         SUB     r0, r0, r11             ; may be negative!
-        MOVS    pc, lr
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  [ bltype
@@ -493,12 +520,14 @@ SoundQFree ROUT
 
 SoundQSchedule_External ROUT
 
-        MOV     r10, pc                 ; Ensure IRQ disabled
-        ORR     r10, r10, #I_bit
-        TEQP    r10, #0
-        B       SoundQSchedule_SWI
+        PHPSEI  r10, r11
+        Push    "r10,lr"
+        BL      SoundQSchedule_SWI
+        Pull    "r10,lr"
+        PLP     r10
+        MOV     pc, lr
 
-; .............................................................................
+; ..............................................................................
  ]
 ; SoundQSchedule - Insert event in Queue
 
@@ -618,42 +647,45 @@ SoundQSchedule_SWI ENTRY "r4-r8"
         ADD     r0, r0, #1
         STR     r0, [wp, #QDepth]
 
-        MOV     r0, #0                  ; success
-        EXITS
+        SUBS    r0, r0, r0              ; success (R0=0, V clear)
+        EXIT
 
 
 ; Out    r7 -> head of list of 3 elements. Flags must be preserved unless fail
-
+;        Well, N and V (necessary for LT condition tests)
+;        If condition LT eixsts at start, must exist at end
+;        NOTE:  If TST sets Z, it must clear N, hence we simply need to set V.
 Get3Elements ; NOROUT
-
+        SETV
         LDR     r7, [wp, #FreeStack]    ; Get 3 elements
 
         LDR     r8, [r7, #FreeLink]
-        TST     r8, #SoundSystemNIL
+        TST     r8, #SoundSystemNIL     ; if Z set, N clear - we rely on this!
         LDREQ   r8, [r8, #FreeLink]
         TSTEQ   r8, #SoundSystemNIL
         LDREQ   r8, [r8, #FreeLink]
         TSTEQ   r8, #SoundSystemNIL
         STREQ   r8, [wp, #FreeStack]
-        MOVEQS  pc, lr                  ; [ok, else drop into ...]
+        MOVEQ   pc, lr                  ; [ok, else drop into ...]
 
 ; QFull
 
 99      MOV     r0, #QFullError         ; failure
-        EXITS
+        CLRV
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-SoundQRemove_SWI ENTRY
+SoundQRemove_SWI ENTRY "r7"
 
-        TEQP    pc, #I_bit + IRQ_mode
+        WritePSRc I_bit :OR: IRQ_mode, r7
         NOP
 
         BL      SoundQRemove            ; MUST be called in IRQ mode
 
-        TEQP    pc, #I_bit + SVC_mode
-        NOP
-        EXITS
+        WritePSRc I_bit :OR: SVC_mode, r7
+        ADDVSS  r0, r0, #0              ; clear V
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SoundQRemove - remove event from Q if within the next R0 ticks
@@ -673,7 +705,7 @@ SoundQRemove ENTRY "r4-r8"
         LDR     r4, [wp, #TimeSlot]     ; get slot pointer
         CMP     r4, #0                  ; if -ve then in middle of QInit
         MOVMI   r0, #-1                 ; so say no more events
-        EXITS   MI
+        EXIT    MI
 
 ; SlotProcess
 
@@ -719,7 +751,7 @@ SoundQRemove ENTRY "r4-r8"
         LDR     r7, [wp, #FreeStack]    ; return storage
         STR     r7, [r8, #FreeLink]     ; to stack
         STR     r8, [wp, #FreeStack]
-        EXITS
+        EXIT
 
 
 ; RemoveBucket - r5 is previous bucket pointer, r6 is EMPTY bucket to discard
@@ -731,13 +763,13 @@ SoundQRemove ENTRY "r4-r8"
         STR     r7, [r6, #FreeLink]
         STR     r6, [wp, #FreeStack]
         STR     r1, [r5, #BucketLink]   ; de-chain bucket
-        B       %BT20                   ; now go back and decrement chain...
+        B       %BT20                   ; now go back and decrement chain....
 
 
 ; AdvanceSlot - FOR ALL BUT R0=0!
 
 60      SUBS    r0, r0, #1 ; decrement count
-        EXITS   MI                      ; Return as r0 was 0
+        EXIT    MI                      ; Return as r0 was 0
 
 ; R0 was > 0 -  real advance...
 
@@ -776,38 +808,45 @@ SoundQRemove ENTRY "r4-r8"
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Two ways into the same lump of code. SKS
 
-SoundQDispatch_SWI ENTRY
+SoundQDispatch_SWI ENTRY "r4"
 
-        TEQP    pc, #I_bit + IRQ_mode
+        WritePSRc I_bit :OR: IRQ_mode, r4
         NOP
 
-        BL      SoundQDispatch_Body     ; MUST be called in IRQ mode
+        BL      SoundQDispatch_Body      ; MUST be called in IRQ mode
 
-        TEQP    pc, #I_bit + SVC_mode
-        NOP
-        EXITS
+        WritePSRc I_bit :OR: SVC_mode, r4
+        ADDVSS  r0, r0, #0              ; clear V
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Must preserve SVC r14 as we will call SWIs (or our clients could)
 
-SoundQDispatch_IRQ ENTRY
+SoundQDispatch_IRQ
+        Push    "r3,r4,lr"
 
-        TEQP    pc, #I_bit + SVC_mode
+        MOV     r4, #0
+        mrs    ,r4, CPSR
+
+        WritePSRc I_bit :OR: SVC_mode, r3
         NOP
         Push    lr_svc
 
-        TEQP    pc, #I_bit + IRQ_mode
+        WritePSRc I_bit :OR: IRQ_mode, r3
         NOP
 
         BL      SoundQDispatch_Body
 
-        TEQP    pc, #I_bit + SVC_mode
+        WritePSRc I_bit :OR: SVC_mode, r3
         NOP
         Pull    lr_svc
 
-        TEQP    pc, #I_bit + IRQ_mode
+        WritePSRc I_bit :OR: IRQ_mode, r3
         NOP
-        EXITS
+        TST     r4, #2_11100
+        LDMEQFD sp!, {r3,r4,pc}^ ; 26-bit mode - flag restoration OK!
+        msr    ,CPSR_f, r4
+        LDMFD   sp!, {r3,r4,pc}
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SoundQDispatch
@@ -832,7 +871,7 @@ SoundDispatchLoop
         BL      SoundQRemove            ; r0 is updated each call
 
         CMP     r0, #0
-        EXITS   MI                      ; [finished. tempo advanced]
+        EXIT    MI                      ; [finished. tempo advanced]
 
         MOV     r4, r0                  ; preserve r0
         Push    "r4-r12"
@@ -867,8 +906,6 @@ SoundControlDispatch ; r2, r3 are packed as per osword
 
 
 SoundDispatchSWI ; r1 is SWI number to execute, with parms r2, r3 (->SWI r0,r1)
-
-  [ {TRUE}   ;StrongARM - avoid dynamic code
         Push    "r2-r7,r10"
         BIC     r10, r1, #&FF000000     ; SWI code
         MOV     r0, r2                  ; Get r0,r1 params
@@ -882,35 +919,6 @@ SoundDispatchSWI ; r1 is SWI number to execute, with parms r2, r3 (->SWI r0,r1)
         SWI     XOS_CallASWI
         Pull    "r2-r7,r10"
         B       SoundDispatchNext
-  |
-        Push    "r2-r7"
-
-        ORR     r4, r1, #&EF000000      ; Build an X-form SWI
-        ORR     r4, r4, #&00020000
-        STR     r4, [wp, #QSWICode+0]
-        LDR     r4, SoundSWIReturn      ; LDMFD sp!, {regs, pc}^
-        STR     r4, [wp, #QSWICode+4]
-
-        MOV     r0, r2                  ; Get r0,r1 params
-        MOV     r1, r3
-
-        MOV     r2, #0                  ; zero all other params
-        MOV     r3, #0
-        MOV     r4, #0
-        MOV     r5, #0
-        MOV     r6, #0
-        MOV     r7, #0
-        Push    pc                      ; Push return address = .+12 -> Pull
-                                        ; Note, for ARM800/StrongARM + , it is .+8
-        ADD     pc, wp, #QSWICode
-
-        NOP                             ;To cope with both +8 and +12
-        Pull    "r2-r7"
-        B       SoundDispatchNext
-
-SoundSWIReturn                          ; Can't trust lr_irq as he may do
-        LDMFD   sp!, {pc}^              ; a SWI that reenables IRQs
-  ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0-r6 trashable
@@ -952,7 +960,7 @@ Initialise_Module ENTRY "r10, r11"      ; Calls internal routine
         MOV     r0, #Service_SoundLevel2Alive
         MOV     r1, #Service_Sound
         SWI     XOS_ServiceCall
-        EXITS
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0-r6 trashable, r10 = fatality indicator
@@ -984,7 +992,8 @@ Finalise_Module ENTRY "r10, r11"        ; Calls internal routine
 
         BL      SoundQFullInit          ; Clear down everything
                                         ; Can't call Level2 SWI anymore
-        EXITS                           ; Mustn't refuse to die
+        CLRV
+        EXIT                            ; Mustn't refuse to die
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1005,7 +1014,7 @@ UService
 
         ENTRY   "r0,r10,r11"            ; Reinitialise the queue on reset
         BL      SoundQFullInit
-        EXITS                           ; Can't raise error from service
+        EXIT                            ; Can't raise error from service
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1043,3 +1052,4 @@ open_messagefile ENTRY r0-r3
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
         END
+
