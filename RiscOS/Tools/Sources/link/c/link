@@ -200,11 +200,20 @@ static struct htable
 struct __link_list {
     struct __link_list *next, *chain;
     struct sym *sy;
+    int patched;
 };
 
 static struct __link_list *g__link_list = 0;
 
-static struct sym *g__head_sym = 0;
+/*
+ * SBrodie: 7-Aug-99: support for distinct linker sets added
+ */
+struct __head_list {
+    struct __head_list *next, *chain;
+    struct sym *sy;
+};
+
+static struct __head_list *g__head_list = 0;
 #endif
 
 
@@ -283,6 +292,7 @@ struct aentry {
     char *areaval;
 #ifdef LINKING_ON_ACORN_RISC_OS
     struct __link_list *area__link_list;   /* static ctors for CFront C++ */
+    struct __head_list *area__head_list;   /* for linker sets */
 #endif
     char name[4];
 };
@@ -1886,6 +1896,7 @@ new_area:
     a->nxt = NULL;
 #ifdef LINKING_ON_ACORN_RISC_OS
     a->area__link_list = 0;
+    a->area__head_list = 0;
 #endif
     nextobjarea = &(a->nxt);
     /* Create a placeholder for the $$Base and $$Limit symbols so that */
@@ -2026,6 +2037,9 @@ static struct hentry *globinsert(const char *name, struct sym *sy, char *id)
     }
 
 #ifdef LINKING_ON_ACORN_RISC_OS
+/* Note that this code has been extended to look for any linker set related symbols,
+ * so any symbol starting __link or __head will be remembered for later.
+ */
 check_for_ctors:
     if (sy->flags & SYM_DEFAT) {
         if (!(sy->flags & SYM_REFAT)) {
@@ -2033,7 +2047,7 @@ check_for_ctors:
                 struct aentry *aep;
                 struct __link_list *__link;
 
-                if (!cplusplusflag) {
+                if (!cplusplusflag && strcmp(name, "__link") == 0) {
                     if (!warned_cpp) {
                         msg(warn_cppignored_nocpp);
                         warned_cpp = 1;
@@ -2043,6 +2057,7 @@ check_for_ctors:
                 aep = sy->area;
                 /*aep->included = 1;*/
                 __link = (struct __link_list *)halloc(sizeof(struct __link_list));
+                __link->patched = 0;
                 __link->next = g__link_list;
                 g__link_list = __link;
                 __link->chain = aep->area__link_list;
@@ -2050,15 +2065,23 @@ check_for_ctors:
                 __link->sy = &nh->h_un.globval->symval;
             }
         } else {
-            if (strcmp(name, "__head") == 0) {
-                if (!cplusplusflag) {
+            if (strncmp(name, "__head", 6) == 0) {
+                struct aentry *aep;
+                struct __head_list *__head;
+                if (!cplusplusflag && strcmp(name, "__head") == 0) {
                     if (!warned_cpp) {
                         msg(warn_cppignored_nocpp);
                         warned_cpp = 1;
                     }
                     return nh;
                 }
-                g__head_sym = &nh->h_un.globval->symval;
+                aep = sy->area;
+                __head = (struct __head_list *)halloc(sizeof(struct __head_list));
+                __head->next = g__head_list;
+                g__head_list = __head;
+                __head->chain = aep->area__head_list;
+                aep->area__head_list = __head;
+                __head->sy = &nh->h_un.globval->symval;
             }
         }
     }
@@ -4061,7 +4084,7 @@ oldsym("!!Image$$DataLimit", "Image$$RW$$Limit",
         {
             if (debugflag ||
 #ifdef LINKING_ON_ACORN_RISC_OS
-                plinkflag && strncmp(h->name+2, "__link", 6) == 0 ||
+                plinkflag && (strncmp(h->name+2, "__link", 6) == 0 || strncmp(h->name+2, "__head", 6) == 0) ||
 #endif
                 plinkflag &&
                 ((gs->symval.flags & SYM_REFDEFMASK) != SYM_LOCALDEFAT ||
@@ -4295,6 +4318,49 @@ static int32 eft_entry(int32 index, int32 type)
         return index * SIMPLE_CODE_STRIDE + inter_LU_data->base;
 }
 
+#ifdef LINKING_ON_ACORN_RISC_OS
+/* sbrodie added this code to rediscover a symbol's textual value.  Does it
+ * need to do all this or can it rely on being embedded in a globsym?  We're
+ * playing it safe for now ... there shouldn't be *too* much of a hit in
+ * doing this.
+ */
+static struct hentry *linker_set_locate(struct sym *s)
+{
+        struct hentry *h;
+
+        for (h = firstglobsym; h; h = h->h_un.globval->next) {
+                if (s == &h->h_un.globval->symval) {
+                        break;
+                }
+        }
+
+	return h;
+}
+
+/* Returns non-zero if the symbol s represents the name specified in sym */
+static int linker_set_namecmp(const char *sym, struct sym *s)
+{
+        struct hentry *h;
+        char *n, *sub1;
+
+	if ((h = linker_set_locate(s)) == NULL) {
+                msg(err_undefsyms);
+                return 0;
+        }
+
+        /* skip #!__link or #!__head - the +0 shuts the compiler up about exceeding array bounds */
+        n = 2 + 2 + 4 + (h->name+0);
+        sub1 = strstr(sym, "_sym_");
+        if (sub1 != NULL) {
+                int clen = sub1 + 5 - sym;
+                return !strncmp(sym, n, clen);
+        }
+
+	/* Enable __link to work still */
+	return !strcmp(sym, n);
+}
+#endif
+
 static void load2(struct aentry *aep)
 {
     char *area, *cp;
@@ -4474,9 +4540,6 @@ nostrback:
         int len, pcrel, addsym, max_ins;
         int32 symno, psave, roffset;
         unsigned32 rflags;
-#ifdef LINKING_ON_ACORN_RISC_OS
-        struct __link_list *__link;
-#endif
 
         if (lastoutarea != aep->h->h_un.areaval)
         {   areaoutposn += lastoutarea->relocs * sizeof(aof_reloc);
@@ -4536,25 +4599,59 @@ final link correctly.
    "_l_l" = "__link_list"                                   V
                                                            ---
 
+
+(03-Aug-99) Kevin has made it retain all symbols starting __link.
+
+(07-Aug-99) (SB) I've made it retain all symbols starting __head too and to
+keep the __head symbols global - if you make them local everything falls
+apart.  I have also removed the global head symbol pointer and replaced it with a
+similar system as for the __link symbols to allow multiples.  This complicates the
+logic below slightly.  When patching up the __link symbols, instead of linking to
+the "next" object, you have to follow the "next" pointers until you find one that
+has an appropriate name (linker_set_namecmp is used to determine that).  Similarly
+the head list needs to search the list to find the first entry for a symbol and
+patch the head to point to it.  All items which are linked *to* are marked as linked
+so that we can generate a diagnostic for unlinked components.
+
  */
 
         if (!plinkflag) {
-                for (__link = aep->area__link_list; __link; __link = __link->chain) {
-                    sy = __link->sy;
-                    assert(sy->area == aep);
-                    cp = area + (sy->value - aep->base);
-                    if (__link->next) {
-                        *(int32 *)cp = __link->next->sy->value;
-                        writereloc(areaoutposn + sy->value - aep->base,1);
-                    }
+                const char *syname;
+                struct hentry *h;
+                struct __link_list *set;
+                struct __head_list *hd;
+                for (set = aep->area__link_list; set; set = set->chain) {
+                        struct __link_list *next;
+                        sy = set->sy;
+                        assert(sy->area == aep);
+                        h = linker_set_locate(sy);
+                        assert(h != NULL);
+                        syname = 2 + 2 + 4 +(h->name+0); /* #! __ link/head; the +0 stops an array bounds warning */
+                        cp = area + (sy->value - aep->base); /* find pointer to object in memory */
+                        for (next = set->next; next; next = next->next) {
+                                if (linker_set_namecmp(syname, next->sy) ) {
+              		        	*(int32 *)cp = next->sy->value;
+                                        next->patched = 1; /* indicate tat something points to this one */
+		                        writereloc(areaoutposn + sy->value - aep->base, 1);
+		                        break;
+                                }
+                        }
                 }
-                if ((sy = g__head_sym) != NULL && aep == sy->area) {
-                    cp = area + (sy->value - aep->base);
-                    __link = g__link_list;
-                    if (__link) {
-                        *(int32 *)cp = __link->sy->value;
-                        writereloc(areaoutposn + sy->value - aep->base,1);
-                    }
+		/* Now go through all the __head* symbols in this area and patch in the first item in the list */
+                for (hd = g__head_list; hd; hd = hd->next) {
+                        h = linker_set_locate(hd->sy);
+                        assert(h != NULL);
+                        if (hd->sy->area != aep) continue;
+                        syname = 2 + 2 + 4 +(h->name+0); /* "#!__head" - the +0 stops a warning */
+                        cp = area + (hd->sy->value - aep->base);
+                        for (set = g__link_list; set; set = set->next) {
+                                if (linker_set_namecmp(syname, set->sy)) {
+                                        *(int32 *)cp = set->sy->value;
+                                        set->patched = 1;
+                                        writereloc(areaoutposn + hd->sy->value - aep->base, 1);
+                                        break;
+                                }
+                        }
                 }
         }
 #endif
@@ -5030,7 +5127,8 @@ static void write_symt(void)
         for (h = firstglobsym;  h != NULL;  h = gs->next)
         {   int32 v, attrs;
 #ifdef LINKING_ON_ACORN_RISC_OS
-            int forcibly_link = plinkflag && strncmp(h->name+2, "__link", 6) == 0;
+            int force_head = plinkflag && (strncmp(h->name+2, "__head", 6) == 0);
+            int forcibly_link = force_head || plinkflag && (strncmp(h->name+2, "__link", 6) == 0);
 #endif
             gs = h->h_un.globval;
             /* WARNING: changes to following expression must be duplicated
@@ -5046,9 +5144,10 @@ static void write_symt(void)
                     continue; /* don't output symbol */
 
 #ifdef LINKING_ON_ACORN_RISC_OS
-            if (forcibly_link) {
+            if (forcibly_link && !force_head) {
                     /* If we forcibly included this symbol, we must now make it local to the output
-                     * AOF file to avoid problems of duplicate symbols in subsequent link phases
+                     * AOF file to avoid problems of duplicate symbols in subsequent link phases.
+                     * Unless it was a __head symbol in which case it MUST remain global.
                      */
                     gs->symval.flags = (gs->symval.flags & ~SYM_REFDEFMASK) | SYM_LOCALDEFAT;
             }
@@ -5446,6 +5545,21 @@ again_for_shl_liby_chunk:
 
     /* do this last (involves a seek back to the start of the file) */
     if (plinkflag && ov == &root) fix_up_header();
+
+#ifdef LINKING_ON_ACORN_RISC_OS
+    /* Check to make sure all the linker sets have been patched up.  We can
+     * afford to generate an error in this case and prevent the link from
+     * completing, because software may be relying on these sets. */
+    if (!plinkflag) {
+        struct __link_list *ll;
+        int ecount = 0;
+        for (ll = g__link_list; ll; ll=ll->next) {
+          if (ll->patched) continue;
+          if (!ecount++) msg(err_unlinked_sets);
+          msg(info_undefsym1(cplusplusname(linker_set_locate(ll->sy)->name+2)));
+        }
+    }
+#endif
 
 #ifdef TARGET_HAS_AOUT
     if (output_type == AOUT && !plinkflag && !debugflag)
@@ -6426,7 +6540,7 @@ RW_base:        if (rw_baseflag) msg(fatal_multflag(ap));
             }
             else if (CiStrEQ(ap, "split"))
                 splitflag = 1;
-/*/* The space in "scat ter" ensures there can never be a match, which is */
+/* XXX: The space in "scat ter" ensures there can never be a match, which is */
 /* what is intended for R1.6. Fix later when -scatter has been developed. */
             else if (CiStrEQ(ap, "scat ter"))
             {   c = SCATTERIMAGE;
