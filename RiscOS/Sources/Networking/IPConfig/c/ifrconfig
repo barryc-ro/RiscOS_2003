@@ -1,23 +1,12 @@
-/*	IFRCONFIG.C
-
-Project : DEC Westminster trial
-Module:
-
-Purpose:
-
-
-History:
-
-Date      Who     Description of change
-===========================================
-24/10/95   CP     Changed bootp loop to do MAX_TRIES bootp, and reset if it
-                  fails rather than retry 8 times, then go to desktop.
-
-                  This is to get around a bug in bootp which means that
-                  only one bootp request is sent, even though there may be
-                  many requests to do it.
-
-***************************************************************************/
+/*
+ * IFConfig (ifrconfig.c)
+ *
+ * Copyright (C) Acorn Computers Ltd. 1998
+ *
+ *
+ * Originally based upon DoBootp/ifrconfig.c
+ *
+ */
 
 #include <stdio.h>
 #include <ctype.h>
@@ -71,7 +60,7 @@ struct sockaddr_in netmask = { 0 };
  * I assume that, by induction, this means that if the request needs
  * to be relayed N times, then this value needs to be at least (N+1)
  */
-#define MAX_TRIES 4
+#define MAX_TRIES 10
 
 /*
  * ifrconfig_set_default_route
@@ -192,21 +181,7 @@ static int set_netmask(int sockid, char *ifname)
 
 #ifdef USECMOS
 
-/* Read an IP address (or 4 byte value) from CMOS.
- */
-static u_long
-ReadLongIPCMOS( int location )
-{
-        union {
-                unsigned char d[4];
-                u_long l;
-        } address;
-
-        ReadIPCMOS(location, address.d);
-        return address.l;
-}
-
-static void SetVarVal( char *var, char *val )
+static void SetVarVal( const char *var, const char *val )
 {
         _kernel_setenv(var, val);
 }
@@ -229,57 +204,60 @@ static int set_ipaddr( int s, char *ifname, struct in_addr *v )
     return 1;
 }
 
-static int use_configured_info( int s, char *ifname )
+static void ifrconfig_set_var(const char *var, unsigned char *ip)
 {
-    if (read_cmos_byte(FLAGCMOS) & FLAGBIT) {
-        struct in_addr v;
+        struct in_addr address;
 
-        v.s_addr = ReadLongIPCMOS( NCIPCMOS );
-     	if ( set_ipaddr(s, ifname, &v) != 0 )
-     	{
-            char buf[PATHSZ];
-
-	    write_tag_msg_nl("IFRUsingSt");
-
-            v.s_addr = ReadLongIPCMOS( SERVERIPCMOS );
-            SetVarVal( SYSVAR_INET_BOOTSERVER, inet_ntoa(v) );
-
-            v.s_addr = ReadLongIPCMOS( GATEWAYIPCMOS );
-            SetVarVal( SYSVAR_INET_GATEWAY, inet_ntoa(v) );
-
-            v.s_addr = ReadLongIPCMOS( NETMASKCMOS );
-            SetVarVal( SYSVAR_INET_ETHERIPMASK, inet_ntoa(v) );
-
-            v.s_addr = ReadLongIPCMOS( DNSIPCMOS );
-            SetVarVal( SYSVAR_INET_RESOLVERS, inet_ntoa(v) );
-
-            ReadStringCMOS( BOOTMOUNTCMOS, buf, PATHSZ );
-            SetVarVal( SYSVAR_INET_BOOTFILE, buf );
-            SetVarVal( SYSVAR_INET_MOUNTPATH, buf );
-
-            return 1;
-        }
-    }
-
-    return 0;
+	memcpy(&address, ip, sizeof(address));
+        SetVarVal(var, inet_ntoa(address));
 }
 
+static int use_configured_info( int s, char *ifname, ip_data *ip )
+{
+    	if (ip->static_flag) {
+     		if ( set_ipaddr(s, ifname, (struct in_addr *) &ip->client_ip) != 0 ) {
+	    		write_tag_msg_nl("IFRUsingSt");
+
+            		SetVarVal( SYSVAR_INET_BOOTFILE, ip->boot_mount);
+            		SetVarVal( SYSVAR_INET_MOUNTPATH, ip->boot_mount );
+
+	    		ifrconfig_set_var(SYSVAR_INET_BOOTSERVER, ip->server_ip);
+	    		ifrconfig_set_var(SYSVAR_INET_GATEWAY, ip->gateway_ip);
+	    		ifrconfig_set_var(SYSVAR_INET_RESOLVERS, ip->dns_ip);
+	    		ifrconfig_set_var(SYSVAR_INET_ADDR_1, ip->addr1_ip);
+	    		ifrconfig_set_var(SYSVAR_INET_ETHERIPMASK, ip->netmask_buffer);
+            		return 1;
+                }
+                else {
+                        /* Static configuration has failed - reset CMOS flag bits so that
+                         * a dynamic boot occurs next time
+                         */
+                        ip->static_flag = 0;
+                        WriteIPData(ip);
+                }
+        }
+
+    	return 0;
+}
 #endif
 
 
 /* ifrconfig
  *
- * This function controlss the dynamic booting process.
+ * This function controls the dynamic booting process.
  */
 int ifrconfig(int s, char *ifname)
 {
+        ip_data ip;
         struct  ifreq ifr;
         int	retries;
+
+	ReadIPData(&ip);
 
 #ifdef USECMOS
         /* Try static IP information first.
          */
-        if ( use_configured_info(s, ifname) == 0 ) {
+        if ( use_configured_info(s, ifname, &ip) == 0 ) {
 #endif
                	if (editconfig_check_keys(keycheck_BOTH_ALTS_AND_SHIFTS)) {
                 	return 0;
@@ -327,6 +305,15 @@ int ifrconfig(int s, char *ifname)
             	write_tag_msg_nl("IFRNDNM");
         }
 
+	if (!ip.static_flag && !ip.dynamic_flag) {
+	        /* Write new data to CMOS and set next boot to use static data */
+	        ReadIPData(&ip);
+	        (void) memcpy(ip.client_ip, &ipaddr.sin_addr, 4);
+	        ip.static_flag = 1;
+	        WriteIPData(&ip);
+	}
+
+
 #ifdef GET_NETMASK_VIA_ICMP
         /* Gets netmask via ICMP (no longer required).
          */
@@ -339,7 +326,7 @@ int ifrconfig(int s, char *ifname)
         }
         netmask.sin_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
 	write_tag_msg("IFRNMIs");
-        printf(": %x\n", ntohl(netmask.sin_addr.s_addr));
+        printf(": %s\n", inet_ntoa(netmask.sin_addr));
 #endif
 
         return 1;
