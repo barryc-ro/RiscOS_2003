@@ -63,6 +63,7 @@ INCLUDES= -IC:,TCPIPLibs:
 # use USE_NETINIT to invoke the NetInit module instead of bringing the network stuff up ourself
 # use SILENT_HUP to ignore the line dropping out from under us, otherwise return to the 'Connect' screen
 # use VERIFY_URL to check the home URL before sending it to the browser and generating an error if it seems bogus
+# use DISALLOW_USER_CONFIRMATION_OF_LOGOUTS to disallow user confirmation of logouts. If this is defined, performing a logout will just go ahead and log the user out without bringing up the confirmation dialogue.
 
 # Override any options by setting the OPTS in the Build options
 
