@@ -1496,16 +1496,16 @@ char * browser_fetch_url(browser_data * b)
 /* browser_current_url()                         */
 /*                                               */
 /* Returns a pointer to the current URL being    */
-/* displayed in a browser window, unless there   */
-/* is none, in which case the fetch URL is       */
-/* given; the pointer may still be NULL though.  */
+/* displayed in a browser window. There may not  */
+/* be one, of course, if a new window is open    */
+/* and no data has been fetched yet - in this    */
+/* case, NULL is returned.                       */
 /*                                               */
 /* Parameters: A pointer to a browser_data       */
 /*             structure relevant to the window. */
 /*                                               */
 /* Returns:    Pointer to the displayed URL, or  */
-/*             the fetch URL if none is          */
-/*             displayed.                        */
+/*             NULL if nothing is displayed.     */
 /*************************************************/
 
 char * browser_current_url(browser_data * b)
@@ -1516,6 +1516,39 @@ char * browser_current_url(browser_data * b)
   /* this function may not call these.                            */
 
   return b->urlddata;
+}
+
+/*************************************************/
+/* browser_base_url()                            */
+/*                                               */
+/* Returns a pointer to the current URL being    */
+/* displayed in a browser window, unless there   */
+/* is none, in which case the fetch URL is       */
+/* given. The pointer may still be NULL though.  */
+/* If there is a base URL for the document, this */
+/* will be returned instead of the actual URL    */
+/* from which the page was fetched.              */
+/*                                               */
+/* The base URL is recorded through an HTMLLib   */
+/* callback function, browser_base_callback.     */
+/*                                               */
+/* Parameters: A pointer to a browser_data       */
+/*             structure relevant to the window. */
+/*                                               */
+/* Returns:    Pointer to the displayed URL, or  */
+/*             the fetch URL if none is          */
+/*             displayed.                        */
+/*************************************************/
+
+const char * browser_base_url(browser_data * b)
+{
+  /* As with browser_current_url, take care not to corrupt the */
+  /* 'tokens' lookup buffer if modifying this function.        */
+
+  if (b->urlbdata && *b->urlbdata) return b->urlbdata;
+  if (b->urlddata && *b->urlddata) return b->urlddata;
+
+  return b->urlfdata;
 }
 
 /*************************************************/
@@ -1545,6 +1578,34 @@ char * browser_current_title(browser_data * b)
   }
 
   return NULL;
+}
+
+/*************************************************/
+/* browser_base_callback()                       */
+/*                                               */
+/* When HTMLLib encounters a BASE tag, it will   */
+/* call this function to let it know what the    */
+/* base URL is. The function is registered in    */
+/* html_get_next_token (FetchHTML.c).            */
+/*                                               */
+/* Parameters: See HTMLLib "htmllib.h".          */
+/*                                               */
+/* Returns:    See HTMLLib "htmllib.h".          */
+/*************************************************/
+
+void browser_base_callback(void * stream, const char * url, const char * target, void * handle)
+{
+  browser_data * b = (browser_data *) handle;
+
+  b->urlbdata    = url;
+  b->targetbdata = target;
+
+  /* When the Fetcher starts to display a new page, it will clear all */
+  /* fields. Because this callback function may be called *before*    */
+  /* the Fetcher gets any data, we need to tell it not to clear the   */
+  /* new base information.                                            */
+
+  b->base_lock = 1;
 }
 
 /*************************************************/
@@ -1936,6 +1997,7 @@ int browser_pointer_check(int eventcode, WimpPollBlock * b, IdBlock * idb, brows
 /*                                               */
 /*             Pointer to an int, in which the X */
 /*             offset into the chunk is placed;  */
+/*                                               */
 /*             Same for the Y offset.            */
 /*                                               */
 /* Returns:    Address of the token the pointer  */
@@ -2251,9 +2313,18 @@ static HStream * browser_get_pointer_token_r(browser_data * b, reformat_cell * c
               )
       {
         int brdr = 0;
+        int lox;
+        int loy;
 
         if (ISOBJECT(tp)) reformat_get_object_size(b, tp, &box);
         else              reformat_get_image_size (b, tp, &box);
+
+        /* Correct for HSPACE / VSPACE */
+
+        box.xmin += HtmlOBJECThspace(tp) * 2; /* 1 'web pixel' = 2 OS units */
+        box.ymin += HtmlOBJECTvspace(tp) * 2;
+        box.xmax -= HtmlOBJECThspace(tp) * 2;
+        box.ymax -= HtmlOBJECTvspace(tp) * 2;
 
         /* Correct for the border size if the image is a link, */
         /* or if this is an Object.                            */
@@ -2268,6 +2339,21 @@ static HStream * browser_get_pointer_token_r(browser_data * b, reformat_cell * c
           box.xmax -= brdr;
           box.ymax -= brdr;
         }
+
+        /* Because of space around image maps, we MUST have the pointer */
+        /* inside the actual image, not over its border or h/vspace, as */
+        /* otherwise we can get invalid coordinates for the image map.  */
+
+        loy = (cell->ldata[line].y + cell->ldata[line].b + box.ymax) - y;
+
+        if (loy < 0 || loy >= (box.ymax - box.ymin)) return NULL;
+
+        lox = x - cx;
+        convert_to_os(lox, &lox);
+        lox -= box.xmin;
+
+        if (ISLINK(tp)) lox -= tp->maxlen * 2;
+        if (lox < 0 || lox >= (box.xmax - box.xmin)) return NULL;
       }
       else
       {
@@ -2304,13 +2390,12 @@ static HStream * browser_get_pointer_token_r(browser_data * b, reformat_cell * c
       if (ox)
       {
         *ox = x - cx;
-
         convert_to_os(*ox, ox);
+        *ox = *ox - box.xmin;
 
         if (ISLINK(tp)) *ox -= tp->maxlen * 2;
         if (*ox < 0) *ox = 0;
-        if (*ox >= box.xmax) *ox = box.xmax - 1;
-
+        if (*ox >= (box.xmax - box.xmin)) *ox = box.xmax - box.xmin - 1;
       }
 
       /* Return the token address */
@@ -2687,6 +2772,15 @@ static _kernel_oserror * browser_redraw_border(browser_data * b, HStream * token
 
   e = reformat_get_image_size(b, token, &r1);
   if (e) return e;
+
+  /* Correct for HSPACE / VSPACE */
+
+  r1.xmin += HtmlOBJECThspace(token) * 2; /* 1 'web pixel' = 2 OS units */
+  r1.ymin += HtmlOBJECTvspace(token) * 2;
+  r1.xmax -= HtmlOBJECThspace(token) * 2;
+  r1.ymax -= HtmlOBJECTvspace(token) * 2;
+
+  /* Work out width and height */
 
   w = r1.xmax - r1.xmin;
   h = r1.ymax - r1.ymin;
@@ -4095,6 +4189,59 @@ int browser_display_local_reference(browser_data * b, char * url_requested, char
   browser_show_named_anchor(b, p1 + 1);
 
   return 1;
+}
+
+/*************************************************/
+/* browser_check_for_request()                   */
+/*                                               */
+/* Looks at the display_request field of the     */
+/* given browser and sees if the page should be  */
+/* scrolled down to meet any request this        */
+/* implies. Intended for use for markers and     */
+/* named in-page anchors during reformatter      */
+/* loops.                                        */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the page.             */
+/*************************************************/
+
+void browser_check_for_request(browser_data * handle)
+{
+  if (handle->display_request == DISPLAY_NAMED)
+  {
+    char    * p;
+    HStream * t;
+
+    t = 0;
+
+    p = fetch_find_name_tag(browser_current_url(handle)) + 1;
+    t = fetch_find_anchor_token(handle, p);
+
+    if (t)
+    {
+      handle->display_request = t;
+      handle->display_offset  = 0;
+      handle->display_vscroll = 0;
+    }
+  }
+
+  if (handle->display_request && handle->display_request != DISPLAY_NAMED)
+  {
+    if (
+         handle->display_request &&
+         browser_show_token(handle,
+                            handle->display_request,
+                            handle->display_offset,
+                            handle->display_vscroll)
+       )
+    {
+      handle->display_request = NULL;
+      handle->display_offset  = 0;
+      handle->display_vscroll = 0;
+    }
+  }
+
+  return;
 }
 
 /*************************************************/

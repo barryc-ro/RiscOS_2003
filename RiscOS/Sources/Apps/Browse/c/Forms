@@ -32,6 +32,8 @@
 #include "FetchPage.h"
 #include "FontManage.h"
 #include "Images.h"
+#include "JavaScript.h"
+#include "Memory.h"
 #include "Redraw.h"
 #include "TokenUtils.h"
 #include "Toolbars.h"
@@ -103,6 +105,53 @@ static wimp_menustr * fe_menu       = NULL; /* The current form menu for SELECTs
 static browser_data * fe_mbrowser   = NULL; /* Browser we clicked menu on for SELECTs */
 static HStream      * fe_mtoken     = NULL; /* Token we clicked menu on for SELECTs   */
 static int            fe_lastkey    = 0;    /* Last key run through form_process_key  */
+
+/* Static function prototypes */
+
+static _kernel_oserror * form_ensure_free         (browser_data * b, int free);
+
+static void            * form_find_record         (browser_data * b, HStream * token, int header);
+
+static _kernel_oserror * form_validate_select     (browser_data * b, HStream * tp, int deflt);
+static _kernel_oserror * form_validate_radio      (browser_data * b, HStream * token);
+
+static _kernel_oserror * form_set_field_space     (browser_data * b, HStream * token, int space);
+static void              form_build_selection     (const int * value, char * selection);
+static char            * form_select_text         (browser_data * b, HStream * tp, char * selection);
+static _kernel_oserror * form_reset_form          (browser_data * b, HStream * token);
+
+static void              form_textarea_find_caret (const char * p, int fh, int * index, int x, int y);
+static void              form_textarea_caretpos   (const char * p, int fh, int index, int * x, int * y);
+static int               form_input_box           (browser_data * b, HStream * tp, BBox * box, int * lh, int * lb, int * fhand);
+
+static _kernel_oserror * form_create_menu         (browser_data * b, HStream * tp);
+static _kernel_oserror * form_start_select_edit   (browser_data * b, HStream * token);
+
+static _kernel_oserror * form_autoscroll          (browser_data * b);
+static _kernel_oserror * form_start_textarea_edit (browser_data * b, HStream * tp, int mode);
+static void              form_check_scroll_field  (browser_data * b, BBox * box, int x, int y, int lh);
+
+static int               form_extend_flex         (void **data, int size);
+static int               form_encode_flex_data    (void ** data, const char * enctype, int start_at);
+static int               form_field_data_size     (browser_data * b, form_field * fp, HStream * tp, unsigned int x, unsigned int y);
+static _kernel_oserror * form_build_data          (browser_data * b, HStream * token, int x, int y, char ** data);
+static _kernel_oserror * form_submit_form         (browser_data * b, HStream * token, int x, int y);
+
+static int               form_cursor_editable     (form_fieldtype type);
+static _kernel_oserror * form_next_field          (int auto_submit, int * used);
+static _kernel_oserror * form_previous_field      (int * used);
+static _kernel_oserror * form_cursor_right        (int * used);
+static _kernel_oserror * form_cursor_bottom       (void);
+static _kernel_oserror * form_cursor_eol          (void);
+static _kernel_oserror * form_cursor_bol          (void);
+static _kernel_oserror * form_cursor_left         (int * used);
+static _kernel_oserror * form_cursor_top          (void);
+static _kernel_oserror * form_cursor_y            (int dir, int * used);
+
+static _kernel_oserror * form_insert_character    (int key, int * used);
+static _kernel_oserror * form_delete_character    (int right);
+static _kernel_oserror * form_delete_from_caret   (void);
+static _kernel_oserror * form_delete_line         (void);
 
 // /*************************************************/
 // /* form_show_edit_token()                        */
@@ -1848,10 +1897,12 @@ static _kernel_oserror * form_create_menu(browser_data * b, HStream * tp)
 
     p++;
 
-    /* String length of the menu text, plus terminator, */
-    /* plus the menu item structure                     */
+    /* String length of the menu text, plus trailing space */
+    /* (the "Stop Wimp thinking it's a keyboard shortcut"  */
+    /* hack), plus terminator, plus the menu item          */
+    /* structure itself.                                   */
 
-    size += strlen(p) + 1 + sizeof(wimp_menuitem);
+    size += strlen(p) + 1 + 1 + sizeof(wimp_menuitem);
 
     /* If this item is wider than the highest recorded so */
     /* far, set 'w' to the width.                         */
@@ -1900,9 +1951,31 @@ static _kernel_oserror * form_create_menu(browser_data * b, HStream * tp)
   mhp->tit_bcol  = 2;
   mhp->work_fcol = 7;
   mhp->work_bcol = 0;
-  mhp->width     = w * 16;  // !! Need to read the font size properly, here.
   mhp->height    = 44;
   mhp->gap       = 0;
+
+  /* Read the system font width and spacing for old Wimp versions */
+
+  {
+    int cwidth, cspacing;
+    int vars[3] = {
+                    BBC_GCharSizeX,
+                    BBC_GCharSpaceX,
+                    -1
+                  };
+
+    if (!bbc_vduvars(vars, vars))
+    {
+      cwidth   = vars[0];
+      cspacing = vars[1];
+
+      mhp->width = (w * cspacing + cwidth) * wimpt_dx(); /* I.e. ((w + 1) - 1) * cspacing + ... */
+    }
+    else
+    {
+      mhp->width = (w + 1) * 16;
+    }
+  }
 
   /* Point to the first item's selected/deselected char */
 
@@ -1949,9 +2022,11 @@ static _kernel_oserror * form_create_menu(browser_data * b, HStream * tp)
 
     p++;
 
-    /* Copy the item text into the buffer */
+    /* Copy the item text into the buffer, with */
+    /* trailing space                           */
 
     strcpy(o, p);
+    strcat(o, " ");
 
     /* Skip past the menu item text */
 
@@ -2440,8 +2515,16 @@ static void form_check_scroll_field(browser_data * b, BBox * box, int x, int y, 
       r.window_handle = b->window_handle;
       r.visible_area  = *box;
 
-      if (dx < 0) r.visible_area.xmax = r.visible_area.xmin - dx;
-      else        r.visible_area.xmin = r.visible_area.xmax - dx;
+      if (dx < 0)
+      {
+        r.visible_area.xmax = r.visible_area.xmin - dx;
+        if (r.visible_area.xmax > box->xmax) r.visible_area.xmax = box->xmax;
+      }
+      else
+      {
+        r.visible_area.xmin = r.visible_area.xmax - dx;
+        if (r.visible_area.xmin < box->xmin) r.visible_area.xmin = box->xmin;
+      }
 
       browser_update(b, &r, 1, 0);
     }
@@ -2455,8 +2538,16 @@ static void form_check_scroll_field(browser_data * b, BBox * box, int x, int y, 
       r.window_handle = b->window_handle;
       r.visible_area  = *box;
 
-      if (dy < 0) r.visible_area.ymin = r.visible_area.ymax + dy * lh;
-      else        r.visible_area.ymax = r.visible_area.ymin + dy * lh;
+      if (dy < 0)
+      {
+        r.visible_area.ymin = r.visible_area.ymax + dy * lh;
+        if (r.visible_area.ymin < box->ymin) r.visible_area.ymin = box->ymin;
+      }
+      else
+      {
+        r.visible_area.ymax = r.visible_area.ymin + dy * lh;
+        if (r.visible_area.ymax > box->ymax) r.visible_area.ymax = box->ymax;
+      }
 
       browser_update(b, &r, 1, 0);
     }
@@ -2925,10 +3016,19 @@ static _kernel_oserror * form_build_data(browser_data * b, HStream * token, int 
 
   if (HtmlFORMmethod(tp) == formmethod_GET && HtmlFORMaction(tp))
   {
-    /* A GET form  - put the URL in */
+    /* A GET form - put the URL in */
 
-    int i;
-    int len = strlen(HtmlFORMaction(tp));
+    int          i;
+    int          len;
+    const char * submit_url = HtmlFORMaction(tp);
+    const char * query;
+
+    /* Is there a query string already in the URL? */
+
+    query = strchr(submit_url, '?');
+
+    if (query) len = query - submit_url;
+    else       len = strlen(submit_url);
 
     /* Only '+1' as whilst we need a field separator and a terminator */
     /* on top, we've already allocated 1 byte above.                  */
@@ -2936,7 +3036,17 @@ static _kernel_oserror * form_build_data(browser_data * b, HStream * token, int 
     i = form_extend_flex((void **) data, len + 1);
     if (i < 0) return make_no_cont_memory_error(5);
 
-    strcpy(*data, HtmlFORMaction(tp));
+    if (query)
+    {
+      strncpy(*data, submit_url, len);
+      (*data)[len] = '\0';
+    }
+    else
+    {
+      strcpy(*data, submit_url);
+    }
+
+    /* Set up the other data */
 
     additions_start      = len + 1;
 
@@ -3138,7 +3248,7 @@ static _kernel_oserror * form_build_data(browser_data * b, HStream * token, int 
 }
 
 /*************************************************/
-/* form_submission_details()                     */
+/* form_submission_information()                 */
 /*                                               */
 /* For a given token within a form, return the   */
 /* URL of submission and a flag to say if the    */
@@ -3179,6 +3289,228 @@ const char * form_submission_information(browser_data * b, HStream * token, int 
   }
 
   return HtmlFORMaction(tp);
+}
+
+/*************************************************/
+/* form_could_load_text_at_pointer               */
+/*                                               */
+/* Can a text file be loaded into the forms      */
+/* element represented by whatever HStream the   */
+/* pointer is over, if this represents such an   */
+/* element? If so, try to do this. Return 1 for  */
+/* success, 0 for failure.                       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             for the browser window the        */
+/*             pointer is over;                  */
+/*                                               */
+/*             Full pathname of the file.        */
+/*                                               */
+/* Returns:    1 if successful, else 0.          */
+/*************************************************/
+
+int form_could_load_text_at_pointer(browser_data * b, const char * pathname)
+{
+  WimpGetPointerInfoBlock p;
+
+  if (!wimp_get_pointer_info(&p))
+  {
+    HStream * tptr = browser_get_pointer_token(b, &p, NULL, NULL);
+    int       ctrl;
+
+    /* Is Ctrl being pressed? We will overwrite the existing */
+    /* value if so, otherwise append to it.                  */
+
+    _swix(OS_Byte,
+          _INR(0,1) | _OUT(1),
+
+          121,
+          129,
+
+          &ctrl);
+
+    if (
+         tptr                                  &&
+         ISBODY(tptr)                          &&
+         (tptr->style & FORM)                  &&
+         (
+           tptr->tagno == TAG_TEXTAREA ||
+           (
+             tptr->tagno == TAG_INPUT &&
+             HtmlINPUTtype(tptr) == inputtype_TEXT
+           )
+         )
+       )
+    {
+      form_field * fp       = form_find_record(b, tptr, 0);
+      FILE       * file     = fopen((char *) pathname, "rb");
+      char       * filtered = NULL;
+      char       * record   = NULL;
+      int          len      = 0;
+      int          end      = 0;
+      int          max;
+      int          c;
+
+      if (tptr->tagno == TAG_TEXTAREA) max = 0;
+      else
+      {
+        max = HtmlINPUTmaxlength(tptr);
+
+        /* For single line writables, must make sure if appending */
+        /* that we don't exceed the value specified in the MAXLEN */
+        /* attribute of the defining INPUT element.               */
+
+        if (
+             !ctrl &&
+             fp    &&
+             (
+               fp->header.type == form_textarea ||
+               fp->header.type == form_text
+             )
+             && fp->value.text
+           )
+        {
+          int elen = strlen(fp->value.text);
+
+          /* If max ends up at 0, this will be misinterpreted as "unlimited" */
+          /* so make sure we set '-1' in this case.                          */
+
+          max -= elen;
+
+          if (!max) max = -1;
+        }
+      }
+
+      /* End any existing edit; we'll be moving the caret to the end of */
+      /* this item in any case.                                         */
+
+      if (fe_browser) form_end_edit(fe_browser, 1, 0);
+
+      if (file)
+      {
+        /* Read the file into memory a byte at a time, screening */
+        /* out control characters as required                    */
+
+        while (!end)
+        {
+          c = fgetc(file);
+
+          /* Allocate another byte of store */
+
+          record   = filtered;
+          filtered = memory_realloc((void *) filtered, len + 1);
+
+          if (!filtered)
+          {
+            filtered = record;
+            end      = 1;
+          }
+
+          if (!end)
+          {
+            int filterit = 1;
+
+            /* Do we strip the character? */
+
+            if (c == EOF || (max != 0 && len >= max))
+            {
+              end      = 1;
+              c        = 0;
+              filterit = 0;
+            }
+            else
+            {
+              if (tptr->tagno == TAG_TEXTAREA)
+              {
+                if (c == 13) c = 10;
+
+                if ((c > 31 && c < 127) || c > 127 || c == 10) filterit = 0;
+              }
+              else
+              {
+                if ((c > 31 && c < 127) || c > 127) filterit = 0;
+              }
+            }
+
+            /* If we should write it, do so */
+
+            if (!filterit)
+            {
+              filtered[len] = (char) c;
+              len ++;
+            }
+          }
+          else
+          {
+            if (len) filtered[len - 1] = '\0';
+          }
+        }
+
+        fclose(file);
+        file = NULL;
+
+        /* Do we have data? */
+
+        if (filtered)
+        {
+          /* This is rather like form_put_field, but it allows appending */
+          /* of data as well as replacement and doesn't try to compare   */
+          /* the existing value at all.                                  */
+
+          int changed = 0;
+
+          if (
+               fp &&
+               (
+                 fp->header.type == form_textarea ||
+                 fp->header.type == form_text
+               )
+               && fp->value.text
+             )
+          {
+            _kernel_oserror * e;
+
+            if (!ctrl) e = form_set_field_space(b, tptr, strlen(fp->value.text) + len);
+            else       e = form_set_field_space(b, tptr, len);
+
+            if (!e)
+            {
+              /* Record may have moved... */
+
+              fp = form_find_record(b, tptr, 0);
+
+              /* Copy the string in */
+
+              if (!ctrl) strcat(fp->value.text, filtered);
+              else       strcpy(fp->value.text, filtered);
+
+              changed = 1;
+            }
+          }
+
+          /* Get rid of the stored data */
+
+          memory_free(filtered);
+
+          /* Redraw the item if changed */
+
+          if (changed) browser_update_token(b, tptr, 0, 0);
+
+          /* Move the caret to the end of the item, setting */
+          /* it up as the currently editing element.        */
+
+          form_start_textarea_edit(b, tptr, 2);
+        }
+
+        /* Whether or not we had data to replace, don't at this stage */
+        /* allow any fetch to continue - flag success                 */
+
+        return 1;
+      }
+    }
+  }
+
+  return 0;
 }
 
 /*************************************************/
@@ -3369,6 +3701,47 @@ _kernel_oserror * form_click_field(browser_data * b, HStream * token, int mode, 
       case form_button:
       {
         browser_flash_token(b, token);
+
+        #ifdef JAVASCRIPT
+
+          {
+            const char * onclick = HtmlINPUTonclick(token);
+            char       * data    = NULL;
+            int          len1;
+            int          len2;
+            int          longest;
+
+            if (onclick)
+            {
+              /* Construct a JavaScript URL with the onclick info */
+
+              longest = len1 = sizeof(JavaScript_URL_Alternative1) - 1;
+              len2           = sizeof(JavaScript_URL_Alternative2) - 1;
+
+              if (len2 > len1) longest = len2;
+
+              data = malloc(strlen(onclick) + longest + 1);
+
+              if (!data) e = make_no_fetch_memory_error(20);
+              else
+              {
+                strcpy(data, JavaScript_URL_Alternative1);
+                strcat(data, onclick);
+
+                e = fetchpage_fetch_targetted(b,
+                                              data,
+                                              HtmlFORMtarget(token),
+                                              NULL,
+                                              controls.ignore_adjust ? 0 : adjust());
+
+                free(data);
+              }
+
+              break;
+            }
+          }
+
+        #endif
 
         /* Tell the user we can't do anything more with this... */
 
@@ -4548,8 +4921,8 @@ _kernel_oserror * form_process_key(browser_data * b, int * key)
 
     switch (*key)
     {
-      case 8:   /* Ctl+H */        e = form_delete_character(0);           break;
-      case 21:  /* Ctl+U */        e = form_delete_line();                 break;
+      case 8:   /* Ctrl+H */       e = form_delete_character(0);           break;
+      case 21:  /* Ctrl+U */       e = form_delete_line();                 break;
       case 27:  /* Escape */       e = form_cancel_edit(b);                break;
       case 30:  /* Home */         e = form_cursor_top();                  break;
       case 127: /* Backspace */    e = form_delete_character(0);           break;
@@ -4568,11 +4941,29 @@ _kernel_oserror * form_process_key(browser_data * b, int * key)
       case akbd_UpK + akbd_Ctl:    e = form_cursor_top();                  break;
       case akbd_DownK + akbd_Ctl:  e = form_cursor_bottom();               break;
 
+      case 10:  /* Ctrl+J */       form_delete_line(); e = form_delete_character(1); break;
+
       default:                     e = form_insert_character(*key, &used); break;
     }
   }
 
-  if (used) *key = 0;
+  if (used)
+  {
+    /* Clear the keyboard buffer for anything other than actual */
+    /* characters. Things can get slow in very large multi-line */
+    /* writables now that you can drop big text files into them */
+
+    if (*key < 32 || *key == 127 || *key > 255)
+    {
+      _swix(OS_Byte,
+            _INR(0, 1),
+
+            21,
+            0);
+    }
+
+    *key = 0;
+  }
 
   return e;
 }
@@ -4644,7 +5035,7 @@ void form_textarea_redraw(browser_data * b, HStream * token, BBox *box, BBox *gw
   nymin = area.ymin > gw->ymin ? area.ymin : gw->ymin;
   nymax = area.ymax < gw->ymax ? area.ymax : gw->ymax;
 
-  /* Conver to pixels ready to set a graphics window */
+  /* Convert to pixels ready to set a graphics window */
 
   nxmin &= ~(wimpt_dx() - 1);
   nymin &= ~(wimpt_dy() - 1);

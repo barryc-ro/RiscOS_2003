@@ -1,0 +1,655 @@
+/***************************************************/
+/* File   : JSdocument.c                           */
+/*                                                 */
+/* Purpose: JavaScript support - document objects. */
+/*          Based in part on source in libmocha    */
+/*          from the Mozilla browser sources.      */
+/*                                                 */
+/* Author : A.D.Hodgkinson                         */
+/*                                                 */
+/* History: 06-May-98: Created.                    */
+/***************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+
+#include "swis.h"
+
+#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+
+#include "svcprint.h"
+#include "Global.h"
+#include "Utils.h"
+
+#include "Browser.h"
+#include "FetchPage.h"
+#include "Filetypes.h"
+#include "Frames.h"
+#include "History.h"
+#include "JavaScript.h"
+#include "JSconsts.h"
+#include "URLutils.h"
+
+#include "JSdocument.h"
+
+#ifdef JAVASCRIPT
+
+  /* Static function prototypes */
+
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_get_property          (JSContext * cx, JSObject * obj, jsval id, jsval * vp);
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_set_property          (JSContext * cx, JSObject * obj, jsval id, jsval * vp);
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_list_properties       (JSContext * cx, JSObject * obj);
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_resolve_name          (JSContext * cx, JSObject * obj, jsval id);
+
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_get_location_property (JSContext * cx, JSObject * obj, jsval id, jsval * vp);
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_set_location_property (JSContext * cx, JSObject * obj, jsval id, jsval * vp);
+
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_constructor           (JSContext * cx, JSObject * obj, uint argc, jsval * argv, jsval *rval);
+  JSDocument                 * jsdocument_new_document          (browser_data * b, JSContext * cx);
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_finalise              (JSContext * cx, JSObject * obj);
+
+  PR_STATIC_CALLBACK(JSBool)   jsdocument_to_string             (JSContext * cx, JSObject * obj, uint argc, jsval * argv, jsval * rval);
+
+  /* Document object property IDs */
+
+  enum doc_slot
+  {
+    DOC_LENGTH          = -1,
+    DOC_ELEMENTS        = -2,
+    DOC_FORMS           = -3,
+    DOC_LINKS           = -4,
+    DOC_ANCHORS         = -5,
+    DOC_APPLETS         = -6,
+    DOC_EMBEDS          = -7,
+    DOC_TITLE           = -8,
+    DOC_URL             = -9,
+    DOC_REFERRER        = -10,
+    DOC_LAST_MODIFIED   = -11,
+    DOC_COOKIE          = -12,
+    DOC_DOMAIN          = -13,
+
+    /* slots below this line are not secured */
+
+    DOC_IMAGES          = -14,
+    DOC_LAYERS          = -15,
+    DOC_LOADED_DATE     = -16,
+    DOC_BG_COLOUR       = -17,
+    DOC_FG_COLOUR       = -18,
+    DOC_LINK_COLOUR     = -19,
+    DOC_VLINK_COLOUR    = -20,
+    DOC_ALINK_COLOUR    = -21,
+    DOC_WIDTH           = -22,
+    DOC_HEIGHT          = -23
+  };
+
+  /* Document object properties */
+
+  static JSPropertySpec jsdocument_properties[] =
+  {
+    { lm_length_str,  DOC_LENGTH,        JSPROP_READONLY                    },
+    { "elements",     DOC_ELEMENTS,      JSPROP_READONLY                    },
+    { lm_forms_str,   DOC_FORMS,         JSPROP_ENUMERATE | JSPROP_READONLY },
+    { lm_links_str,   DOC_LINKS,         JSPROP_ENUMERATE | JSPROP_READONLY },
+    { lm_anchors_str, DOC_ANCHORS,       JSPROP_ENUMERATE | JSPROP_READONLY },
+    { lm_applets_str, DOC_APPLETS,       JSPROP_ENUMERATE | JSPROP_READONLY },
+    { lm_embeds_str,  DOC_EMBEDS,        JSPROP_ENUMERATE | JSPROP_READONLY },
+    { lm_plugins_str, DOC_EMBEDS,        JSPROP_READONLY                    },
+    { lm_images_str,  DOC_IMAGES,        JSPROP_ENUMERATE | JSPROP_READONLY },
+    { lm_layers_str,  DOC_LAYERS,        JSPROP_ENUMERATE | JSPROP_READONLY },
+    { "title",        DOC_TITLE,         JSPROP_ENUMERATE | JSPROP_READONLY },
+    { "URL",          DOC_URL,           JSPROP_ENUMERATE | JSPROP_READONLY },
+    { "referrer",     DOC_REFERRER,      JSPROP_ENUMERATE | JSPROP_READONLY },
+    { "lastModified", DOC_LAST_MODIFIED, JSPROP_ENUMERATE | JSPROP_READONLY },
+    { "loadedDate",   DOC_LOADED_DATE,   JSPROP_READONLY                    },
+    { "cookie",       DOC_COOKIE,        JSPROP_ENUMERATE                   },
+    { "domain",       DOC_DOMAIN,        JSPROP_ENUMERATE                   },
+    { "bgColor",      DOC_BG_COLOR,      JSPROP_ENUMERATE                   },
+    { "fgColor",      DOC_FG_COLOR,      JSPROP_ENUMERATE                   },
+    { "linkColor",    DOC_LINK_COLOR,    JSPROP_ENUMERATE                   },
+    { "vlinkColor",   DOC_VLINK_COLOR,   JSPROP_ENUMERATE                   },
+    { "alinkColor",   DOC_ALINK_COLOR,   JSPROP_ENUMERATE                   },
+    { "width",        DOC_WIDTH,         JSPROP_ENUMERATE                   },
+    { "height",       DOC_HEIGHT,        JSPROP_ENUMERATE                   },
+    { 0 }
+  };
+
+  /* Document object methods */
+
+  static JSFunctionSpec doc_methods[] =
+  {
+//  { "clear",         jsdocument_clear,          0 },
+    { "close",         jsdocument_close,          0 },
+    { "open",          jsdocument_open,           1 },
+    { lm_toString_str, jsdocument_to_string,      0 },
+//  { "write",         jsdocument_write,          0 },
+//  { "writeln",       jsdocument_writeln,        0 },
+//  { "captureEvents", jsdocument_capture_events, 1 },
+//  { "releaseEvents", jsdocument_release_events, 1 },
+//  { "getSelection",  jsdocument_get_selection,  0 },
+//  { "getObjectAt",   jsdocument_get_object_at,  0 },
+    { 0}
+  };
+
+  /* Class description for Document object */
+
+  JSClass jsdocument_class =
+  {
+    "Document", JSCLASS_HAS_PRIVATE,
+    JS_PropertyStub,            JS_PropertyStub,         jsdocument_get_property, jsdocument_set_property,
+    jsdocument_list_properties, jsdocument_resolve_name, JS_ConvertStub,          jsdocument_finalize
+  };
+
+  /*************************************************/
+  /* jsdocument_get_property()                     */
+  /*                                               */
+  /* Called when the interpreter is getting the    */
+  /* value of a property in a Document object.     */
+  /*                                               */
+  /* Parameters as standard for an interpreter     */
+  /* handler (callback) function.                  */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_get_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
+  {
+    jsint             slot;
+    JSDocument      * doc;
+    browser_data    * b;
+    const char      * url;
+    url_description * parsed = NULL;
+    JSString        * str    = NULL;
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_get_property: Called\n");
+    #endif
+
+    /* 'id' should be a JS int, which holds the tinyid of the */
+    /* property that is being obtained.                       */
+
+    if (!JSVAL_IS_INT(id)) return JS_TRUE;
+    slot = JSVAL_TO_INT(id);
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_get_property: Slot %d\n", slot);
+    #endif
+
+    doc = JS_GetInstancePrivate(cx,
+                                obj,
+                                &jsdocument_class,
+                                NULL);
+
+    if (!doc) return JS_TRUE;
+    b = doc->decoder;
+
+    /* Get a parsed version of the browser's current */
+
+    url = browser_current_url(b);
+
+    if (!url) parsed = NULL;
+    else      parsed = urlutils_return_description(url);
+
+    /* Deal with the various properties */
+
+    switch (slot)
+    {
+      // DOM style stuff - can't do any of it right now... Would
+      // otherwise return an array of the relevant items as a
+      // JavaScript object.
+
+      case DOC_FORMS:
+      case DOC_LINKS:
+      case DOC_ANCHORS:
+      case DOC_APPLETS:
+      case DOC_EMBEDS:
+      case DOC_IMAGES:
+      case DOC_LAYERS:
+      {
+        if (parsed) urlutils_free_description(parsed);
+        return JS_TRUE;
+      }
+      break;
+
+      /* Current document title */
+
+      case DOC_TITLE:
+      {
+        char title[Limits_Title];
+
+        if (
+             window_get_title(0,
+                              b->self_id,
+                              title,
+                              sizeof(title),
+                              NULL)
+           )
+           *title = 0;
+
+        else title[sizeof(title) - 1] = 0;
+
+        if (*title) str = JS_NewStringCopyZ(cx, title);
+        else        str = JSVAL_TO_STRING(JS_GetEmptyStringValue(cx));
+      }
+      break;
+
+      /* Current document URL */
+
+      case DOC_URL:
+      {
+        if (parsed && parsed->full) str = JS_NewStringCopyZ(cx, parsed->full);
+        else if (url)               str = JS_NewStringCopyZ(cx, url);
+        else                        str = JSVAL_TO_STRING(JS_GetEmptyStringValue(cx));
+      }
+      break;
+
+      // Can't do these yet...
+
+      case DOC_REFERRER:
+      case DOC_LAST_MODIFIED:
+      case DOC_LOADED_DATE:
+      case DOC_COOKIE:
+      case DOC_DOMAIN:
+      {
+        if (parsed) urlutils_free_description(parsed);
+        return JS_TRUE;
+      }
+      break;
+
+      /* Document size */
+
+      case DOC_WIDTH:
+      {
+        *vp = INT_TO_JSVAL(b->display_extent / 2); /* 1 'web pixel' = 2 OS units */
+
+        if (parsed) urlutils_free_description(parsed);
+        return JS_TRUE;
+      }
+      break;
+
+      case DOC_HEIGHT:
+      {
+        *vp = INT_TO_JSVAL(reformat_return_extent(b, b->cell) / 2); /* 1 'web pixel' = 2 OS units */
+
+        if (parsed) urlutils_free_description(parsed);
+        return JS_TRUE;
+      }
+      break;
+
+      /* Document colours */
+
+      case DOC_BG_COLOUR:
+      {
+        char buf[8];
+
+        sprintf(buf, "#%06x", b->background_colour);
+        str = JS_NewStringCopyZ(cx, buf);
+      }
+      break;
+
+      case DOC_FG_COLOUR:
+      {
+        char buf[8];
+
+        sprintf(buf, "#%06x", b->text_colour);
+        str = JS_NewStringCopyZ(cx, buf);
+      }
+      break;
+
+      case DOC_LINK_COLOUR:
+      {
+        char buf[8];
+
+        sprintf(buf, "#%06x", b->link_colour);
+        str = JS_NewStringCopyZ(cx, buf);
+      }
+      break;
+
+      case DOC_ALINK_COLOUR:
+      {
+        char buf[8];
+
+        sprintf(buf, "#%06x", b->followed_colour);
+        str = JS_NewStringCopyZ(cx, buf);
+      }
+      break;
+
+      case DOC_VLINK_COLOUR:
+      {
+        char buf[8];
+
+        sprintf(buf, "#%06x", b->used_colour);
+        str = JS_NewStringCopyZ(cx, buf);
+      }
+      break;
+
+      /* Don't modify user-defined methods or properties */
+
+      default:
+      {
+        if (parsed) urlutils_free_description(parsed);
+        return JS_TRUE;
+      }
+      break;
+    }
+
+    /* Duplicate str; throw away the parsed URL */
+    /* and any temporary string data.           */
+
+    if (!str) return JS_FALSE;
+
+    else *vp = STRING_TO_JSVAL(str);
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_get_property: Successful\n");
+    #endif
+
+    return JS_TRUE;
+  }
+
+  /*************************************************/
+  /* jsdocument_set_property()                     */
+  /*                                               */
+  /* Called when the interpreter is setting the    */
+  /* value of a property in a Document object.     */
+  /*                                               */
+  /* Parameters as standard for an interpreter     */
+  /* handler (callback) function.                  */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_get_property(JSContext * cx, JSObject * obj, jsval id, jsval * vp)
+  {
+    JSDocument      * doc;
+    browser_data    * b;
+    JSString        * str    = NULL;
+    url_description * parsed = NULL;
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_set_property: Called\n");
+    #endif
+
+    /* Is this a URL object or a Location object? */
+
+    doc = JS_GetInstancePrivate(cx,
+                                obj,
+                                &jsdocument_class,
+                                NULL);
+
+// Something similar to this is needed to resolve threading
+// issues according to libmocha, but may not be a problem here
+//
+//    /* If the property is setting an event handler, find out now */
+//
+//    if (JSVAL_IS_STRING(id))
+//    {
+//      prop_name = JS_GetStringBytes(JSVAL_TO_STRING(id));
+//
+//      if (prop_name)
+//      {
+//        if (
+//             !utils_strcasecmp(prop_name, lm_onClick_str)     ||
+//             !utils_strcasecmp(prop_name, lm_onMouseDown_str) ||
+//             !utils_strcasecmp(prop_name, lm_onMouseOver_str) ||
+//             !utils_strcasecmp(prop_name, lm_onMouseOut_str)  ||
+//             !utils_strcasecmp(prop_name, lm_onMouseUp_str)
+//           )
+//        {
+//          // Set a flag for the anchor structure within HTMLLib?
+//          // - not sure how to approach this.
+//
+//          #ifdef TRACE
+//            if (tl & (1u<<24)) Printf("jsdocument_set_property: \0211Can't set event handler for object\0217\n");
+//          #endif
+//
+//          return JS_FALSE;
+//        }
+//      }
+//    }
+
+    if (!JSVAL_IS_INT(id)) return JS_TRUE;
+    slot = JSVAL_TO_INT(id);
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_set_property: Slot %d\n", slot);
+    #endif
+
+    // Can't really set any properties, as they won't be reflected
+    // in the document yet.
+
+    switch (slot)
+    {
+      case DOC_COOKIE:
+      case DOC_DOMAIN:
+
+      case DOC_WIDTH:
+      case DOC_HEIGHT:
+
+      case DOC_BG_COLOUR:
+      case DOC_FG_COLOUR:
+      case DOC_LINK_COLOUR:
+      case DOC_VLINK_COLOUR:
+      case DOC_ALINK_COLOUR:
+
+      default:
+      {
+        return jsdocument_get_property(cx, obj, id, vp);
+      }
+      break;
+    }
+  }
+
+  /*************************************************/
+  /* jsdocument_list_properties()                  */
+  /*                                               */
+  /* Help with listing of a Document object's      */
+  /* properties.                                   */
+  /*                                               */
+  /* Parameters: Pointer to interpreter context;   */
+  /*                                               */
+  /*             Pointer to document object.       */
+  /*                                               */
+  /* Returns:    JS_TRUE if successful, JS_FALSE   */
+  /*             if there was an error.            */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_list_properties(JSContext * cx, JSObject * obj)
+  {
+    // Nothing to do at present
+
+    return JS_TRUE;
+  }
+
+  /*************************************************/
+  /* jsdocument_resolve_name()                     */
+  /*                                               */
+  /* Help with resolving of a Document object's    */
+  /* property name.                                */
+  /*                                               */
+  /* Parameters: Pointer to interpreter context;   */
+  /*                                               */
+  /*             Pointer to document object;       */
+  /*                                               */
+  /*             JSVal encoding the property name. */
+  /*                                               */
+  /* Returns:    JS_TRUE if successful, JS_FALSE   */
+  /*             if there was an error.            */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_resolve_name(JSContext * cx, JSObject * obj, jsval id)
+  {
+    // Code goes here to (I think) create a new property if it
+    // doesn't already exist, but not entirely sure what this
+    // is all actually for.
+
+    return jsdocument_list_properties(cx, obj);
+  }
+
+  /*************************************************/
+  /* jsdocument_constructor()                      */
+  /*                                               */
+  /* Constructor function for JS_InitClass for the */
+  /* Document object class.                        */
+  /*                                               */
+  /* Parameters are as standard for a constructor  */
+  /* function.                                     */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_constructor(JSContext * cx, JSObject * obj,
+                                                    uint argc, jsval * argv, jsval *rval)
+  {
+    return JS_TRUE;
+  }
+
+  /*************************************************/
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*                                               */
+  /*************************************************/
+
+  void notmuch(void)
+  {
+    JSObject   * obj;
+    KSPnkect   * parent;
+    JSDocument * doc;
+
+    /* Allocate space for the Document object */
+
+    doc = JS_malloc(cx, sizeof *doc);
+    if (!doc) return NULL;
+
+    memset(doc, 0, sizeof *doc);
+  }
+
+  /*************************************************/
+  /* jsdocument_finalise()                         */
+  /*                                               */
+  /* Get rid of a Document object.                 */
+  /*                                               */
+  /* Parameters are as standard for an interpreter */
+  /* object finalisation callback function.        */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(void) jsdocument_finalise(JSContext * cx, JSObject * obj)
+  {
+    JSDocument * doc;
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_finalise: Called\n");
+    #endif
+
+    doc = JS_GetPrivate(cx, obj);
+
+    if (!doc)
+    {
+      #ifdef TRACE
+        if (tl & (1u<<24)) Printf("jsdocument_finalise: Can't get URL structure; exitting\n");
+      #endif
+
+      return;
+    }
+
+    /* Unlock various things for garbage collection */
+
+    JS_RemoveRoot(cx, &doc->forms);
+    JS_RemoveRoot(cx, &doc->links);
+    JS_RemoveRoot(cx, &doc->anchors);
+    JS_RemoveRoot(cx, &doc->applets);
+    JS_RemoveRoot(cx, &doc->embeds);
+    JS_RemoveRoot(cx, &doc->images);
+    JS_RemoveRoot(cx, &doc->layers);
+
+    /* Throw away the object */
+
+    JS_free(cx, doc);
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_finalise: Successful\n");
+    #endif
+
+    return;
+  }
+
+  /*************************************************/
+  /* jsdocument_to_string()                        */
+  /*                                               */
+  /* Implementation of the Document object         */
+  /* toString() method.                            */
+  /*                                               */
+  /* Parameters are as standard for a JavaScript   */
+  /* method implementation.                        */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_to_string(JSContext * cx, JSObject * obj,
+                                                  uint argc, jsval * argv, jsval * rval)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_to_string: Called\n");
+    #endif
+
+    /* Er, well, this is what libmocha does, anyway... */
+
+    *rval = JS_GetEmptyStringValue(cx);
+
+    return JS_TRUE;
+  }
+
+  /*************************************************/
+  /* jsdocument_open()                             */
+  /*                                               */
+  /* Implementation of the Document object open()  */
+  /* method.                                       */
+  /*                                               */
+  /* Parameters are as standard for a JavaScript   */
+  /* method implementation.                        */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_open(JSContext * cx, JSObject * obj,
+                                             uint argc, jsval * argv, jsval * rval)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_open: Called\n");
+    #endif
+
+    return JS_TRUE;
+  }
+
+  /*************************************************/
+  /* jsdocument_close()                            */
+  /*                                               */
+  /* Implementation of the Document object close() */
+  /* method.                                       */
+  /*                                               */
+  /* Parameters are as standard for a JavaScript   */
+  /* method implementation.                        */
+  /*************************************************/
+
+  PR_STATIC_CALLBACK(JSBool) jsdocument_close(JSContext * cx, JSObject * obj,
+                                              uint argc, jsval * argv, jsval * rval)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("jsdocument_close: Called\n");
+    #endif
+
+    return JS_TRUE;
+  }
+
+#endif

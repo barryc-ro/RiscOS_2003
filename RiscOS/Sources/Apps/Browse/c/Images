@@ -112,7 +112,9 @@ static browser_data * browser_redrawing = NULL;
 
 /* Local compilation options */
 
-#undef TRACE_FETCH_STORE
+#undef  TRACE_FETCH_STORE
+#define FAST_TOKEN_REFERENCE
+#define FAST_TOKEN_REFERENCE_SHIFT 12
 
 // Unimplemented functions:
 
@@ -326,7 +328,7 @@ static browser_data * browser_redrawing = NULL;
 // ****   {
 // ****     if (t->tag == BODY) return HtmlBODYbackground(t);
 // ****   }
-// **** 
+// ****
 // ****   return NULL;
 // **** }
 
@@ -422,20 +424,23 @@ static void image_remove_data(browser_data * b, int image)
 
   remove = idata[image].alloc - idata[image].ualloc;
 
-  /* Need to shuffle the rest of the flex block */
-  /* down and shrink the block, if this isn't   */
-  /* the last image (i.e. p != oldsize).        */
+  if (remove)
+  {
+    /* Need to shuffle the rest of the flex block */
+    /* down and shrink the block, if this isn't   */
+    /* the last image (i.e. p != oldsize).        */
 
-  p = image_data_offset(b,image) + idata[image].alloc;
+    p = image_data_offset(b,image) + idata[image].alloc;
 
-  if (p != oldsize) memmove(ddata + p - remove, ddata + p, oldsize - p);
+    if (p != oldsize) memmove(ddata + p - remove, ddata + p, oldsize - p);
 
-  flex_extend((flex_ptr) &ddata, oldsize - remove);
+    flex_extend((flex_ptr) &ddata, oldsize - remove);
 
-  #ifdef TRACE
-    flexcount -= remove;
-    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-  #endif
+    #ifdef TRACE
+      flexcount -= remove;
+      if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+    #endif
+  }
 
   /* Subtract the amount removed from the alloc field */
   /* and set isize to zero, i.e. we're not storing    */
@@ -483,11 +488,11 @@ static void image_remove_all_data(browser_data * b, int image)
   {
     /* Need to shuffle the rest of the flex block */
     /* down and shrink the block, if this isn't   */
-    /* the last image (i.e. p != oldsize).        */
+    /* the last image                             */
 
     p = image_data_offset(b, image);
 
-    if (p != oldsize) memmove(ddata + p, ddata + p + remove, oldsize - p - remove);
+    if (oldsize - p - remove) memmove(ddata + p, ddata + p + remove, oldsize - p - remove);
 
     flex_extend((flex_ptr) &ddata, oldsize - remove);
 
@@ -783,6 +788,23 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   {
     int test = 1;
 
+    #ifdef FAST_TOKEN_REFERENCE
+
+      /* Must not try to have too many images... */
+
+      if (nimages >= (((unsigned int) 0xffffffff) >> FAST_TOKEN_REFERENCE_SHIFT))
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
+
+        StrNCpy0(erb.errmess,
+                 lookup_token("MaxImages:Too many images.",
+                              0,
+                              0));
+        return &erb;
+      }
+
+    #endif
+
     /* If this is a File URL, check it's not scrap - don't allow cross */
     /* referencing if it is.                                           */
 
@@ -812,9 +834,9 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
         if (
              idata[i].alloc                                            &&  /* The image has data allocated for it                 */
-             !strcmp(url, ddata + image_data_offset(b,i))              &&  /* This holds a URL which matches that passed in       */
              idata[i].xref < 0                                         &&  /* The image doesn't cross reference things itself     */
              idata[i].background == !!background                       &&  /* We're not trying to make a b/g an f/g or vice versa */
+             !strcmp(url, ddata + image_data_offset(b,i))              &&  /* This holds a URL which matches that passed in       */
              (
                !background ||                                              /* This isn't a background image, or...                */
                (
@@ -853,19 +875,22 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   /* Allocate space for the image data */
 
-  if (ok && ddata)
+  if (ok)
   {
-    int oldsize;
+    if (ddata)
+    {
+      int oldsize;
 
-    #ifdef TRACE
-      flexcount += sizeof(image_info);
-      if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-    #endif
+      #ifdef TRACE
+        flexcount += sizeof(image_info);
+        if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+      #endif
 
-    oldsize = flex_size  ((flex_ptr) &ddata);
-    ok      = flex_extend((flex_ptr) &ddata, oldsize + size);
+      oldsize = flex_size  ((flex_ptr) &ddata);
+      ok      = flex_extend((flex_ptr) &ddata, oldsize + size);
+    }
+    else ok   = flex_alloc ((flex_ptr) &ddata, size);
   }
-  else ok   = flex_alloc ((flex_ptr) &ddata, size);
 
   /* Throw back an error if out of memory */
 
@@ -940,7 +965,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   // of this may offset the gains in image_data_offset.
   //
   // if (!nimages) idata[nimages].dataoffset = 0;
-  // else idata[nimages].dataoffset = idata[nimages - 1].dataoffset + alloc;
+  // else idata[nimages].dataoffset = idata[nimages - 1].dataoffset + idata[nimages - 1].alloc;
 
   /* If the image is not a background one, need to update the */
   /* width and height fields according to any details in the  */
@@ -975,6 +1000,15 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   }
 
   nimages++;
+
+  /* Store the image number */
+
+  #ifdef FAST_TOKEN_REFERENCE
+
+    token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+    token->flags |= (nimages << FAST_TOKEN_REFERENCE_SHIFT);
+
+  #endif
 
   if (!ulen)
   {
@@ -1578,6 +1612,15 @@ static void image_delete_image_entry(int image)
 
       if (idata[i].xref > image) idata[i].xref--;
 
+      /* Update the associated token */
+
+      #ifdef FAST_TOKEN_REFERENCE
+
+        idata[i].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+        idata[i].token->flags |= ((i + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+
+      #endif
+
       /* Did this have a filler function registered for it? */
 
       if (idata[i].hadfiller)
@@ -1683,6 +1726,15 @@ _kernel_oserror * image_discard(browser_data * b)
       idata[xref].hadfirst   = idata[i].hadfirst;
       idata[xref].canredraw  = idata[i].canredraw;
       idata[xref].priority   = idata[i].priority;
+
+      /* Ensure the token is up to date */
+
+      #ifdef FAST_TOKEN_REFERENCE
+
+        idata[xref].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+        idata[xref].token->flags |= ((xref + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+
+      #endif
 
       /* Did the image we're transferring a new owner to have */
       /* RegisterFiller called for it, with the old owner?    */
@@ -1853,6 +1905,25 @@ _kernel_oserror * image_discard(browser_data * b)
   }
 
   _swix(Hourglass_Off, 0);
+
+  #ifdef FAST_TOKEN_REFERENCE
+    #ifdef TRACE
+
+      {
+        for (i = 0; i < nimages; i ++)
+        {
+          if ((idata[i].token->flags >> FAST_TOKEN_REFERENCE_SHIFT) - 1 != i)
+          {
+            Printf("image_discard: \0211Image %d is referenced incorrectly by its token\0217 - correcting...\n", i);
+
+            idata[i].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+            idata[i].token->flags |= ((i + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+          }
+        }
+      }
+
+    #endif
+  #endif
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_discard: Successful\n\n");
@@ -2201,6 +2272,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   /* occurrence.                                                          */
 
   int  i, actual;
+  int  istart, iend;
   BBox whole, partial;
 
   #ifdef TRACE
@@ -2232,7 +2304,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   /* 'xref' field.                                                        */
 
   actual = image;
-  if (idata[image].xref >= 0) image = idata[image].xref;
+  if (idata[actual].xref >= 0) image = idata[actual].xref;
 
   /* If there appears to be no data for the image, or it is less than */
   /* one pixel wide (i.e. not displayable for whatever reason), exit. */
@@ -2264,8 +2336,13 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   /* size for this or cross referencing images and the size is not   */
   /* the same as stored in currw / currh, flag that a reformat is    */
   /* needed for this image.                                          */
+  /*                                                                 */
+  /* Since this is driven by ImageLib suppling data, we only need to */
+  /* do this if the requested image to update holds the image data.  */
 
   if (
+       actual == image                     &&
+
        !idata[actual].hadfirst             &&
        idata[image].istore->width_os  >= 0 &&
        idata[image].istore->height_os >= 0
@@ -2333,11 +2410,17 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
     if (isbackground)
     {
-      for (i = 0; i < nimages; i++)
+      /* (Only update other browsers if the image we were asked to update is */
+      /* holding the actual image data, so the appearance may have changed). */
+
+      if (actual == image)
       {
-        if ((i == image || idata[i].xref == image) && idata[image].fetched)
+        for (i = 0; i < nimages; i++)
         {
-          browser_update_bottom(idata[i].owner, NULL);
+          if ((i == image || idata[i].xref == image) && idata[image].fetched)
+          {
+            browser_update_bottom(idata[i].owner, NULL);
+          }
         }
       }
 
@@ -2345,11 +2428,14 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
     }
   }
 
-  /* Look through all images for cross references */
+  /* Look through images for cross references */
 
   whole.xmin = whole.ymin = 0;
 
-  for (i = 0; i < nimages; i++)
+  if (actual == image) istart = 0,      iend = nimages - 1;
+  else                 istart = actual, iend = actual;
+
+  for (i = istart; i <= iend; i++)
   {
     /* If we're on the current image, or on one which  */
     /* references it, then proceed.                    */
@@ -2492,17 +2578,29 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
               else idata[i].canredraw = 1;
             }
 
-            /* If no reformat was needed, just do a redraw (which clears the  */
-            /* background first; see the very large comment earlier on).      */
+            /* If no reformat was needed, just do a redraw (which clears the */
+            /* background first; see the very large comment earlier on). NB, */
+            /* we don't need to force a redraw if the image is animated as   */
+            /* regardless of whether or not it has a mask, the composition   */
+            /* through the filler function leads to an unmasked image plot   */
+            /* at the end of the day.                                        */
 
             if (do_redraw)
             {
+              int animated, ai;
+
+              if (idata[i].xref >= 0) ai = idata[i].xref;
+              else                    ai = 0;
+
+              if (idata[ai].istore) animated = idata[ai].istore->animated;
+              else                  animated = 0;
+
               image_update_area(idata[i].owner,
                                 x,
                                 y,
                                 &partial,
                                 i,
-                                1);
+                                !animated);
             }
           }
 
@@ -2969,7 +3067,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     /* Render the image over the redraw region, with a scaled plot */
 
-    for (y = redraw.ymax - h + 4; y >= redraw.ymin; y -= h)
+    for (y = redraw.ymax - h + wimpt_dy(); y >= redraw.ymin; y -= h)
     {
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
@@ -3021,7 +3119,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     /* Render the image over the redraw region, with an unscaled plot */
 
-    for (y = redraw.ymax - h + 4; y >= redraw.ymin; y -= h)
+    for (y = redraw.ymax - h + wimpt_dy(); y >= redraw.ymin; y -= h)
     {
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
@@ -3252,7 +3350,7 @@ int image_tile_window(browser_data * b, WimpRedrawWindowBlock * r, int xorigin, 
 
   /* Render the image over the redraw region */
 
-  for (y = ymax - h + 4; y >= r->redraw_area.ymin - h; y -= h)
+  for (y = ymax - h + wimpt_dy(); y >= r->redraw_area.ymin - h; y -= h)
   {
     for (x = xmin; x <= r->redraw_area.xmax; x += w)
     {
@@ -3678,10 +3776,10 @@ int image_count_pending(browser_data * b)
     for (i = 0; i < nimages; i++)
     {
       if (
-           !idata[i].fetched   &&
-           !idata[i].delayed   &&
            idata[i].xref < 0   &&
-           idata[i].owner == b
+           idata[i].owner == b &&
+           !idata[i].fetched   &&
+           !idata[i].delayed
          )
          c++;
     }
@@ -3720,10 +3818,10 @@ int image_count_specific_pending(browser_data * b)
   for (i = 0; i < nimages; i++)
   {
     if (
-         !idata[i].fetched   &&
-         !idata[i].delayed   &&
          idata[i].xref < 0   &&
-         idata[i].owner == b
+         idata[i].owner == b &&
+         !idata[i].fetched   &&
+         !idata[i].delayed
        )
        c++;
   }
@@ -3754,7 +3852,7 @@ int image_count_delayed(browser_data * b)
   {
     int  i;
 
-    for(i = 0; i < nimages; i++)
+    for (i = 0; i < nimages; i++)
     {
       if (
            (
@@ -3850,28 +3948,19 @@ int image_token_plot_started(browser_data * b, HStream * token)
 
 static int image_get_token_image_xref(browser_data * b, HStream * token)
 {
-  int i, found = -1;
+  int found = -1;
+
+  #ifndef FAST_TOKEN_REFERENCE
+    int i;
+  #endif
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_get_token_image_xref: Called\n");
   #endif
 
-  /* If there are any images to deal with... */
+  #ifdef FAST_TOKEN_REFERENCE
 
-  if (nimages)
-  {
-    /* ...then look through them all, seeing if the */
-    /* image is referred to by the given token.     */
-
-    for (i = 0; i < nimages; i++)
-    {
-
-      if (idata[i].token == token && idata[i].owner == b)
-      {
-        found = i;
-        break;
-      }
-    }
+    found = (token->flags >> FAST_TOKEN_REFERENCE_SHIFT) - 1;
 
     /* If an appropriate image was found, ensure it */
     /* is the one with render data attached, not    */
@@ -3881,7 +3970,37 @@ static int image_get_token_image_xref(browser_data * b, HStream * token)
     {
       if (idata[found].xref >= 0) found = idata[found].xref;
     }
-  }
+
+  #else
+
+    /* If there are any images to deal with... */
+
+    if (nimages)
+    {
+      /* ...then look through them all, seeing if the */
+      /* image is referred to by the given token.     */
+
+      for (i = 0; i < nimages; i++)
+      {
+
+        if (idata[i].token == token && idata[i].owner == b)
+        {
+          found = i;
+          break;
+        }
+      }
+
+      /* If an appropriate image was found, ensure it */
+      /* is the one with render data attached, not    */
+      /* just a cross reference image.                */
+
+      if (found >= 0)
+      {
+        if (idata[found].xref >= 0) found = idata[found].xref;
+      }
+    }
+
+  #endif
 
   /* Return the image number, or -1 for failure */
 
@@ -3911,29 +4030,41 @@ static int image_get_token_image_xref(browser_data * b, HStream * token)
 
 static int image_get_token_image_actual(browser_data * b, HStream * token)
 {
-  int i, found = -1;
+  int found = -1;
+
+  #ifndef FAST_TOKEN_REFERENCE
+    int i;
+  #endif
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_get_token_image_actual: Called\n");
   #endif
 
-  /* If there are any images to deal with... */
+  #ifdef FAST_TOKEN_REFERENCE
 
-  if (nimages)
-  {
-    /* ...then look through them all, seeing if the */
-    /* image is referred to by the given token.     */
+    found = (token->flags >> FAST_TOKEN_REFERENCE_SHIFT) - 1;
 
-    for (i = 0; i < nimages; i++)
+  #else
+
+    /* If there are any images to deal with... */
+
+    if (nimages)
     {
+      /* ...then look through them all, seeing if the */
+      /* image is referred to by the given token.     */
 
-      if (idata[i].token == token && idata[i].owner == b)
+      for (i = 0; i < nimages; i++)
       {
-        found = i;
-        break;
+
+        if (idata[i].token == token && idata[i].owner == b)
+        {
+          found = i;
+          break;
+        }
       }
     }
-  }
+
+  #endif
 
   /* Return the image number, or -1 for failure */
 
@@ -4761,6 +4892,11 @@ _kernel_oserror * image_return_click_offset(browser_data * b, HStream * t, WimpG
 
   image_convert_to_pixels(b, t, x, y);
 
+  /* Check for daft values due to rounding etc. */
+
+  if (*x < 0) *x = 0;
+  if (*y < 0) *y = 0;
+
   return NULL;
 }
 
@@ -5011,8 +5147,11 @@ _kernel_oserror * image_export_original(char * path, browser_data * b, HStream *
 
   if (!last_browser->save_file)
   {
+    StrLastE;
+
     fetch_stop(last_browser, 0);
-    RetLastE;
+
+    return &erb;
   }
   else
   {
@@ -5058,8 +5197,11 @@ _kernel_oserror * image_export_original(char * path, browser_data * b, HStream *
       {
         /* Report any errors */
 
+        StrLastE;
+
         fetch_stop(last_browser, 0);
-        RetLastE;
+
+        return &erb;
       }
       else
       {

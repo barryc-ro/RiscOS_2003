@@ -36,6 +36,7 @@
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "Filetypes.h"
 #include "History.h"
+#include "JavaScript.h"
 #include "Save.h" /* (For Save_ScrapFile only)*/
 #include "URLutils.h"
 #include "URLveneer.h"
@@ -74,6 +75,8 @@ static fetcher_state   fetch_state;
 
 static _kernel_oserror * html_allocate_fetch_buffer (void);
 
+static void              html_set_proxy             (unsigned int handle,  const char * url);
+
 static _kernel_oserror * html_build_internal_page   (browser_data * b, flex_ptr source, urlstat * up, char * url, char * ref_url, int ref_size);
 static _kernel_oserror * html_transfer_to_store     (browser_data * b, flex_ptr source, urlstat * up, int r, int * size);
 
@@ -100,6 +103,198 @@ static _kernel_oserror * html_allocate_fetch_buffer(void)
   }
 
   return NULL;
+}
+
+/*************************************************/
+/* html_set_proxy()                              */
+/*                                               */
+/* For a given URL and fetch handle, look in the */
+/* Choices file for proxy details - if something */
+/* relevant is found, set this proxy for the     */
+/* session.                                      */
+/*                                               */
+/* For fetches with a protocol (scheme) matching */
+/* HTTPmethod (URLUtils.h), the tokens UseProxy  */
+/* and ProxyAddress are looked for in Choices.   */
+/* For other fetches, the protocol name is       */
+/* appended to the above; for example, an 'ftp:' */
+/* fetch would look for 'UseProxyftp' and        */
+/* 'ProxyAddressftp'.                            */
+/*                                               */
+/* If the "UseProxy..." entry is "yes" (case     */
+/* insensitive), the "ProxyAddress..." entry is  */
+/* tried. If this is found, the proxy is set.    */
+/*                                               */
+/* Should the URL_Fetcher call made to set the   */
+/* proxy return an error, this error is reported */
+/* immediately; this function then exits cleanly */
+/* (no errors are thrown any higher up).         */
+/*                                               */
+/* In addition, a token "ProxyExclusions" is     */
+/* looked for - this should contain a comma      */
+/* separated list of domains for which no        */
+/* proxying is done. Each domain should begin    */
+/* with a '.'. The domains are compared with the */
+/* right hand part of the host name in the URL   */
+/* and if there's a match, no proxying will be   */
+/* done. If a domain name does not being with a  */
+/* '.', it is taken to be a host name, and an    */
+/* exact match of the complete host name (albeit */
+/* a case insensitive one) is required to block  */
+/* proxying. This allows URLs that rely on the   */
+/* local domain (e.g. "www", "www.internal") to  */
+/* be excluded from proxying without ambiguity.  */
+/*                                               */
+/* Parameters: Fetch handle for the session;     */
+/*                                               */
+/*             URL being fetched                 */
+/*************************************************/
+
+static void html_set_proxy(unsigned int handle,  const char * url)
+{
+  url_description * d             = urlutils_return_description(url);
+  char            * full_protocol = NULL;
+
+  int               use_front_end = 1;
+
+  char              t1[128];
+  char              t2[128];
+
+  if (d && d->host && d->protocol)
+  {
+    /* First thing; see if the domain is listed as one we should not proxy. */
+    /* lookup_choice is defined as looking up into a local buffer, so we    */
+    /* can write zero terminators in this to make the searching easier.     */
+
+    char * exclusions = lookup_choice("ProxyExclusions", 0, 0);
+
+    if (*exclusions && strcmp(exclusions, "!"))
+    {
+      char * next;
+      int    offset;
+      int    hlen = strlen(d->host);
+
+      /* Go through each item in the comma-separated list */
+
+      do
+      {
+        next = strstr(exclusions, ",");
+        if (next) *next = '\0';
+
+        /* Compare only the right hand side of the host name */
+        /* if the entry starts with a '.', or compare the    */
+        /* whole thing if not.                               */
+
+        if (*exclusions == '.')
+        {
+          offset = hlen - strlen(exclusions);
+
+          if (offset >= 0 && !utils_strcasecmp(d->host + offset, exclusions))
+          {
+            /* A domain match - exit without proxying */
+
+            goto html_set_proxy_exit;
+          }
+        }
+        else
+        {
+          if (!utils_strcasecmp(d->host, exclusions))
+          {
+            /* Whole host matches - exit without proxying */
+
+            goto html_set_proxy_exit;
+          }
+        }
+
+        /* If we have another item, advance to read it */
+
+        if (next) exclusions = next + 1;
+      }
+      while (next);
+    }
+
+    /* These are the names we use for HTTP (backwards compatible...) */
+
+    strcpy(t1, "UseProxy");
+    strcpy(t2, "ProxyAddress");
+
+    /* If we don't have an HTTP protocol, construct an appropriate */
+    /* Choices file token name.                                    */
+
+    full_protocol = malloc(strlen(d->protocol) + 2);
+    if (!full_protocol) goto html_set_proxy_exit;
+
+    /* First append a ':' to the url_description's protocol name, */
+    /* so we can compare it to the HTTPmethod scheme string - we  */
+    /* don't want to use a length-limited comparisson as this may */
+    /* foul up with (e.g.) 'http:' and 'https:'. This is also the */
+    /* way that url_set_proxy wants the method specifying.        */
+
+    strcpy(full_protocol, d->protocol);
+    strcat(full_protocol, ":");
+
+    if (utils_strcasecmp(full_protocol, HTTPmethod))
+    {
+      /* The protocol didn't match, so if it'll fit, append the protocol */
+      /* name to the token names filled into t1 and t2 above. If they    */
+      /* won't fit, exit.                                                */
+
+      if (strlen(t1) + strlen(d->protocol) + 1 < sizeof(t1))
+      {
+        strcat(t1, d->protocol);
+      }
+      else goto html_set_proxy_exit;
+
+      if (strlen(t2) + strlen(d->protocol) + 1 < sizeof(t2))
+      {
+        strcat(t2, d->protocol);
+      }
+      else goto html_set_proxy_exit;
+
+      use_front_end = 0;
+    }
+
+    /* We either want to use the HTTP settings - in which case the front-end */
+    /* Choices may have changed, so we should read those and not Choices -   */
+    /* or we may want to go to the Choices file directly.                    */
+
+    if (use_front_end)
+    {
+      if (choices.use_proxy) show_error_ret(url_set_proxy(0,
+                                                          handle,
+                                                          choices.proxy_address,
+                                                          HTTPmethod,
+                                                          0));
+    }
+    else
+    {
+      /* t1 and t2 now say whether or not to use a proxy, and which */
+      /* proxy to use, respectively. So, do we use a proxy?         */
+
+      if (utils_strcasecmp(lookup_choice(t1, 0, 0), "yes")) goto html_set_proxy_exit;
+
+      /* Do we know which one? */
+
+      if (!strcmp(lookup_choice(t2, 0, 0), "!")) goto html_set_proxy_exit;
+
+      /* We have a proxy to use, so set it */
+
+      show_error_ret(url_set_proxy(0,
+                                   handle,
+                                   lookup_choice(t2, 0, 0),
+                                   full_protocol,
+                                   0));
+    }
+  }
+
+  /* Exit, freeing the URL description as we go */
+
+html_set_proxy_exit:
+
+  if (d)             urlutils_free_description(d);
+  if (full_protocol) free(full_protocol);
+
+  return;
 }
 
 /*************************************************/
@@ -148,31 +343,31 @@ _kernel_oserror * html_get(char * url, char ** extradata, int * handle, int meth
 
   e = url_register(0, &h);
 
-// Sort out the proxying code properly!...
-
   /* Deal with proxying if necessary */
 
-  if (!e && choices.use_proxy)
-  {
-    char   method[64];
-    char * method_ptr;
-    int    method_len;
+  if (!e) html_set_proxy(h, url);
 
-    /* Extract the fetch method from the proxy address */
-
-    method_ptr = strstr(choices.proxy_address, ":");
-
-    if (method_ptr)
-    {
-      method_len = (int) method_ptr - (int) choices.proxy_address + 1;
-      if (method_len > sizeof(method) - 1) method_len = sizeof(method) - 1;
-      strncpy(method, choices.proxy_address, method_len);
-      method[method_len] = 0;
-    }
-    else strncpy(method, "http:", sizeof(method));
-
-    e = url_set_proxy(0, h, choices.proxy_address, method, 0);
-  }
+//  if (!e && choices.use_proxy)
+//  {
+//    char   method[64];
+//    char * method_ptr;
+//    int    method_len;
+//
+//    /* Extract the fetch method from the proxy address */
+//
+//    method_ptr = strstr(choices.proxy_address, ":");
+//
+//    if (method_ptr)
+//    {
+//      method_len = (int) method_ptr - (int) choices.proxy_address + 1;
+//      if (method_len > sizeof(method) - 1) method_len = sizeof(method) - 1;
+//      strncpy(method, choices.proxy_address, method_len);
+//      method[method_len] = 0;
+//    }
+//    else strncpy(method, "http:", sizeof(method));
+//
+//    e = url_set_proxy(0, h, choices.proxy_address, method, 0);
+//  }
 
   if (!e)
   {
@@ -539,6 +734,21 @@ _kernel_oserror * html_close(int handle)
 
       if (browser->pointer_over && HtmlReturnContext(browser->pointer_over) == context) browser->pointer_over = NULL;
 
+      /* Don't forget the main document stream and related bits... */
+
+      if (browser->stream && HtmlReturnContext(browser->stream) == context)
+      {
+        /* urlbdata and similar may or may not point into the token stream; */
+        /* this is an implementation decision that this function will not   */
+        /* assume. Therefore, the caller is responsible for clearing these  */
+        /* fields before calling this function if the data that the fields  */
+        /* point to is part of the stream that we are freeing.              */
+
+        browser->stream = NULL;
+      }
+
+      /* Move on to the next browser */
+
       browser = browser->previous;
     }
 
@@ -634,12 +844,22 @@ static _kernel_oserror * html_build_internal_page(browser_data * b, flex_ptr sou
   char * tail  = "";
   int    len, exoff, toff;
 
-  if (*source) flex_free(source);
+  /* Unless we know we should keep it, get rid of any existing source */
+
+  if (*source && b->displayed != Display_JavaScript_Info) flex_free(source);
 
   /* Work out the length that the HTML file we're about to generate will be */
 
   switch (b->displayed)
   {
+    case Display_JavaScript_Info:
+    {
+      len             = 0;
+      b->page_is_text = 1;
+      up->type        = TYPE_TEXTFILE;
+    }
+    break;
+
     case Display_External_Image:
     {
       int protolen;
@@ -771,8 +991,6 @@ static _kernel_oserror * html_build_internal_page(browser_data * b, flex_ptr sou
     {
       int found, type;
 
-      if (*source) flex_free(source);
-
       /* Find the file length */
 
       _swix(OS_File,
@@ -879,8 +1097,11 @@ static _kernel_oserror * html_build_internal_page(browser_data * b, flex_ptr sou
 
       if (fread(*source, 1, len, file) < len)
       {
+        StrLastE;
+
         fclose(file);
-        RetLastE;
+
+        return &erb;
       }
 
       fclose(file);
@@ -1307,7 +1528,15 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
                                 b->encoding,
                                 b->encoding_priority);
 
-        if (up->context) HtmlSetEncodingCallback(up->context, encoding_changed_by_meta, b);
+        if (up->context)
+        {
+          HtmlSetEncodingCallback (up->context, encoding_changed_by_meta,   b);
+          HtmlSetBaseCallback     (up->context, browser_base_callback,      b);
+
+          #ifdef JAVASCRIPT
+            HtmlSetScriptCallback (up->context, javascript_script_callback, b);
+          #endif
+        }
 
         read = *source ? flex_size(source) : 0;
       }

@@ -68,15 +68,18 @@
 #include "ChoiceDefs.h"
 #include "FetchPage.h"
 #include "Filetypes.h"
+#include "Forms.h"
 #include "History.h"
 #include "Hotlist.h"
 #include "Images.h"
+#include "JavaScript.h"
 #include "MimeMap.h"
 #include "Printing.h"
 #include "Save.h"
 #include "SaveDraw.h"
 #include "SaveFile.h"
 #include "SaveObject.h"
+#include "SaveSHelp.h"
 #include "SaveText.h"
 #include "Toolbars.h"
 #include "URLutils.h"
@@ -116,12 +119,18 @@ static browser_data * save_source_browser                = NULL;
 
 static int            save_as_text_reference             = 0;
 static browser_data * save_as_text_browser               = NULL;
+static int            save_as_text_embelishments         = 0;
 
 /* Exporting the page as Draw */
 
 static int            save_as_draw_reference             = 0;
 static browser_data * save_as_draw_browser               = NULL;
 static int            save_as_draw_backgrounds           = 0;
+
+/* Exporting the page as a StrongHelp manual */
+
+static int            save_as_shelp_reference            = 0;
+static browser_data * save_as_shelp_browser              = NULL;
 
 /* Saving a link */
 
@@ -425,16 +434,26 @@ _kernel_oserror * protocols_atats_send_data_save(browser_data * b, void * extra,
     {
       save_as_text_reference             = m.hdr.my_ref;
       save_as_text_browser               = b;
+      save_as_text_embelishments         = savefile_alternative_selected();
     }
     break;
 
-    /* Export the document as text */
+    /* Export the document as a Draw file */
 
     case protocols_saving_document_as_draw:
     {
       save_as_draw_reference             = m.hdr.my_ref;
       save_as_draw_browser               = b;
       save_as_draw_backgrounds           = savefile_alternative_selected();
+    }
+    break;
+
+    /* Export the document as a StrongHelp manual */
+
+    case protocols_saving_document_as_shelp:
+    {
+      save_as_shelp_reference            = m.hdr.my_ref;
+      save_as_shelp_browser              = b;
     }
     break;
 
@@ -883,7 +902,7 @@ static _kernel_oserror * protocols_atats_got_data_save_ack(WimpMessage * m)
 
     if (is_known_browser(save_as_text_browser))
     {
-      e = savetext_save_text(save_as_text_browser, path);
+      e = savetext_save_text(save_as_text_browser, path, save_as_text_embelishments);
       if (!e) ok = 1;
     }
   }
@@ -894,6 +913,16 @@ static _kernel_oserror * protocols_atats_got_data_save_ack(WimpMessage * m)
     if (is_known_browser(save_as_draw_browser))
     {
       e = savedraw_save_draw(save_as_draw_browser, path, save_as_draw_backgrounds);
+      if (!e) ok = 1;
+    }
+  }
+  else if (m->hdr.your_ref && m->hdr.your_ref == save_as_shelp_reference)
+  {
+    /* Export the document as a StrongHelp manual */
+
+    if (is_known_browser(save_as_shelp_browser))
+    {
+      e = saveshelp_save_manual(save_as_shelp_browser, path);
       if (!e) ok = 1;
     }
   }
@@ -1174,7 +1203,7 @@ _kernel_oserror * protocols_atats_send_data_load(WimpMessage * m)
                  &m->data.data_load.estimated_size,
                  &m->data.data_load.file_type));
 
-  if (found != 1)
+  if (found != 1 && found != 3)
   {
     /* Object not found - woo, weird (but it happens!) */
 
@@ -1237,6 +1266,7 @@ _kernel_oserror * protocols_atats_data_load_bounced(WimpMessage * m)
        m->hdr.my_ref == save_source_reference              ||
        m->hdr.my_ref == save_as_text_reference             ||
        m->hdr.my_ref == save_as_draw_reference             ||
+       m->hdr.my_ref == save_as_shelp_reference            ||
        m->hdr.my_ref == save_link_reference                ||
        m->hdr.my_ref == save_location_reference            ||
 
@@ -1604,8 +1634,10 @@ _kernel_oserror * protocols_atatl_got_data_open(WimpMessage * m)
 
 _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
 {
-  int         filetype = m->data.data_load.file_type;
   ComponentId c;
+  int         filetype = m->data.data_load.file_type;
+  int         apptoapp = m->hdr.your_ref ? 1 : 0; /* your_ref is zero if from filer, else filled in for app to app */
+
 
   #ifdef TRACE
     if (tl & (1u<<28)) Printf("protocols_atatl_got_data_load: Called\n");
@@ -1656,8 +1688,6 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
   {
     char url  [Limits_URL];
     char title[Limits_Title];
-
-    int  apptoapp = m->hdr.your_ref ? 1 : 0; /* your_ref is zero if from filer, else filled in for app to app */
 
     #ifdef TRACE
       if (tl & (1u<<28)) Printf("protocols_atatl_got_data_load: Can handle this filetype (0x%03x)\n", filetype);
@@ -1858,7 +1888,41 @@ _kernel_oserror * protocols_atatl_got_data_load(WimpMessage * m)
 
           utils_browser_from_window(m->data.data_load.destination_window, &b);
 
-          if (b && !b->small_fetch) ChkError(fetchpage_new(b, url, 1, 0));
+          if (b && !b->small_fetch)
+          {
+            int dont_load_to_form = (filetype != FileType_TEXT);
+
+            #ifdef JAVASCRIPT
+
+              /* If this is a JavaScript URL, the script will end up    */
+              /* being executed. Tell the JavaScript interface routines */
+              /* that it came from the URL writable.                    */
+
+              if (javascript_url(url))
+              {
+                dont_load_to_form = 1;
+                javascript_set_source(JavaScript_Source_URLWritable);
+              }
+
+            #endif
+
+            /* If flagged not to try, or trying to load the file into a */
+            /* writeable forms item fails, do a conventional fetch.     */
+
+            if (
+                 dont_load_to_form ||
+                 !form_could_load_text_at_pointer(b, m->data.data_load.leaf_name)
+               )
+            {
+              ChkError(fetchpage_new(b, url, 1, 0));
+            }
+            else
+            {
+              /* If the item was sent through Scrap, we should remove it */
+
+              if (apptoapp) remove(m->data.data_load.leaf_name);
+            }
+          }
         }
       }
 
@@ -2484,7 +2548,20 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
 
                 utils_browser_from_window(pending_data_save_ack->data.data_save_ack.destination_window, &b);
 
-                if (b && !b->small_fetch) e = fetchpage_new(b, ram_load_uri_buffer, 1, 0);
+                if (b && !b->small_fetch)
+                {
+                  #ifdef JAVASCRIPT
+
+                    /* If this is a JavaScript URL, the script will end up    */
+                    /* being executed. Tell the JavaScript interface routines */
+                    /* that it came from the URL writable.                    */
+
+                    if (javascript_url(ram_load_uri_buffer)) javascript_set_source(JavaScript_Source_URLWritable);
+
+                  #endif
+
+                  e = fetchpage_new(b, ram_load_uri_buffer, 1, 0);
+                }
               }
             }
 
@@ -3005,6 +3082,16 @@ _kernel_oserror * protocols_auh_got_process(WimpMessage * m)
 
       if (entry)
       {
+        #ifdef JAVASCRIPT
+
+          /* If this is a JavaScript URL, the script will end up    */
+          /* being executed. Tell the JavaScript interface routines */
+          /* that it came from the URL writable.                    */
+
+          if (javascript_url(uri->uri)) javascript_set_source(JavaScript_Source_URLWritable);
+
+        #endif
+
         RetError(fetchpage_postprocess_uri(entry->b,
                                            uri  ->uri,
                                            entry->flags & URIQueue_RecordInHistory ? 1 : 0));
@@ -3457,6 +3544,7 @@ static void protocols_util_update_reference(int old_ref, int new_ref)
   if      (old_ref == save_source_reference)              save_source_reference            = new_ref;
   else if (old_ref == save_as_text_reference)             save_as_text_reference           = new_ref;
   else if (old_ref == save_as_draw_reference)             save_as_draw_reference           = new_ref;
+  else if (old_ref == save_as_shelp_reference)            save_as_shelp_reference          = new_ref;
   else if (old_ref == save_link_reference)                save_link_reference              = new_ref;
   else if (old_ref == save_location_reference)            save_location_reference          = new_ref;
 

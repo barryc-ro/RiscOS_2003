@@ -44,6 +44,7 @@
 #include "Handlers.h"
 #include "History.h"
 #include "Images.h"
+#include "JavaScript.h"
 #include "Main.h"
 #include "Markers.h"
 #include "Memory.h"
@@ -114,10 +115,18 @@ static int windows_check_reformat(browser_data * b, BBox * size, int old_width)
 
     b->display_height = size->ymax - size->ymin - h1 - h2;
 
+    b->tools_lock = 1;
     reformat_format_from(b, -1, 1, -1);
 
     return 1;
   }
+
+  /* If we didn't reformat, clear any remembered scroll position */
+  /* that the window open handler may have stored. Otherwise the */
+  /* page can sometimes jump to a remembered position after it   */
+  /* was scrolled elsewhere when a new fetch starts.             */
+
+  markers_forget_position(b);
 
   return 0;
 
@@ -300,7 +309,11 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
 
     b->cell = cell;
 
-    if (save_type != Windows_CreateBrowser_Normal && controls.use_small)
+    if (
+         save_type != Windows_CreateBrowser_Normal    &&
+         save_type != Windows_CreateBrowser_AsJSChild &&
+         controls.use_small
+       )
     {
       /* If the browser is created just to save an object, */
       /* build a 'mini' browser for just that.             */
@@ -314,7 +327,7 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
       /* Otherwise, build a base browser, or if this is a frame, a child */
       /* browser object.                                                 */
 
-      if (!real_parent) e = toolbox_create_object(0, "Browser", &o);
+      if (!real_parent || save_type == Windows_CreateBrowser_AsJSChild) e = toolbox_create_object(0, "Browser", &o);
       else
       {
         if (nested_wimp) e = toolbox_create_object(0, "BrChild",     &o);
@@ -345,11 +358,11 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
 
     /* Sort out parent/child linking considerations */
 
-    if (!real_parent)
+    if (!real_parent || save_type == Windows_CreateBrowser_AsJSChild)
     {
       b->ancestor    = NULL; /* If not a child, this is an ancestor object */
       b->parent      = NULL;
-      b->real_parent = NULL;
+      b->real_parent = real_parent;
     }
     else
     {
@@ -427,6 +440,15 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
 
     if (url)
     {
+      #ifdef JAVASCRIPT
+
+        /* The URL is being fetched in effect from the URL writable, */
+        /* so tell the JavaScript routines about it.                 */
+
+        if (javascript_url(url)) javascript_set_source(JavaScript_Source_URLWritable);
+
+      #endif
+
       #ifdef TRACE
         if (tl & (1u<<12)) Printf("windows_create_browser: Chunk CK_FURL set to %d\n",strlen(url) + 1);
       #endif
@@ -438,7 +460,7 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
 
     /* If there's a given window name, set it */
 
-    if (name && *name)
+    if (name)
     {
       #ifdef TRACE
         if (tl & (1u<<12)) Printf("windows_create_browser: Chunk CK_NAME set to %d\n",strlen(name) + 1);
@@ -459,11 +481,19 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
     /* Initialise various other fields */
 
     b->background_image = -1;
-    b->full_screen      = !real_parent ? choices.full_screen : 0;
     b->full_size        = 0;
+    b->full_screen      = !real_parent ? choices.full_screen : 0;
 
-    if (save_type != Windows_CreateBrowser_Normal) b->save_link = 1;
-    else                                           b->save_link = 0;
+    if (save_type != Windows_CreateBrowser_Normal && save_type != Windows_CreateBrowser_AsJSChild) b->save_link = 1;
+    else                                                                                           b->save_link = 0;
+
+    #ifdef JAVASCRIPT
+
+      /* Get an execution context for this window */
+
+      RetError(javascript_gain_context(b, b->ancestor));
+
+    #endif
 
     /* Register some browser-specific Wimp event handlers */
 
@@ -475,7 +505,7 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
     /* For toolbars and titles, need to be a parent (i.e. have no */
     /* parent browser_data struct, as that means you're a child). */
 
-    if (!real_parent)
+    if (!real_parent || save_type == Windows_CreateBrowser_AsJSChild)
     {
       ObjectId ttop, tbot;
       int      scrap;
@@ -497,7 +527,11 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
       /* Set various toolbar flags up, and make */
       /* sure the right toolbars are visible.   */
 
-      if (save_type != Windows_CreateBrowser_Normal && controls.use_small)
+      if (
+           save_type != Windows_CreateBrowser_Normal    &&
+           save_type != Windows_CreateBrowser_AsJSChild &&
+           controls.use_small
+         )
       {
         b->url_bar    = 1;
         b->button_bar = 1;
@@ -813,7 +847,7 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
 
     /* Must be called after windows_show_browser so the parent/ancestor IDs are set up */
 
-    if (!real_parent)
+    if (!real_parent || save_type == Windows_CreateBrowser_AsJSChild)
     {
       BBox w;
 
@@ -840,6 +874,8 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
     /* Start a fetch for this page's current URL. Note the allow_cancel */
     /* flag is unset, so that any flags set up above, which cancel      */
     /* functions may touch (e.g. save_link), will not be altered.       */
+
+    e = NULL;
 
     if (url) e = fetchpage_new(b, b->urlfdata, 0, 0);
 
@@ -1110,6 +1146,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
                                      idb->parent_id,
                                      -1));
 
+        #ifdef JAVASCRIPT
+          javascript_reread_window_details(handle);
+        #endif
+
         /* Flag that the window is full size */
 
         handle->full_size = 1;
@@ -1211,6 +1251,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
                                      &(b->open_window_request.visible_area),
                                      idb->parent_id,
                                      -1));
+
+        #ifdef JAVASCRIPT
+          javascript_reread_window_details(handle);
+        #endif
 
         /* Flag that the window is no longer full size */
 
@@ -1334,6 +1378,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
           wimp_get_window_state(&s);
 
           w = s.visible_area;
+
+          #ifdef JAVASCRIPT
+            javascript_reread_window_details(handle);
+          #endif
         }
         else
         {
@@ -1374,6 +1422,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
                             idb->parent_id,
                             -1);
 
+        #ifdef JAVASCRIPT
+          javascript_reread_window_details(handle);
+        #endif
+
         /* Ensure toolbar gadgets are up to date */
 
         if (choices.move_gadgets == Choices_MoveGadgets_During) toolbars_move_gadgets(handle);
@@ -1394,6 +1446,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
                             &(b->open_window_request.visible_area),
                             idb->parent_id,
                             -1);
+
+        #ifdef JAVASCRIPT
+          javascript_reread_window_details(handle);
+        #endif
       }
     }
   }
@@ -1531,6 +1587,7 @@ int windows_remember_size(int eventcode, WimpPollBlock * b, IdBlock * idb, void 
 
             d->display_height = s.visible_area.ymax - s.visible_area.ymin - h1 - h2;
 
+            d->tools_lock = 1;
             reformat_format_from(d, -1, 1, -1);
           }
         }
@@ -1540,7 +1597,14 @@ int windows_remember_size(int eventcode, WimpPollBlock * b, IdBlock * idb, void 
         /* altered visible width, so no redraw problems occur if we      */
         /* don't bother forcing a redraw if the reformat isn't done.     */
         /*                                                               */
-        /* Hence, no 'else' case here.                                   */
+        /* So all that we need to do in the 'else' case is clear the     */
+        /* scroll position that may have been remembered before the      */
+        /* resizing began.                                               */
+
+        else
+        {
+          markers_forget_position(d);
+        }
       }
     }
 
@@ -1598,6 +1662,28 @@ void windows_close_browser(browser_data * handle)
   /* If this frame is highlighted, this will clear that highlight */
 
   ChkError(frames_remove_highlight_if_present(handle));
+
+  #ifdef JAVASCRIPT
+
+    /* Lose any JavaScript execution context */
+
+    javascript_lose_context(handle);
+
+    /* If any child windows exist (opened with window.open), */
+    /* clear their real_parent pointers.                     */
+
+    {
+      browser_data * found = last_browser;
+
+      while (found)
+      {
+        if (!found->ancestor && found->real_parent == handle) found->real_parent = NULL;
+
+        found = found->previous;
+      }
+    }
+
+  #endif
 
   /* If the Open URL dialogue was opened from the window, this will close it */
 
@@ -1767,8 +1853,7 @@ void windows_close_browser(browser_data * handle)
     #endif
   }
 
-  /* If we were streaming data for a Plug-In, close the */
-  /* stream.                                            */
+  /* If we were streaming data for a Plug-In, close the stream. */
 
   if (handle->pstream) plugin_abort_stream(handle);
 
@@ -2076,6 +2161,10 @@ void windows_show_browser(browser_data * b)
                                    &w.visible_area,
                                    p,
                                    -1));
+
+      #ifdef JAVASCRIPT
+        javascript_reread_window_details(b);
+      #endif
     }
     else
     {
@@ -2085,6 +2174,10 @@ void windows_show_browser(browser_data * b)
                                    NULL,
                                    p,
                                    -1));
+
+      #ifdef JAVASCRIPT
+        javascript_reread_window_details(b);
+      #endif
     }
   }
   else
@@ -2114,6 +2207,10 @@ void windows_show_browser(browser_data * b)
                                  &show,
                                  p,
                                  -1));
+
+    #ifdef JAVASCRIPT
+      javascript_reread_window_details(b);
+    #endif
   }
 
   if (!fixed_size && !b->small_fetch)
@@ -2268,7 +2365,11 @@ _kernel_oserror * windows_open_full_screen(browser_data * b, int full_screen, in
   /* Show the object off-screen, making sure we don't trash the parent object ID information */
 
   RetError(toolbox_get_parent (0, b->self_id, &parent, NULL));
-  RetError(toolbox_show_object(0, b->self_id, 1, &o.visible_area,parent, -1));
+  RetError(toolbox_show_object(0, b->self_id, 1, &o.visible_area, parent, -1));
+
+  #ifdef JAVASCRIPT
+    javascript_reread_window_details(b);
+  #endif
 
   /* Set up the OpenWindow block */
 
@@ -2331,6 +2432,10 @@ _kernel_oserror * windows_open_full_screen(browser_data * b, int full_screen, in
                                &o.visible_area,
                                parent,
                                -1));
+
+  #ifdef JAVASCRIPT
+    javascript_reread_window_details(b);
+  #endif
 
   /* Make sure the toolbars, if present, are up to date */
 
@@ -2944,13 +3049,23 @@ _kernel_oserror * windows_check_tools(browser_data * b, BBox * box)
       /* windows_set_tools; otherwise, once it's added, it stays.           */
       /*                                                                    */
       /* The exception, of course, is for frames with scrolling explicitly  */
-      /* set to 'no'.                                                       */
+      /* set to 'no', and we also allow a flag locking system so that when  */
+      /* bits of code *know* they want to force the scroll bar away they    */
+      /* can do - e.g. because the window is resized, so you know this is   */
+      /* the very beginning of any reformatting to be done.                 */
 
-      if (!b->frame_vscroll)                                            vscroll = 0;
-      else if (b->frame_vscroll == 2 || (s.flags & WimpWindow_VScroll)) vscroll = 1;
+      if (!b->tools_lock)
+      {
+        if (!b->frame_vscroll)                                            vscroll = 0;
+        else if (b->frame_vscroll == 2 || (s.flags & WimpWindow_VScroll)) vscroll = 1;
+      }
+      else
+      {
+        if      (b->frame_vscroll == 0) vscroll = 0;
+        else if (b->frame_vscroll == 2) vscroll = 1;
 
-//      if      (b->frame_vscroll == 0) vscroll = 0;
-//      else if (b->frame_vscroll == 2) vscroll = 1;
+        b->tools_lock = 0;
+      }
     }
     else
     {

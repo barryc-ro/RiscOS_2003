@@ -27,6 +27,7 @@
 
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "Filetypes.h"
+#include "Javascript.h"
 #include "MimeMap.h"
 #include "URLveneer.h"
 
@@ -734,19 +735,19 @@ get_directory_name:
     /* filename extension. If the latter is true, check    */
     /* that there is something between the two...          */
 
-    if (found && found - 1 == e) goto return_generic;
+    if (found && found <= e) goto return_generic;
 
-    /* OK, we have a string. If found is NULL, then we don't have a */
-    /* filename extension to strip                                  */
+    /* Take a copy of as much of the current leafname will fit;  */
+    /* we may have to write zero terminators in at this point if */
+    /* there is any CGI information to strip.                    */
 
-    if (!found)
-    {
-      strncpy(leaf, url + e, size - 1);
-    }
+    strncpy(leaf, url + e, size - 1);
 
-    /* Otherwise, strip the extension if a filetype is found for it */
+    /* OK, we have a string. If found is NULL, then we don't have a  */
+    /* filename extension to strip - there's no more work to do.     */
+    /* Otherwise, strip the extension if a filetype is found for it. */
 
-    else
+    if (found && (found - e) <= size - 1)
     {
       int chars = found - e;
       int filetype;
@@ -754,23 +755,17 @@ get_directory_name:
       /* Is there a filetype for this extension? */
 
       if (
+           !utils_strcasecmp(leaf + chars, ".cgi") /* Special case '.cgi' - always strip it */
+           ||
            (
-             mimemap_extension_to_riscos(url + found, &filetype) ||
-             filetype == FileType_DATA
+             !mimemap_extension_to_riscos(leaf + chars, &filetype) &&
+             filetype != FileType_DATA
            )
-           && utils_strcasecmp(url + found, ".cgi") /* Special case '.cgi' - always strip it */
          )
-      {
-        /* Don't strip it */
-
-        strncpy(leaf, url + e, size - 1);
-      }
-      else
       {
         /* Strip the extension */
 
-        if (chars > size - 1) chars = size - 1;
-        strncpy(leaf, url + e, chars);
+        *(leaf + chars) = '\0';
       }
     }
 
@@ -1676,6 +1671,9 @@ int urlutils_internal_tail(char * iurl)
 /* the 'displayed' field of a given browser_data */
 /* structure.                                    */
 /*                                               */
+/* Knows also about JavaScript URLs and sets the */
+/* 'displayed' field for those too.              */
+/*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             that is to be altered;            */
 /*                                               */
@@ -1700,7 +1698,19 @@ void urlutils_set_displayed(browser_data * b, char * iurl)
 
     else b->displayed = Display_Fetched_Page;
   }
-  else b->displayed = Display_Fetched_Page;
+  else
+  {
+    #ifdef JAVASCRIPT
+
+      if (javascript_url(iurl)) b->displayed = Display_JavaScript_Info;
+      else                      b->displayed = Display_Fetched_Page;
+
+    #else
+
+      b->displayed = Display_Fetched_Page;
+
+    #endif
+  }
 }
 
 /*************************************************/
@@ -1721,56 +1731,21 @@ void urlutils_set_displayed(browser_data * b, char * iurl)
 
 int urlutils_check_protocols(char * url)
 {
-  int  protocols = 0;
-  int  i;
-  char p[24];
+  int          context = 0;
+  const char * scheme;
 
   if (!url || (url && !*url)) return 0;
 
-  /* Find the number of possible protocols */
+  /* Look for a matching protocol */
 
-  protocols = atoi(lookup_control("ProtocolMax", 1, NULL));
-
-  /* Exit if not found / not a sensible number */
-
-  if (protocols <= 0) return 0;
-
-  /* Loop round all protocols */
-
-  for (i = 1; i <= protocols; i++)
+  while (context != -1)
   {
-    /* Look up the module name by building a MessageTrans  */
-    /* token of the appropriate format, and call OS_Module */
-    /* 18 (lookup module) for it; if the SWI doesn't       */
-    /* raise an error, the module was found.               */
-
-    sprintf(p, "ProtocolM%d", i);
-
-    if (!_swix(OS_Module,
-               _INR(0,1),
-
-               18,
-               lookup_control(p, 1, NULL)))
-    {
-      /* Module is present, so check the protocol */
-
-      sprintf(p, "ProtocolU%d", i);
-
-      lookup_control(p, 1, NULL);
-
-      /* If the protocol identifier can be found... */
-
-      if (tokens[0] != '!')
-      {
-        /* Compare it to the same number of characters in */
-        /* the given URL. If it matches, we can deal with */
-        /* the URL.                                       */
-
-        if (!utils_strncasecmp(tokens, url, strlen(tokens))) return 1;
-
-        /* Otherwise, loop on to the next protocol... */
-      }
-    }
+    if (
+         !url_enumerate_schemes(0, &context, &scheme)    &&
+         context != -1                                   &&
+         !utils_strncasecmp(scheme, url, strlen(scheme))
+       )
+       return 1;
   }
 
   /* If we reach here, no protocol was found. */
@@ -1797,127 +1772,104 @@ int urlutils_check_protocols(char * url)
 
 int urlutils_cycle_protocol(char * url, int size)
 {
-  int  protocols = 0;
-  int  in_use    = 0;
-  int  have_any  = 0;
-  int  have_one  = 0;
-  int  i, ulen, plen;
-  char p[24];
+  int          context  = 0;
+  int          have_any = 0;
+  int          have_one = 0;
+  int          ulen;
+  int          plen;
+  const char * scheme;
 
   if (!url || !size) return 0;
 
-  /* Find the number of possible protocols */
-
-  protocols = atoi(lookup_control("ProtocolMax", 1, NULL));
-
-  /* Exit if not found / not a sensible number */
-
-  if (protocols <= 0) return 0;
-
   /* Loop round all protocols */
 
-  for (i = 1; i <= protocols; i++)
+  do
   {
-    /* Look up the module name by building a MessageTrans  */
-    /* token of the appropriate format, and call OS_Module */
-    /* 18 (lookup module) for it; if the SWI doesn't       */
-    /* raise an error, the module was found.               */
+    if (url_enumerate_schemes(0, &context, &scheme)) return 0;
 
-    sprintf(p, "ProtocolM%d", i);
-
-    if (!_swix(OS_Module,
-               _INR(0,1),
-
-               18,
-               lookup_control(p, 1, NULL)))
+    if (context != -1)
     {
-      /* Module is present, so check the protocol */
+      have_any = 1;
 
-      sprintf(p, "ProtocolU%d", i);
+      if (!utils_strncasecmp(scheme, url, strlen(scheme))) have_one = 1;
+    }
+  }
+  while (context != -1 && !have_one);
 
-      lookup_control(p, 1, NULL);
+  if (!have_any)
+  {
+    /* If we haven't got any available protocols (!) exit */
 
-      /* If the protocol identifier can be found... */
+    return 0;
+  }
 
-      if (tokens[0] != '!')
-      {
-        have_any = 1;
+  /* Assume a protocol ends with "://", and get rid of any */
+  /* existing protocol specifier                           */
 
-        /* Compare it to the same number of characters in */
-        /* the given URL. If it matches, flag this.       */
+  {
+    char * separator = strstr(url, "://");
 
-        if (!strncmp(tokens, url, strlen(tokens)))
-        {
-          in_use = i, have_one = 1;
-
-          break;
-        }
-
-        /* Otherwise, loop on to the next protocol... */
-      }
+    if (separator)
+    {
+      separator = separator + 3;
+      memmove(url, separator, strlen(url) - (((int) separator) - ((int) url)) + 1);
     }
   }
 
-  /* If we haven't got any available protocols (!) exit */
+  /* If we didn't recognise the current protocol, start from */
+  /* either the first, or if we have it, HTTP.               */
 
-  if (!have_any) return 0;
-
-  /* Get rid of any existing protocol... */
-
-  if (have_one)
+  if (!have_one)
   {
-    char * separator = (char *) (((int) url) + strlen(tokens));
+    context = 0;
 
-    memmove(url, separator, strlen(url) - (((int) separator) - ((int) url)) + 1);
-  }
-
-  /* Find the first/next protocol */
-
-  have_any = 0;
-
-  while (!have_any)
-  {
-    /* If nothing was found in the first loop (the URL doesn't  */
-    /* specify a protocol, or it wasn't recognised) then in_use */
-    /* starts at 0; we thus increment to 1, which is what we    */
-    /* want. So there's no special casing needed here.          */
-
-    in_use ++;
-
-    if (in_use > protocols) in_use = 1;
-
-    /* Again, see if the protocol is available */
-
-    sprintf(p, "ProtocolM%d", in_use);
-
-    if (!_swix(OS_Module,
-               _INR(0,1),
-
-               18,
-               lookup_control(p, 1, NULL)))
+    do
     {
-      /* Module is present, so check the protocol */
+      if (url_enumerate_schemes(0, &context, &scheme)) return 0;
 
-      sprintf(p, "ProtocolU%d", in_use);
+      if (
+           context != -1 &&
+           !utils_strncasecmp(scheme, HTTPmethod, strlen(scheme))
+         )
+         have_one = 1;
+    }
+    while (context != -1 && !have_one);
 
-      lookup_control(p, 1, NULL);
+    /* No HTTP? Use the first protocol */
 
-      /* If the protocol identifier can be found, flag it */
+    if (!have_one)
+    {
+      context = 0;
 
-      if (tokens[0] != '!') have_any = 1;
+      if (url_enumerate_schemes(0, &context, &scheme)) return 0;
+    }
+  }
+  else
+  {
+    /* Find the first/next protocol */
+
+    if (url_enumerate_schemes(0, &context, &scheme)) return 0;
+
+    if (context == -1)
+    {
+      context = 0;
+      if (url_enumerate_schemes(0, &context, &scheme)) return 0;
     }
   }
 
   /* Insert the new protocol */
 
   ulen = strlen(url);
-  plen = strlen(tokens); /* (The protocol) */
+  plen = strlen(scheme);
 
-  if (ulen + plen + 1 > size) return have_one; /* Yikes, if it won't fit we may have thrown out an existing protocol... */
+  /* (+3 to account for terminator and "//") */
 
-  memmove(url + plen, url, ulen + 1);
+  if (ulen + plen + 3 > size) return have_one; /* Yikes, if it won't fit we may have thrown out an existing protocol... */
 
-  strncpy(url, tokens, plen);
+  memmove(url + plen + 2, url, ulen + 1);
+
+  strncpy(url, scheme, plen);
+  strncpy(url + plen, "//", 2);
 
   /* Finished */
 

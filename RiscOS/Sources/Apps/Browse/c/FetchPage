@@ -57,7 +57,7 @@
 
 /* Locals */
 
-char * url_buffer = NULL;
+static char * url_buffer = NULL;
 
 /* Static function prototypes */
 
@@ -135,7 +135,6 @@ int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_dat
 
   do
   {
-
     /* If fetching, call the reformatter. */
 
     if (fetching) fetch_fetcher(handle);
@@ -181,39 +180,7 @@ int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_dat
 
   /* Handle jumping to any specified named anchors */
 
-  if (handle->display_request == DISPLAY_NAMED)
-  {
-    char    * p;
-    HStream * t;
-
-    t = 0;
-
-    p = fetch_find_name_tag(browser_current_url(handle)) + 1;
-    t = fetch_find_anchor_token(handle, p);
-
-    if (t)
-    {
-      handle->display_request = t;
-      handle->display_offset  = 0;
-      handle->display_vscroll = 0;
-    }
-  }
-
-  if (handle->display_request && handle->display_request != DISPLAY_NAMED)
-  {
-    if (
-         handle->display_request &&
-         browser_show_token(handle,
-                            handle->display_request,
-                            handle->display_offset,
-                            handle->display_vscroll)
-       )
-    {
-      handle->display_request = NULL;
-      handle->display_offset  = 0;
-      handle->display_vscroll = 0;
-    }
-  }
+  browser_check_for_request(handle);
 
   /* Various actions as things become inactive... */
 
@@ -352,6 +319,22 @@ _kernel_oserror * fetchpage_fetch_targetted(browser_data * parent, const char * 
 {
   browser_data * ancestor;
   browser_data * targetted;
+
+  #ifdef TRACE
+
+    /* Trace builds will warn about a NULL URL (but not an empty string) */
+
+    if (!url)
+    {
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      StrNCpy0(erb.errmess,
+               "NB: Pointer to URL is NULL in fetchpage_fetch_targetted()");
+
+      show_error_ret(&erb);
+    }
+
+  #endif
 
   /* If we've been asked to open a new window, only the extra data */
   /* parameter matters.                                            */
@@ -631,13 +614,33 @@ static _kernel_oserror * fetchpage_preprocessed(browser_data * b, int record, in
 {
   _kernel_oserror * e;
 
+  /* Can we just display a local reference? Must do the fetch if a POST form is being sent */
+  /* or we're forcing a reload (if reload_lock is still on, the fetch is just starting     */
+  /* page-wide - otherwise, a link has been followed even though a reload may still be in  */
+  /* progress, and in that case, we *do* want to try showing the local reference).         */
+
   if (
        !b->save_link &&
-       !b->post_data && /* Must do the fetch even if we could just jump to a named anchor, if a POST */
-       !b->reloading && /* form is being sent or if we're deliberately force reloading something.    */
-       browser_display_local_reference(b,
-                                       url_buffer,
-                                       browser_current_url(b))
+       !b->post_data &&
+       (
+         !b->reloading ||
+         !b->reload_lock
+       )
+       &&
+       (
+         (
+           browser_display_local_reference(b,
+                                           url_buffer,
+                                           (char *) browser_current_url(b))
+         )
+         ||
+         (
+           b->urlbdata &&
+           browser_display_local_reference(b,
+                                           url_buffer,
+                                           (char *) browser_base_url(b))
+         )
+       )
      )
   {
     // Huh? This just causes redraw glitches... Why was it ever put here?
@@ -646,6 +649,56 @@ static _kernel_oserror * fetchpage_preprocessed(browser_data * b, int record, in
 
     return NULL;
   }
+
+  /* Deal with JavaScript if necessary */
+
+  #ifdef JAVASCRIPT
+
+    /* Is this a JavaScript URL? */
+
+    if (javascript_url(url_buffer))
+    {
+      char * url_copy = malloc(strlen(url_buffer) + 1);
+
+      #ifdef TRACE
+        if (tl & (1u<<24)) Printf("fetchpage_preprocessed: JavaScript URL found:\n'\0216%s\0217'\n", url_buffer);
+      #endif
+
+      /* The script may well open a new window, which could run through these */
+      /* very fetch routines. They aren't multithreaded! So, we need to take  */
+      /* a copy of all relevant details first, and restore the info after.    */
+      /*                                                                      */
+      /* Yes. I **know** this is grim. But it is simple, fast, and works.     */
+      /* Just make sure that no-one is using ChkError or similar (i.e. avoid  */
+      /* longjmp!) inside the code this calls...                              */
+
+      if (!url_copy) RetError(make_no_fetch_memory_error(18));
+      else strcpy(url_copy, url_buffer);
+
+      /* Process the script */
+
+      e = javascript_process_script(b, url_copy);
+
+      /* Did it succeed? Should we proceed with the fetch if so? */
+
+      if (e || !javascript_fetch_should_proceed())
+      {
+        free(url_copy);
+        return e;
+      }
+
+      /* Restore whatever we stored above */
+
+      free(url_buffer);
+      url_buffer = malloc(strlen(url_copy) + 1);
+
+      if (!url_buffer) RetError(make_no_fetch_memory_error(19));
+      else strcpy(url_buffer, url_copy);
+
+      free(url_copy);
+    }
+
+  #endif
 
   /* Last chance to modify any passing URLs... */
 
@@ -969,6 +1022,11 @@ _kernel_oserror * fetchpage_new(browser_data * b, const char * url, int record, 
 /* specify whether this URL is to be fetched in  */
 /* a new browser window or not.                  */
 /*                                               */
+/* If the additional string starts with a '?'    */
+/* and the given URL contains a '?' already,     */
+/* the '?' and everything after it is stripped   */
+/* off before the new data is added.             */
+/*                                               */
 /* Restrictions as for fetchpage_new.            */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
@@ -1028,6 +1086,18 @@ _kernel_oserror * fetchpage_new_add(browser_data * b, const char * url, int reco
     #endif
 
     strcpy(url_buffer, url);
+
+    /* See if there's a query string to strip */
+
+    if (*add == '?')
+    {
+      char * query = strchr(url_buffer, '?');
+
+      if (query) *query = '\0';
+    }
+
+    /* Append the given data */
+
     strcat(url_buffer, add);
   }
 
