@@ -105,7 +105,7 @@ o.replay: Documents.def.replay
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} local_dirs
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -128,7 +128,11 @@ clean:
         ${IGNORE} ${WIPE}    linked.${COMPONENT} ${WFLAGS}
         ${IGNORE} ${WIPE}    map.${COMPONENT} ${WFLAGS}
         ${IGNORE} ${RM}      ${TARGET}
+	${IGNORE} ${RM} oz
         @echo ${COMPONENT}: cleaned
+
+local_dirs:
+	@$(MKDIR) oz
 
 resources:
         ${MKDIR} ${RESDIR}
