@@ -10,7 +10,7 @@ EXP_HDR = <export$dir>.^.Interface2
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -93,6 +93,20 @@ rom: ${TARGET} ${DIRS}
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
+
+install: install_${TYPE}
+
+install_ram: ${RAMTARGET}
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${RAMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        ${ATTR} -files +or +ow +wr -ww ${INSTDIR}.${COMPONENT}
+        @echo ${COMPONENT}: ram module installed
+
+install_tags: Resources.${SYSTEM}.Tags
+        ${MKDIR} ${INSTDIR}
+        ${CP} Resources.${SYSTEM}.Tags ${INSTDIR}.Tags ${CPFLAGS}
+        ${ATTR} -files +or +ow +wr -ww ${INSTDIR}.Tags
+        @echo ${COMPONENT}: tags file installed
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
