@@ -103,13 +103,3 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.slider:	c.slider
-o.slider:	tbox:h.wimp
-o.slider:	tbox:h.wimplib
-o.slider:	C:h.kernel
-o.slider:	C:h.swis
-o.slider:	tbox:h.wimplib
-o.slider:	tbox:h.toolbox
-o.slider:	tbox:h.event
-o.slider:	tbox:h.window
-o.slider:	tbox:h.gadgets
