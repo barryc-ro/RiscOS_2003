@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 #include <arpa/tftp.h>
 
+#include <bitstring.h>
 #include <netdb.h>
 
 #include <socklib.h>
@@ -33,7 +34,7 @@
 
 
 #ifdef TRACE
-static void log_packet(const char *prefix, const struct tftphdr *t, int len)
+static void log_datagram(const char *prefix, const struct tftphdr *t, int len)
 {
     static const char *const packnames[] = { NULL, "RRQ", "WRQ", "DATA", "ACK", "ERROR", "OACK" };
     int opcode = ntohs(t->th_opcode);
@@ -84,42 +85,29 @@ static void log_packet(const char *prefix, const struct tftphdr *t, int len)
 }
 #endif
 
+/* A version of bit_ffc that starts looking at a particular bit.
+ * This is purely an optimisation, but we don't want the thing
+ * to slow down for bigger block numbers :)
+ */
+#define	bit_ffc_from(name, nbits, start, value) { \
+	register bitstr_t *_name = name; \
+	register int _byte, _nbits = nbits; \
+	register int _stopbyte = _bit_byte(_nbits), _value = -1; \
+	for (_byte = _bit_byte(start); _byte <= _stopbyte; ++_byte) \
+		if (_name[_byte] != 0xff) { \
+			_value = _byte << 3; \
+			for (_stopbyte = _name[_byte]; (_stopbyte&0x1); \
+			    ++_value, _stopbyte >>= 1); \
+			break; \
+		} \
+	*(value) = _value; \
+}
+
 static unsigned systime()
 {
     unsigned s;
     _swix(OS_ReadMonotonicTime, _OUT(0), &s);
     return s;
-}
-
-/* Bitfield manipulations */
-#define SETMAPBIT(n) (map[(n)>>5] |= (1<<((n) & 31)))
-#define GETMAPBIT(n) ((map[(n)>>5]>>((n) & 31))&1)
-
-/*
- * Give the number of the first clear bit in map.
- * We start from bit "start" - allows optimisation if
- * the caller remembers our previous results.
- */
-static int first_clear_bit(const u_int *map, int start)
-{
-    int n=start &~ 31;
-    u_int b;
-
-    map += start >> 5;
-
-    while ((b = *map) == 0xFFFFFFFF)
-    {
-        n += 32;
-        map++;
-    }
-
-    while (b & 1)
-    {
-        n++;
-        b >>= 1;
-    }
-
-    return n;
 }
 
 static void send_error(int s, struct tftphdr *buf, int errnum, const char *errmess,
@@ -134,39 +122,47 @@ static void send_error(int s, struct tftphdr *buf, int errnum, const char *errme
            offsetof(struct tftphdr, th_msg) + n + 1,
            0, (const struct sockaddr *) to, sizeof *to);
     #ifdef TRACE
-    log_packet("->", buf, offsetof(struct tftphdr, th_msg) + n + 1);
+    log_datagram("->", buf, offsetof(struct tftphdr, th_msg) + n + 1);
     #endif
 
     if (errmess != _inet_error.errmess)
     {
-        _inet_error.errnum = errnum + ERRORBASE;
+        if (errnum != EUNDEF)
+            _inet_error.errnum = errnum + ERRORBASE;
         strcpy(_inet_error.errmess, errmess);
     }
 }
 
-static int send_ack(int s, struct tftphdr *buf, const u_int *map, int *last_acked)
+static int send_ack(int s, struct tftphdr *buf, int block)
 {
-    int block = first_clear_bit(map, *last_acked);
-
-    *last_acked = block;
-
     buf->th_opcode = htons(ACK);
     buf->th_block = htons(block);
 
-    send(s, buf, sizeof buf->th_opcode + sizeof buf->th_block, 0);
+    sendto(s, buf, sizeof buf->th_opcode + sizeof buf->th_block, 0, NULL, 0);
 
     #ifdef TRACE
-    log_packet("->", buf, sizeof buf->th_opcode + sizeof buf->th_block);
+    log_datagram("->", buf, sizeof buf->th_opcode + sizeof buf->th_block);
     #endif
 
     return sizeof buf->th_opcode + sizeof buf->th_block;
 }
 
+static _kernel_oserror *lookup_error(_kernel_oserror *e)
+{
+    return _swix(MessageTrans_ErrorLookup, _INR(0,3),
+                                           e, 0, &_inet_error, sizeof _inet_error);
+}
+
 static _kernel_oserror *no_mem_error()
 {
-    _inet_error.errnum = ERRORBASE + ENOSPACE;
-    strcpy(_inet_error.errmess, "Out of memory");
-    return &_inet_error;
+    static const struct { int no; char mess[6]; } e = { ERRORBASE + ENOSPACE, "NoMem" };
+    return lookup_error((_kernel_oserror *) &e);
+}
+
+static _kernel_oserror *escape_error()
+{
+    static const struct { int no; char mess[7]; } e = { 17, "Escape" };
+    return lookup_error((_kernel_oserror *) &e);
 }
 
 static bool check_escape()
@@ -182,6 +178,66 @@ static bool check_escape()
         return false;
 }
 
+/*
+ * Select the socket from a fd_set with the earliest-received datagram waiting.
+ * Works by peeking each datagram, and examining the SCM_TIMESTAMP control
+ * information - this must have been enabled on each socket with setsockopt.
+ * n = the number of sockets in the fd_set, as returned from select().
+ * Returns -1 if any errors occur, including any of the timestamps being
+ * unavailable.
+ */
+static int first_socket(int n, fd_set *fds)
+{
+    int s;
+    struct timeval firsttime;
+    int firstsocket = -1;
+
+    for (s = 0; n; s++)
+    {
+        if (FD_ISSET(s, fds))
+        {
+            struct msghdr msg;
+            char control[256];
+            struct cmsghdr *cmsg;
+            struct timeval *tv;
+
+            /* Found a socket. Decrement n. If no more sockets, and we haven't
+             * got a time yet (ie this is the only socket in the set, which
+             * will be the common case), bail out before doing the read.
+             */
+            if (--n == 0 && firstsocket == -1)
+                return s;
+
+            msg.msg_name = NULL;
+            msg.msg_namelen = 0;
+            msg.msg_iov = NULL;
+            msg.msg_iovlen = 0;
+            msg.msg_control = control;
+            msg.msg_controllen = sizeof control;
+
+            if (recvmsg(s, &msg, MSG_PEEK) < 0 || msg.msg_controllen == 0)
+                return -1;
+
+            for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg))
+                if (cmsg->cmsg_level == SOL_SOCKET &&
+                    cmsg->cmsg_type == SCM_TIMESTAMP)
+                    break;
+
+            if (cmsg == NULL)
+                return -1;
+
+            tv = (struct timeval *) CMSG_DATA(cmsg);
+            if (firstsocket == -1 || timercmp(tv, &firsttime, <))
+            {
+                firstsocket = s;
+                firsttime = *tv;
+            }
+        }
+    }
+
+    return firstsocket;
+}
+
 static int new_socket(int proto)
 {
     int s;
@@ -191,13 +247,14 @@ static int new_socket(int proto)
     if ((s = socket(PF_INET, proto == IPPROTO_UDP ? SOCK_DGRAM : SOCK_RAW, proto)) < 0)
         return s;
 
-    if (socketioctl(s, FIONBIO, &one) < 0 ||
-        socketioctl(s, FIOSLEEPTW, &one) < 0)
-        goto error;
-
-    if (proto == IPPROTO_UDP &&
+    /* Yes, we set the TOS of the ICMP socket. Doesn't matter, as we're not
+     * sending anything, and checking for it would increase the code size.
+     */
+    if (socketioctl(s, FIOSLEEPTW, &one) < 0 ||
         setsockopt(s, IPPROTO_IP, IP_TOS, &tos, sizeof tos) < 0)
         goto error;
+
+    setsockopt(s, SOL_SOCKET, SO_TIMESTAMP, &one, sizeof one);
 
     return s;
 
@@ -230,27 +287,29 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
     bool connected = false;
     bool finished = false;
     bool master_client = true;
-    bool expecting_oack = true;
     bool already_transmitted = false;
     fd_set fds;
     int nfds, s;
     _kernel_oserror *e = &_inet_error, *e2;
-    u_int *map = NULL;
+    bitstr_t *map = NULL;
     struct tftphdr *in = NULL, *out = NULL;
     struct timeval tv;
-    long rexmtval = BASE_RETRANSMIT;
+    long rexmtval = REQ_RETRANSMIT;
     int lasttime;
+
+#ifdef TRACE_MAP
+    _kernel_oswrch(22);
+    _kernel_oswrch(27);
+#endif
 
     out = malloc(SEGSIZE);
     in = malloc(offsetof(struct tftphdr, th_data) + SEGSIZE);
-    map = malloc(8192); /* One bit per possible block number */
+    map = bit_alloc(65536);
     if (!out || !in || !map)
     {
         e = no_mem_error();
         goto error;
     }
-
-    memset(map, 0, 8192);
 
     if ((unicast_socket = new_socket(IPPROTO_UDP)) < 0)
         goto error;
@@ -262,9 +321,16 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
 
     sin.sin_family = AF_INET;
     sin.sin_len = sizeof sin;
-    sin.sin_port = htons(69);
+    sin.sin_port = htons(PORT_TFTP);
     sin.sin_addr = server;
     memset(sin.sin_zero, 0, sizeof sin.sin_zero);
+
+    /* Yes, we can connect the ICMP socket. This means we will only
+     * get woken up by ICMP messages from the server, not any old
+     * bastard pinging us. sin.sin_port is ignored.
+     */
+    if (connect(icmp_socket, (struct sockaddr *) &sin, sizeof sin) < 0)
+        goto error;
 
     out->th_opcode = htons(RRQ);
     n = sprintf(out->th_stuff, "%s%c"
@@ -283,8 +349,6 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
 
     while (!finished)
     {
-        bool was_multicast = false;
-
         if (master_client && !already_transmitted &&
             sendto(unicast_socket, out, len, 0,
                    connected ? NULL : (const struct sockaddr *) &sin, sizeof sin) < 0)
@@ -293,13 +357,10 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
         }
         #ifdef TRACE
         if (master_client && !already_transmitted)
-            log_packet("->", out, len);
+            log_datagram("->", out, len);
         #endif
 
         already_transmitted = false;
-
-        if (out->th_opcode == htons(RRQ))
-            expecting_oack = true;
 
      reselect:
         FD_ZERO(&fds);
@@ -312,7 +373,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
 
         tv.tv_sec = rexmtval;
         tv.tv_usec = 0;
-        if (select(nfds, &fds, NULL, NULL, &tv) < 0 && errno != EINTR)
+        if ((n=select(nfds, &fds, NULL, NULL, &tv)) < 0 && errno != EINTR)
         {
             if (connected)
                 send_error(unicast_socket, in, EUNDEF, _inet_err(), NULL);
@@ -321,32 +382,63 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
 
         if (check_escape())
         {
+            e = escape_error();
             if (connected)
-                send_error(unicast_socket, in, EUNDEF, "Escape", NULL);
+                send_error(unicast_socket, in, EUNDEF, e->errmess, NULL);
             _inet_error.errnum = 17;
             goto error;
         }
 
-        if (FD_ISSET(unicast_socket, &fds))
-            s = unicast_socket;
-        else if (multicast_socket >= 0 && FD_ISSET(multicast_socket, &fds))
-            s = multicast_socket;
-        else if (FD_ISSET(icmp_socket, &fds))
-            s = icmp_socket;
-        else
-            s = -1;
+        /*
+         * Which socket to read from first is a tricky question. In
+         * the absence of timestamp information, we prefer ICMP to UDP,
+         * because an incoming ICMP message may trigger an error on
+         * the UDP socket as well, and we prefer to handle that by
+         * reading the ICMP socket manually. We prefer the unicast
+         * socket to the multicast, because the multicast socket may
+         * be being flooded, and messages addressed to us are liable
+         * to contain critical information like ERROR datagrams.
+         *
+         * If we do have timestamp information, we take the datagrams
+         * first come, first served. If an ICMP datagram has triggered
+         * a UDP error, first_socket() will return -1 because its
+         * attempt to read from the UDP socket will return an error;
+         * in that case we will fall back to preferring the ICMP
+         * socket.
+         *
+         * Why isn't the static socket ordering good enough? Well, say
+         * we are not the master client, and we've not been keeping up,
+         * so we've a full queue on the multicast socket. We then get
+         * an OACK making us the master client. If we read the OACK
+         * first, then we will end up ACKing each block already in the
+         * multicast queue, even though they arrived before we were
+         * the master client. This results in a burst of redundant
+         * ACKs, and we may end up requesting a block that's already
+         * in the queue, resulting in a duplicate server transmission.
+         * All essentially harmless, but it increases the network
+         * traffic. Best to make the effort to avoid this. Processing
+         * datagrams first come, first served is the least error-prone
+         * general-purpose solution to problems of this type.
+         */
+        s = first_socket(n, &fds);
+        if (s == -1)
+        {
+            if (FD_ISSET(icmp_socket, &fds))
+                s = icmp_socket;
+            else if (FD_ISSET(unicast_socket, &fds))
+                s = unicast_socket;
+            else if (multicast_socket >= 0 && FD_ISSET(multicast_socket, &fds))
+                s = multicast_socket;
+        }
 
         if (s != -1)
         {
             if ((n = recvfrom(s, in, offsetof(struct tftphdr, th_data) + blocksize, 0,
                               (struct sockaddr *) &from, &fromlen)) < 0)
             {
-                if (errno != EWOULDBLOCK)
-                {
-                    if (connected)
-                        send_error(unicast_socket, in, EUNDEF, _inet_err(), NULL);
-                    goto error;
-                }
+                if (connected)
+                    send_error(unicast_socket, in, EUNDEF, _inet_err(), NULL);
+                goto error;
             }
         }
         else
@@ -355,7 +447,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
         if (n <= 0)
         {
             /* No data received. Check overall timeout. If still want to
-             * continue, double the wait interval and retransmit packet.
+             * continue, double the wait interval and retransmit datagram.
              */
             if (systime() - lasttime > TOTAL_TIMEOUT * 100)
             {
@@ -375,7 +467,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
         {
             /* Pick our way through IP/ICMP/IP/UDP header chain
              * to find out if it is an ICMP Destination Unreachable
-             * message generated in response to a UDP packet sent
+             * message generated in response to a UDP datagram sent
              * to our server's port.
              * Internet module will have done basic checking,
              * including ICMP checksum.
@@ -433,26 +525,27 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
             }
             /* It wasn't an ICMP message to do with us. Just loop around.
              * This will delay retransmission, but not really
-             * something worth worrying about as ICMP messages are very rare.
+             * something worth worrying about as ICMP messages are very rare,
+             * and we've connected the socket so we don't get guff from other
+             * hosts.
              */
             goto reselect;
         }
 
         /* Start of UDP input processing */
 
-        was_multicast = (s == multicast_socket);
-
         #ifdef TRACE
-        log_packet(was_multicast ? "<=" : "<-", in, n);
+        log_datagram(s == multicast_socket ? "<=" : "<-", in, n);
         #endif
 
-        if (!connected && from.sin_addr.s_addr != sin.sin_addr.s_addr)
+        if (from.sin_addr.s_addr != sin.sin_addr.s_addr ||
+            (connected && from.sin_port != sin.sin_port))
         {
-            /* This can only happen if not connected - if we are connected we
-             * won't see any packets from the wrong source - the Internet module
-             * will fire back a port unreachable ICMP message.
+            /* Don't want to send errors if we're just picking up interference
+             * from other multicast channels.
              */
-            send_error(unicast_socket, in, EBADID, "Unknown transfer ID", &from);
+            if (s != multicast_socket)
+                send_error(unicast_socket, in, EBADID, "Unknown transfer ID", &from);
             /* Loop around again (see comments above about ICMP) */
             goto reselect;
         }
@@ -470,7 +563,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
         }
 
         /* We have a response! Reset the retransmit timer. */
-        rexmtval = BASE_RETRANSMIT;
+        rexmtval = ACK_RETRANSMIT;
         lasttime = systime();
 
         switch (ntohs(in->th_opcode))
@@ -480,6 +573,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                 /* Parse the returned options. Check they're OK. */
                 char *p = in->th_stuff;
                 char *eop = in->th_stuff + n - offsetof(struct tftphdr, th_stuff);
+                unsigned int tsize = 0;
 
                 while (p < eop)
                 {
@@ -514,18 +608,36 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                             ma.sin_len = sizeof la;
                             memset(ma.sin_zero, 0, sizeof ma.sin_zero);
 
-                            if (setsockopt(multicast_socket, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one) < 0 ||
-                                setsockopt(multicast_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one) < 0 ||
+                            if (setsockopt(multicast_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one) < 0 ||
                                 bind(multicast_socket, (struct sockaddr *) &ma, sizeof ma) < 0 ||
-                                connect(multicast_socket, (struct sockaddr *) &sin, sizeof sin) < 0 ||
                                 getsockname(unicast_socket, (struct sockaddr *) &la, &lalen) < 0)
                             {
                                 send_error(unicast_socket, in, EBADOPTS, _inet_err(), NULL);
                                 goto error;
                             }
 
+                            /* Attempt to connect. Doesn't matter if it doesn't work, but
+                             * if it does, then we get extra Internet module filtering.
+                             * Because we can't rely on it, must still check source address
+                             * and port.
+                             *
+                             * It may not work because we can't have two totally duplicate
+                             * local/foreign address/port bindings. We are free to have
+                             * sockets like this though:
+                             *          224.10.10.10.mcast-tftp    tftpserver.51323
+                             *          224.10.10.10.mcast-tftp    *.*
+                             *          224.10.10.10.mcast-tftp    *.*
+                             *
+                             * By not requiring connection, we allow multiple transfers
+                             * of the same file on one machine. Rather weird, but vital
+                             * for debugging :)
+                             */
+                            connect(multicast_socket, (struct sockaddr *) &sin, sizeof sin);
+
                             mreq.imr_multiaddr = ma.sin_addr;
                             mreq.imr_interface = la.sin_addr;
+                            trace(("add membership %s ", inet_ntoa(ma.sin_addr)));
+                            trace(("on %s\n", inet_ntoa(la.sin_addr)));
 
                             if (setsockopt(multicast_socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof mreq) < 0)
                             {
@@ -538,7 +650,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                         }
                         else
                         {
-                            val++;
+                            while (*val++ != ',') continue;
                         }
                         /* Advance to third field */
                         while (*val++ != ',') continue;
@@ -548,7 +660,13 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     else if (strcasecmp(p, "blksize") == 0)
                     {
                         blocksize = atoi(val);
+                        free(in);
+#if 0
                         in = realloc(in, offsetof(struct tftphdr, th_data) + blocksize);
+#else
+                        free(in);
+                        in = malloc(offsetof(struct tftphdr, th_data) + blocksize);
+#endif
                         if (!in)
                         {
                             e = no_mem_error();
@@ -558,7 +676,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     }
                     else if (strcasecmp(p, "tsize") == 0)
                     {
-                        int tsize = atoi(val);
+                        tsize = atoi(val);
                         /* Dummy zero length reception to mark endpoint */
                         if ((e2 = recvfunc(in->th_data, tsize, 0, client_handle)) != NULL)
                             goto client_error;
@@ -572,12 +690,32 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     p = val + strlen(val) + 1;
                 }
 
-                if (expecting_oack || master_client)
+                /* We can only handle blocks 1-65535, so check now if we're going to
+                 * have problems. Check whether the highest numbered block would have
+                 * to be bigger than 0xFFFF.
+                 */
+                if (tsize && tsize / blocksize + 1 > 0xFFFF)
                 {
-                    len = send_ack(unicast_socket, out, map, &last_acked);
-                    last_acked = ntohs(out->th_block);
-                    already_transmitted = true;
+                    send_error(unicast_socket, in, ENOSPACE, "Too many blocks", NULL);
+                    goto error;
                 }
+
+                #ifdef TRACE_MAP
+                if (tsize)
+                {
+                    _kernel_oswrch(31);
+                    _kernel_oswrch((tsize / blocksize + 1) % 80);
+                    _kernel_oswrch((tsize / blocksize + 1) / 80);
+                    _kernel_oswrch('|');
+                }
+                #endif
+
+                /* Must ACK this. If not master client, ACK block zero always,
+                 * indicating just option acknowledgement, or the server may get
+                 * narked.
+                 */
+                len = send_ack(unicast_socket, out, master_client ? last_acked : 0);
+                already_transmitted = true;
                 break;
             }
 
@@ -585,7 +723,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
             {
                 int blocknum = ntohs(in->th_block) - 1;
                 int size = n - offsetof(struct tftphdr, th_data);
-                bool new_block = !GETMAPBIT(blocknum);
+                bool new_block = !bit_test(map, blocknum);
 
                 /* Quick check of block number */
                 if (num_blocks != -1 && blocknum >= num_blocks)
@@ -594,16 +732,29 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     goto error;
                 }
 
-                SETMAPBIT(blocknum);
+                bit_set(map, blocknum);
 
                 /* ACK as soon as possible */
+                bit_ffc_from(map, 65536, last_acked, &last_acked);
+
                 if (master_client)
                 {
-                    len = send_ack(unicast_socket, out, map, &last_acked);
+                    len = send_ack(unicast_socket, out, last_acked);
                     already_transmitted = true;
                 }
-                else
-                    last_acked = first_clear_bit(map, last_acked);
+
+                #ifdef TRACE_MAP
+                _kernel_oswrch(17);
+                _kernel_oswrch(!new_block ? 1 :
+                               master_client ? 7 :
+                               2);
+                _kernel_oswrch(31);
+                _kernel_oswrch(blocknum % 80);
+                _kernel_oswrch(blocknum / 80);
+                _kernel_oswrch(!new_block ? '+' :
+                               master_client ? '*' :
+                               '#');
+                #endif
 
                 /* Tell our client */
                 if (new_block)
@@ -620,6 +771,7 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                             errnum = EUNDEF;
 
                         send_error(unicast_socket, in, errnum, e->errmess, NULL);
+                        e = e2;
                         goto error;
                     }
                 }
@@ -638,11 +790,26 @@ _kernel_oserror *tftpreadfile(const char *filename, struct in_addr server,
                     }
                     num_blocks = blocknum + 1;
                 }
+                else
+                {
+                    /* If we've received block 0xFFFF, and we're not finished yet,
+                     * we have to bail out.
+                     */
+                    if (blocknum == 65535 - 1)
+                    {
+                        send_error(unicast_socket, in, ENOSPACE, "Too many blocks", NULL);
+                        goto error;
+                    }
+                }
+
 
                 if (last_acked == num_blocks)
                 {
                     /* We've got everything. Hooray! */
                     finished = true;
+                    /* Don't forget to tell the server we're done */
+                    if (!master_client)
+                        send_ack(unicast_socket, out, last_acked);
                 }
 
                 break;

@@ -44,7 +44,7 @@ DEPENDS = -depend !Depend ${THROWBACK}
 DEFINES = ${COMPAT} ${OPTIONS}
 
 AFLAGS = ${DEPENDS} -Stamp -quit
-CFLAGS  = -ffcah -c -zM -zps1 -Wp ${DEFINES} ${INCLUDES} ${DEPENDS}
+CFLAGS  = -ffah -c -zM -zps1 -Wp ${DEFINES} ${INCLUDES} ${DEPENDS}
 CMHGFLAGS = -p ${DEPENDS}
 
 CPFLAGS = ~cfr~v
