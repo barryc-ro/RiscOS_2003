@@ -106,6 +106,7 @@ resources_NCFresco_base:
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histt     -o ${RESRES}.html.histt     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.message    -o ${RESRES}.html.message   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${RESRES}.html.okcncl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.password  -o ${RESRES}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${RESRES}.html.printopts ${TRFLAGS}
@@ -162,6 +163,7 @@ install_NCFresco:
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLRESLOCALEDIR}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLRESLOCALEDIR}.html.histr     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histt     -o ${INSTALLRESLOCALEDIR}.html.histt     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.message   -o ${INSTALLRESLOCALEDIR}.html.message   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLRESLOCALEDIR}.html.okcncl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLRESLOCALEDIR}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLRESLOCALEDIR}.html.printopts ${TRFLAGS}
