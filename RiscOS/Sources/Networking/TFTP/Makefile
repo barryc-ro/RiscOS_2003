@@ -110,6 +110,10 @@ rom: ${ROMTARGET}
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
+install: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed
+
 install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
