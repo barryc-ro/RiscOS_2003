@@ -10,6 +10,7 @@
 #  include "aof.h"
 #  include "aout.h"
 #  include "chunkfmt.h"
+#  include "mapping.h"
 #  include "nametyp.h"
 #  include "aofvars.h"
 #  include "occur.h"
@@ -284,7 +285,10 @@ void CodeEnd(void)
    * the area does not fill the entire slot available to it. Zero the
    * last one, two or three bytes as appropriate.
    */
-    while (codePtr & 3) ptr[codePtr++] = 0;
+    if (codePtr & 3) {
+      MapData();
+      while (codePtr & 3) ptr[codePtr++] = 0;
+    }
 #endif
   if (codePtr != 0) fwrite(ptr, 1, (size_t)codePtr, codeStream);
 #ifndef AAsm
@@ -314,6 +318,7 @@ void CodeByte(char byte)
     if (byte != 0) Report(AsmError,errors_BadNoInit);
     return;
   }; /* if */
+  MapData();
   if (input_style == ObjAsmIS) {
     ptr[codePtr++] = byte;
     if (codePtr == MaxBuffer) CodeEnd();
@@ -339,6 +344,48 @@ void CodeByte(char byte)
   programCounter++;
   ListByteValue(byte);
 } /* End CodeByte */
+
+static void code_halfword(CARDINAL halfword)
+{
+  CARDINAL n;
+  if (noInitArea) {
+    if (halfword != 0) Report(AsmError,errors_BadNoInit);
+    return;
+  }; /* if */
+  if (input_style == ObjAsmIS) {
+    if (target_is_big_endian) {
+      ptr[codePtr++] = (char) ((halfword >> 8) & 255);
+      ptr[codePtr++] = (char) (halfword & 255);
+    } else {
+      ptr[codePtr++] = (char) (halfword & 255);
+      ptr[codePtr++] = (char) ((halfword >> 8) & 255);
+    }
+    if (codePtr >= MaxBuffer) {
+      fwrite(ptr, 1, MaxBuffer, codeStream);
+      codePtr -= MaxBuffer;
+      for (n = 0; n <= 3; n++) ptr[n] = ptr[MaxBuffer+n];
+    }; /* if */
+  } else {
+    Aout_Code_Ptr temp = (area_is_code) ? current_text : current_data;
+    if (temp->ptr >= MaxBuffer) {
+      /* Time for a new buffer */
+      temp->link = (Aout_Code_Ptr) mymalloc(sizeof(*temp));
+      temp = temp->link;
+      temp->link = NULL;
+      temp->ptr = 0;
+      if (area_is_code) current_text = temp; else current_data = temp;
+    }; /* if */
+    if (target_is_big_endian) {
+      temp->buffer[temp->ptr++] = (char) ((halfword >> 8) & 255);
+      temp->buffer[temp->ptr++] = (char) (halfword & 255);
+    } else {
+      temp->buffer[temp->ptr++] = (char) (halfword & 255);
+      temp->buffer[temp->ptr++] = (char) ((halfword >> 8) & 255);
+    }
+  }; /* if */
+  programCounter += 2;
+  ListHalfwordValue(halfword);
+} /* End code_halfword */
 
 static int WarnIfBanked(CARDINAL reg)
 {   reg &= 15;
@@ -441,13 +488,27 @@ void CodeWord(CARDINAL word)
   if (area_is_code)
 #endif
     CheckCodeWord(word);
+  MapARM();
   code_word(word);
 }
 
 void CodeDataWord(CARDINAL word)
 { /* Called from DCD/& - use to avoid illegal instr srquence check */
   lastCodeWord = 0;
+  MapData();
   code_word(word);
+}
+
+void CodeHalfword(CARDINAL halfword)
+{
+  MapThumb();
+  code_halfword(halfword);
+}
+
+void CodeDataHalfword(CARDINAL halfword)
+{
+  MapData();
+  code_halfword(halfword);
 }
 
 #ifndef AAsm
@@ -662,6 +723,12 @@ void DumpSymbolTable(void)
     chunkEntry.cfe_size =
       bytesex_hostval((int32)endAreaPtr - (int32)endHeaderPtr);
     fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    if (MapSymbols()) {
+      /* Nip back and patch up the number of symbols */
+      header.aof_nsyms += MapSymbols();
+      fseek(codeStream, endFixedHeaderPtr - 3*sizeof(int32), SEEK_SET);
+      fwrite(&header.aof_nsyms, 1, sizeof header.aof_nsyms, codeStream);
+    }
     fseek(codeStream, endAreaPtr, SEEK_SET);
     if (bytesex_reversing) {
       unsigned i = 0;
@@ -673,6 +740,7 @@ void DumpSymbolTable(void)
       /*********More work required here */
       fwrite(extern_symbolTable, 1, (size_t)symbolId * sizeof(aof_symbol),
           codeStream);
+      MapDumpSymbols(codeStream);
   } else {
     fwrite(aout_symbolTable, 1, (size_t)symbolId * sizeof(struct nlist),
           codeStream);
@@ -682,6 +750,7 @@ void DumpSymbolTable(void)
 
 void DumpStringTable(void)
 {
+  *(int32 *)stringTable = bytesex_hostval(stringOffset); /* Save the length */
   while (stringOffset & 3) stringTable[stringOffset++] = 0;
   fwrite(stringTable, 1, (size_t)stringOffset, codeStream);
   endStringsPtr = (CARDINAL)ftell(codeStream);
@@ -741,6 +810,7 @@ void DumpHeader(void)
     chunkEntry.cfe_size = 0;
     for (i = 1; i <= MaxChunks - NumChunks; i++)
       fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    header.aof_nsyms += MapSymbols();
     if (bytesex_reversing) {
       unsigned32 a[6];
       unsigned32 i = 0;

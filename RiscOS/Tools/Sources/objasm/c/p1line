@@ -85,6 +85,15 @@ static BOOLEAN Rotatable(CARDINAL value)
   return FALSE;
 } /* End Rotatable */
 
+static void CheckThumb()
+{
+  if (!(cpu_version & cpu_T) && !thumbWarned)
+  {
+    Report(ReportWarning,errors_nothumb);
+    thumbWarned = TRUE;
+  }
+}
+
 BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
 /*
  The returned value indicates if the pass has finished.
@@ -92,7 +101,8 @@ BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
 {
   Name          name,  /* Used for the opcode */
                 lname; /* Used for the label */
-  SymbolPointer symbolPointer;
+  SymbolPointer symbolPointer,
+                labelSymbol;
   char         *line;
   CARDINAL      lineIndex = 0,
                 old_index,
@@ -253,7 +263,10 @@ BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
         output_style = ADotOutOS;
       }
 #endif
-      programCounter = (programCounter+3) & ~3;
+      if (thumbMode)
+        programCounter = (programCounter+1) & ~1;
+      else
+        programCounter = (programCounter+3) & ~3;
 #ifndef AAsm
       if ((areaNumber == 0) && (input_style == ObjAsmIS))
       { Report(AsmError,errors_ADirMissing);
@@ -274,6 +287,7 @@ BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
   }
 
   /*Now sort out local or ordinary labels*/
+  labelSymbol = NULL;
   lineIndex = after_symbol;
   if (!isWhiteSpace(*line)) {
     if (symbol_found) {
@@ -317,11 +331,12 @@ BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
         Report(FatalError,p1line_label_in_no_area);
       }
       /*Symbol is defined and label type and relocatable*/
+      labelSymbol = symbolPointer;
       symbolPointer->u.s.sds = DefinedSDS;
       symbolPointer->u.s.fst = (currArea->dec.area_attributes & AOF_ABSAT)
                                ? AbsoluteFST : RelocatableFST;
       symbolPointer->u.s.sdt = FixedSDT;
-      symbolPointer->length = (opcodeFound) ? 4 : 0;
+      symbolPointer->length = (opcodeFound) ? (thumbMode ? 2 : 4) : 0;
       symbolPointer->value.card = programCounter;
 #ifndef AAsm
       { unsigned32 attr;
@@ -332,6 +347,8 @@ BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
             symbolPointer->u.s.fsr = (BITFIELD)(attr >> AOF_BASESHIFT) & 0xf;
             symbolPointer->u.s.bt  = 1;
           }
+          if ((attr & AOF_CODEAT) && thumbMode)
+            symbolPointer->u.s.aof_xat |= (BITFIELD) (SYM_THUMBAT >> 8);
         }
         symbolPointer->area = areaNumber;
         if (keepingAll && (symbolPointer->aOFData.symbolId == SymbolIdUnset))
@@ -356,8 +373,6 @@ BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
     }; /* if */
 #endif
     lineIndex = pastOpcode;
-    if ((opcodeValue & 0xF0000000) == 0xF0000000)
-      Report(ReportWarning,p1line_p1line_res_instr);
     switch (opcodeType) {
 
       case MVP:    /* MRS and MSR */
@@ -468,17 +483,40 @@ DPoperand2:
       }; /* if */
       break;
 
-      case DataTransfer_v4:
-      if (cpu_version < cpu_4)
+      case PLD:
+      if (!(cpu_version && cpu_P))
         Report(ReportWarning,errors_incompatibleinstrs);
+      goto pld_dt_common;
+
+      case DataTransfer_v4:
+      { CARDINAL i = opcodeValue &~ 0xF0000000;
+        if (cpu_version < cpu_4 ||
+              ((i == LDRDCode || i == STRDCode) &&
+               !(cpu_version & cpu_P)))
+          Report(ReportWarning,errors_incompatibleinstrs);
+#ifndef AAsm
+        if (i == LDRHCode || i == LDRSHCode || i == STRHCode)
+          currArea->dec.area_attributes |= AOF_HWORDAT;
+#endif
+      }
       case DataTransfer:
       value2 = RegisterExpr(line, &lineIndex);  /* Destination/source */
       if (errorFound) return FALSE;
+      if ((opcodeValue&~0xF0000000) == LDRDCode || (opcodeValue&~0xF0000000) == STRDCode)
+      { if (value2 & 1) {
+          Report(AsmError,errors_BadDoubleReg);
+          return FALSE;
+        }
+        if (value2 == 14) {
+          Report(ReportWarning,p1line_p1line_pc_src_warn);
+        }
+      }
       if (line[lineIndex] != Comma)
       { Report(AsmError,errors_CommaMissing);
         return FALSE;
       }
       lineIndex++;  /* Step past */
+      pld_dt_common:
       while (isWhiteSpace(line[lineIndex])) lineIndex++;
       if (line[lineIndex] == SquareBra)
       { lineIndex++;
@@ -488,36 +526,38 @@ DPoperand2:
         if (line[lineIndex] == SquareKet)
         { /*This is the post-indexed form*/
           lineIndex++;
-          while (isWhiteSpace(line[lineIndex])) lineIndex++;
-          if (line[lineIndex] != Comma)
-          { /* Allow optional shriek */
-            if (line[lineIndex] == Shriek)
-            { lineIndex++;
-              value1 += WriteBack;
-            }
-            else if ((1L << TransBit) & opcodeValue)
-              /* Force writeback on LDRT ..., [Rb]...    */
-              /* ... to be compatible with past practice */
-              value1 += WriteBack;
-          }
-          else
-          { lineIndex++;
-            value1 += WriteBack;
+          if (opcodeType != PLD) {
             while (isWhiteSpace(line[lineIndex])) lineIndex++;
-            if (line[lineIndex] == Hash)
-            { lineIndex++;
-              value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+            if (line[lineIndex] != Comma)
+            { /* Allow optional shriek */
+              if (line[lineIndex] == Shriek)
+              { lineIndex++;
+                value1 += WriteBack;
+              }
+              else if ((1L << TransBit) & opcodeValue)
+                /* Force writeback on LDRT ..., [Rb]...    */
+                /* ... to be compatible with past practice */
+                value1 += WriteBack;
             }
             else
-            { /*Here we must allow an optional + or -*/
-              if ((line[lineIndex] == PlusSign) ||
-                (line[lineIndex] == MinusSign)) lineIndex++;
-              if (opcodeType == DataTransfer)
-                value = ShiftedRegister(line, &lineIndex, FALSE);
+            { lineIndex++;
+              value1 += WriteBack;
+              while (isWhiteSpace(line[lineIndex])) lineIndex++;
+              if (line[lineIndex] == Hash)
+              { lineIndex++;
+                value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+              }
               else
-                value = RegisterExpr(line, &lineIndex);
-              if ((value1 & 15) == (value & 15))
-                Report(ReportWarning,p1line_p1line_res_rm_rn);
+              { /*Here we must allow an optional + or -*/
+                if ((line[lineIndex] == PlusSign) ||
+                  (line[lineIndex] == MinusSign)) lineIndex++;
+                if (opcodeType == DataTransfer)
+                  value = ShiftedRegister(line, &lineIndex, FALSE);
+                else
+                  value = RegisterExpr(line, &lineIndex);
+                if ((value1 & 15) == (value & 15))
+                  Report(ReportWarning,p1line_p1line_res_rm_rn);
+              }
             }
           }
         }
@@ -552,7 +592,7 @@ DPoperand2:
           }; /* if */
           lineIndex++;
           while (isWhiteSpace(line[lineIndex])) lineIndex++;
-          if (line[lineIndex] == Shriek)
+          if (line[lineIndex] == Shriek && opcodeType != PLD)
           { lineIndex++;
             value1 += WriteBack;
           }
@@ -571,7 +611,8 @@ DPoperand2:
 #else
         if ((line[lineIndex] == Equals)
 #endif
-          && ((1L << LoadBit) & opcodeValue)) {
+          && ((1L << LoadBit) & opcodeValue)
+          && (opcodeType == DataTransfer)) {
           lineIndex++;
 #ifndef AAsm
           symbolPointer = ExternalExpr(line, &lineIndex, &value);
@@ -628,7 +669,7 @@ DPoperand2:
           value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
           value1=15;
 #endif
-          if (line[lineIndex] == Shriek)
+          if (opcodeType != PLD && line[lineIndex] == Shriek)
           { lineIndex++;
             value1 += WriteBack;
           }
@@ -649,6 +690,8 @@ DPoperand2:
       break;
 
       case BKPT:
+      if (cpu_version < cpu_5)
+        Report(ReportWarning,errors_incompatibleinstrs);
       value = ConstantExpr(line, &lineIndex, TRUE, &defined);
       break;
 
@@ -702,7 +745,7 @@ DPoperand2:
       }
       symbolPointer = ExternalExpr(line, &lineIndex, &value);
       if (symbolPointer == NULL)
-        value = NotStringExpr(line, &lineIndex, &value, &type, TRUE, &defined);
+        value = NotStringExpr(line, &lineIndex, &value, &type, FALSE, TRUE, &defined);
 #ifdef DISALLOW_EXTERNAL_ADR
       else
       {
@@ -710,7 +753,10 @@ DPoperand2:
         return FALSE;
       }
 #endif
-      if (opcodeType == ADRL) programCounter += 4; /*Double word opcode*/
+      if (opcodeType == ADRL) {
+        programCounter += 4; /*Double word opcode*/
+        if (labelSymbol) labelSymbol->length = 8;
+      }
       break;
 
       case SWP:
@@ -1296,8 +1342,275 @@ DPoperand2:
       if (value == 15)
           Report(ReportWarning,p1line_p1line_dubious);
       break;
+
+
+
+      case ThumbMovCmpAddSub:
+      CheckThumb();
+      value = RegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++; /*Step past comma*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash) {
+        lineIndex++;
+        ConstantExpr(line, &lineIndex, TRUE, &defined);
+        if (errorFound) return FALSE;
+        /* Accept MOV/CMP/ADD/SUB R0-7, #imm and ADD/SUB R13, #imm */
+        if (!(value < 8 || (opcodeValue >= ThumbADDriCode && value == 13)))
+          Report(AsmError, errors_BadThumbReg);
+      }
+      else {
+        value1 = RegisterExpr(line, &lineIndex);
+        if (opcodeValue >= ThumbADDriCode && line[lineIndex] == Comma) {
+          /* Accept ADD/SUB R0-7, xxx, xxx */
+          if (value >= 8)
+            Report(AsmError, errors_BadThumbReg);
+          lineIndex++; /*Step past comma*/
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash) {
+            lineIndex++;
+            ConstantExpr(line, &lineIndex, TRUE, &defined);
+            if (errorFound) return FALSE;
+            /* Allow ADD/SUB xxx, R0-7, #xxx and ADD xxx, R13/R15, #imm */
+            if (!(value1 < 8 ||
+                  (opcodeValue == ThumbADDriCode && (value1 == 13 || value1 == 15))))
+              Report(AsmError, errors_BadThumbReg);
+          }
+          else {
+            /* Allow ADD/SUB xxx, R0-7, R0-7 */
+            value2 = LowRegisterExpr(line, &lineIndex);
+            if (value1 >= 8)
+              Report(AsmError, errors_BadThumbReg);
+          }
+        }
+        else {
+          /* No high register for for SUB Rn, Rn */
+          if (opcodeValue == ThumbSUBriCode && (value >= 8 || value1 >= 8))
+            Report(AsmError, errors_BadThumbReg);
+        }
+      }
+      break;
+
+      case ThumbShift:
+      CheckThumb();
+      value = LowRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++; /*Step past comma*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash)
+        goto ThumbShiftNoRn;
+      value1 = LowRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] == Comma) {
+        lineIndex++; /*Step past comma*/
+        while (isWhiteSpace(line[lineIndex])) lineIndex++;
+        if (line[lineIndex] == Hash) {
+        ThumbShiftNoRn:
+          lineIndex++;
+          value2 = ConstantExpr(line, &lineIndex, TRUE, &defined);
+        }
+        else
+          Report(AsmError,errors_HashMissing);
+      }
+      /* else it's DataProcessing form, and valid */
+      break;
+
+      case ThumbDataProcessing:
+      CheckThumb();
+      value = LowRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+         Report(AsmError,errors_CommaMissing);
+         return FALSE;
+      }; /* if */
+      lineIndex++; /*Step past comma*/
+      value = LowRegisterExpr(line, &lineIndex);
+      break;
+
+      case ThumbBranch:
+      CheckThumb();
+      value = AddressExpr(line, &lineIndex, TRUE, &defined);
+      break;
+
+      case ThumbBranchLongX:
+      CheckThumb();
+      if (IsRegisterExpr(line, lineIndex))
+        goto thumb_bxreg;
+      if (errorFound) return FALSE;
+      /* Fall through into ThumbBranchLong */
+
+      case ThumbBranchLong:
+      CheckThumb();
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer == NULL)
+      { OperandType type;
+        value = ConstantOrAddressExpr(line, &lineIndex, &type, TRUE, &defined);
+      }
+      programCounter += 2; /*Double halfword opcode*/
+      if (labelSymbol) labelSymbol->length = 4;
+      break;
+
+      case ThumbSWI:
+      case ThumbBreakpoint:
+      CheckThumb();
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer == NULL)
+        value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+      break;
+
+      case ThumbBranchXReg:
+      CheckThumb();
+      thumb_bxreg:
+      value = RegisterExpr(line, &lineIndex);
+      break;
+
+      case ThumbBlockData:
+      CheckThumb();
+      value = LowRegisterExpr(line, &lineIndex);
+      if (line[lineIndex] != Shriek) {
+        Report(AsmError,errors_ShriekMissing);
+        return FALSE;
+      }
+      lineIndex++;
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;
+      value1 = RegisterListExpr(line, &lineIndex);
+      if (value1 & 0xff00)
+        Report(AsmError, errors_BadThumbReg);
+      break;
+
+      case ThumbPop:
+      CheckThumb();
+      value1 = RegisterListExpr(line, &lineIndex);
+      if (value1 & 0x7f00)
+        Report(AsmError, errors_BadThumbReg);
+      break;
+
+      case ThumbPush:
+      CheckThumb();
+      value1 = RegisterListExpr(line, &lineIndex);
+      if (value1 & 0xbf00)
+        Report(AsmError, errors_BadThumbReg);
+      break;
+
+      case ThumbADR:
+      CheckThumb();
+      value = LowRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;
+      value = NotStringExpr(line, &lineIndex, &value, &type, FALSE, TRUE, &defined);
+      break;
+
+      case ThumbDataTransfer:
+      CheckThumb();
+      value2 = LowRegisterExpr(line, &lineIndex);  /* Destination/source */
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;  /* Step past */
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == SquareBra)
+      { lineIndex++;
+        value1 = RegisterExpr(line, &lineIndex);
+        if (errorFound) return FALSE;
+        if (value1 >= 8 &&
+             !(opcodeValue == ThumbLDRCodeR && (value1 == 13 || value1 == 15)) &&
+             !(opcodeValue == ThumbSTRCodeR && value1 == 13))
+        { Report(AsmError,errors_BadThumbReg);
+          return FALSE;
+        }
+        if (line[lineIndex] == SquareKet)
+        { lineIndex++;
+        }
+        else if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        else
+        { lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash &&
+                         opcodeValue != ThumbLDRSBCodeR &&
+                         opcodeValue != ThumbLDRSHCodeR) {
+            lineIndex++;
+            value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+          } else if (value1 < 8) {
+            /*Here we must allow an optional +*/
+            if (line[lineIndex] == PlusSign) lineIndex++;
+            value = LowRegisterExpr(line, &lineIndex);
+          } else {
+            Report(AsmError,errors_HashMissing);
+            return FALSE;
+          }
+          if (errorFound) return FALSE;
+          if (line[lineIndex] != SquareKet) {
+            Report(AsmError,errors_MissSqKet);
+            return FALSE;
+          }; /* if */
+          lineIndex++;
+        }
+      }
+      else if (opcodeValue != ThumbLDRSBCodeR && opcodeValue != ThumbLDRSHCodeR)
+      { value1 = 0;    /* must re-initialise this */
+        if ((((line[lineIndex] == Equals) && (input_style == ObjAsmIS)) ||
+             ((line[lineIndex] == Hash) && (input_style == AsIS)))
+          && opcodeValue == ThumbLDRCodeR) {
+          lineIndex++;
+          symbolPointer = ExternalExpr(line, &lineIndex, &value);
+          if (symbolPointer == NULL) {
+            value = ConstantOrAddressExpr(line, &lineIndex, &type,
+              TRUE, &defined);
+            if (errorFound) { return FALSE; }; /* if */
+/* If the symbol is not yet defined, or it is defined, but the offset
+ * cannot be generated by rotation, then we MUST add a literal pool slot.
+ * If on the second pass it turns out that the value could in fact have
+ * been generated by rotation, then this can be done, and the literal
+ * pool slot left unused (by this LDR, =)
+ */
+            if (defined && (type==PCRelOT)) {
+              value = AddThumbAddressLiteral(value,defined);
+            } else {
+              if (!defined || !Rotatable(value)) {
+                value = AddThumbLiteral(defined, 0, value);
+              }
+            }
+          } else {
+            value = AddThumbExternalLiteral(symbolPointer, value);
+          }
+        } else {
+       //   symbolPointer = ExternalExpr(line, &lineIndex, &value);
+       //   if (symbolPointer == NULL) {
+            value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
+       //   }
+        }
+      } else {
+        Report(AsmError,errors_MissBra);
+        return FALSE;
+      }
+      if (value2 == 15 && (opcodeValue != ThumbSTRCodeR && opcodeValue != ThumbLDRCodeR))
+        Report(ReportWarning,p1line_p1line_rd_dest);
+      break;
+
     }; /* case */
-    programCounter += 4;  /* Another 4 bytes produced */
+    programCounter += thumbMode ? 2 : 4;
   };
 #ifndef AAsm
 check_for_more_lines:

@@ -12,6 +12,7 @@
 #  include "aof.h"
 #  include "aofvars.h"
 #  include "aofvars.h"
+#  include "mapping.h"
 #  include "tokens.h"
 #endif
 #include "code.h"
@@ -460,8 +461,12 @@ BOOLEAN P2LineHandler(char **linkPointer, BOOLEAN *wasLink) /*
   if (opcodeFound) {
     lineIndex = pastOpcode;
     while (isWhiteSpace(line[lineIndex])) { lineIndex++; };
-    /*Now align on word boundary*/
-    while ((programCounter % 4) != 0) {
+
+    /*Now align on instruction boundary*/
+    if (thumbMode) {
+      if ((programCounter % 2) != 0)
+        CodeByte(0);
+    } else while ((programCounter % 4) != 0) {
       CodeByte(0);
     }; /* while */
 
@@ -551,9 +556,14 @@ DPoperand2:
 
       case DataTransfer:
       case DataTransfer_v4:
-      destReg = RegisterExpr(line, &lineIndex); /* Destination/source */
-      lineIndex++; /* Step past comma */
-      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      case PLD:
+      if (opcodeType == PLD) {
+        destReg = 0;
+      } else {
+        destReg = RegisterExpr(line, &lineIndex); /* Destination/source */
+        lineIndex++; /* Step past comma */
+        while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      }
       if (line[lineIndex] == SquareBra)
       { lineIndex++;
         sourceReg1 = RegisterExpr(line, &lineIndex);
@@ -591,7 +601,7 @@ DPoperand2:
               immValue = abs((int)immValue);
             }
             else
-            { if (opcodeType == DataTransfer) opcodeValue |= Type2RegBit;
+            { if (opcodeType != DataTransfer_v4) opcodeValue |= Type2RegBit;
               /*Here we must allow an optional + or -*/
               if (line[lineIndex] == PlusSign) {
                 lineIndex++;
@@ -601,7 +611,7 @@ DPoperand2:
               } else {
                 opcodeValue |= UpBit;
               }; /* if */
-              if (opcodeType == DataTransfer)
+              if (opcodeType != DataTransfer_v4)
                 immValue = ShiftedRegister(line, &lineIndex, FALSE);
               else
                 immValue = RegisterExpr(line, &lineIndex);
@@ -626,7 +636,7 @@ DPoperand2:
             if (immValue < 0x1000) opcodeValue |= UpBit;
             immValue = abs((int)immValue);
           } else {
-            if (opcodeType == DataTransfer) opcodeValue |= Type2RegBit;
+            if (opcodeType != DataTransfer_v4) opcodeValue |= Type2RegBit;
             /*Here we must allow an optional + or -*/
             if (line[lineIndex] == PlusSign) {
               lineIndex++;
@@ -636,7 +646,7 @@ DPoperand2:
             } else {
               opcodeValue |= UpBit;
             }
-            if (opcodeType == DataTransfer)
+            if (opcodeType != DataTransfer_v4)
               immValue = ShiftedRegister(line, &lineIndex, FALSE);
             else
               immValue = RegisterExpr(line, &lineIndex);
@@ -663,8 +673,13 @@ DPoperand2:
           symbolPointer = ExternalExpr(line, &lineIndex, &value);
           sourceReg1 = 15;
           if (symbolPointer == NULL) {
+            #if 0
             value = ConstantOrAddressExpr(line, &lineIndex, &type, FALSE,
               &defined);
+            #else
+            value = NotStringExpr(line, &lineIndex, &sourceReg1, &type,
+              TRUE, FALSE, &defined);
+            #endif
             if (errorFound) { return FALSE; }; /* if */
 /* Optimising PC relative LDR, = into an ADD or SUB has been deemed
  * undesirable, so this is #if ed out.
@@ -688,6 +703,13 @@ DPoperand2:
               }
 #endif
               immValue = AddAddressLiteral(value, DEFINED);
+            } else if (type==RegRelOT) {
+              if (sourceReg1 >= 256) {
+                immValue = AddBasedLiteral(value, DEFINED);
+                sourceReg1 = 15;
+              }
+              else
+                immValue = value;
             } else if (Rotatable(value, &immValue, TRUE, &immValue1)) {
               opcodeValue = (opcodeValue & 0xF0000000) + destReg * 0x1000 +
                 Type1ImmBit + MOVCode;
@@ -779,7 +801,7 @@ DPoperand2:
           opcodeValue |= WriteBackBit;
         }
       }
-      if (opcodeType == DataTransfer)
+      if (opcodeType != DataTransfer_v4)
         CodeWord(opcodeValue + sourceReg1*0x10000 + destReg*0x1000 + immValue);
       else
         CodeWord(opcodeValue + sourceReg1*0x10000 + destReg*0x1000 +
@@ -950,7 +972,7 @@ DPoperand2:
         PutReloc(reloc);
       } else
         immValue =
-          NotStringExpr(line, &lineIndex, &sourceReg1, &type, FALSE, &defined);
+          NotStringExpr(line, &lineIndex, &sourceReg1, &type, FALSE, FALSE, &defined);
       if (errorFound) return FALSE;
       switch (type) {
         case ConstantOT:
@@ -1016,7 +1038,7 @@ DPoperand2:
       } else
 #endif
       value =
-        NotStringExpr(line, &lineIndex, &sourceReg1, &type, FALSE, &defined);
+        NotStringExpr(line, &lineIndex, &sourceReg1, &type, FALSE, FALSE, &defined);
       if (errorFound) { return FALSE; }; /* if */
       switch (type) {
         case ConstantOT:
@@ -1505,6 +1527,441 @@ adrl_have_rotated:
       case BranchXReg:
       destReg = RegisterExpr(line, &lineIndex);
       CodeWord(opcodeValue + destReg);
+      break;
+
+      case NOP:
+      CodeWord(opcodeValue);
+      break;
+
+
+      case ThumbMovCmpAddSub:
+      destReg = RegisterExpr(line, &lineIndex);
+      lineIndex++; /*Step past comma*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash) {
+        lineIndex++; /*Step past hash*/
+        immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
+        if (destReg != 13) {
+          if (immValue >= 0x100)
+          { Report(AsmError,errors_ImmValRange, immValue);
+            return FALSE;
+          }
+          CodeHalfword(opcodeValue + destReg*0x100 + immValue);
+        }
+        else {
+          if (immValue >= 0x200 || (immValue % 4) != 0)
+          { Report(AsmError,errors_ImmValRange, immValue);
+            return FALSE;
+          }
+          opcodeValue = (opcodeValue == ThumbADDriCode) ? ThumbADDsiCode : ThumbSUBsiCode;
+          CodeHalfword(opcodeValue + (immValue / 4));
+        }
+      }
+      else {
+        sourceReg1 = RegisterExpr(line, &lineIndex);
+        if (line[lineIndex] == Comma) {
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash) {
+            lineIndex++;
+            immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
+            if (sourceReg1 == 13 || sourceReg1 == 15) {
+              if (immValue >= 0x400 || (immValue % 4) != 0)
+              { Report(AsmError,errors_ImmValRange, immValue);
+                return FALSE;
+              }
+              opcodeValue = (sourceReg1 == 13) ? ThumbADDrsiCode : ThumbADDrpiCode;
+              CodeHalfword(opcodeValue + destReg*0x100 + immValue / 4);
+            }
+            else {
+              if (immValue >= 0x8)
+              { Report(AsmError,errors_ImmValRange, immValue);
+                return FALSE;
+              }
+              opcodeValue = (opcodeValue == ThumbADDriCode) ?
+                                               ThumbADDrriCode : ThumbSUBrriCode;
+            outputThumbADDSUBrri:
+              CodeHalfword(opcodeValue + immValue*0x40 + sourceReg1*0x8 + destReg);
+            }
+          }
+          else {
+            sourceReg2 = RegisterExpr(line, &lineIndex);
+            outputThumbADDSUBrrr:
+            opcodeValue = (opcodeValue == ThumbADDriCode) ?
+                                               ThumbADDrrrCode : ThumbSUBrrrCode;
+            CodeHalfword(opcodeValue + sourceReg2*0x40 + sourceReg1*0x8 + destReg);
+          }
+        } else {
+          /* ADD/SUB/CMP/MOV Rd, Rm */
+          if (destReg < 8 && sourceReg1 < 8) {
+            switch (opcodeValue) {
+            case ThumbMOVriCode:
+              opcodeValue = ThumbADDrriCode;
+              immValue = 0;
+              goto outputThumbADDSUBrri;
+            case ThumbCMPriCode:
+              opcodeValue = ThumbCMPCode;
+              goto outputThumbDP;
+            case ThumbADDriCode:
+            case ThumbSUBriCode:
+              sourceReg2 = sourceReg1;
+              sourceReg1 = destReg;
+              goto outputThumbADDSUBrrr;
+            }
+          }
+          switch (opcodeValue) {
+            case ThumbADDriCode: opcodeValue = ThumbADDrrCode; break;
+            case ThumbCMPriCode: opcodeValue = ThumbCMPrrCode; break;
+            case ThumbMOVriCode: opcodeValue = ThumbMOVrrCode; break;
+          }
+          CodeHalfword(opcodeValue + (destReg&0x8)*0x10 +
+                                  sourceReg1*0x8 + (destReg&0x7));
+        }
+      }
+      break;
+
+      case ThumbShift:
+      destReg = LowRegisterExpr(line, &lineIndex);
+      lineIndex++;
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash) {
+        sourceReg1 = destReg;
+        goto ThumbShiftNoRn;
+      }
+      sourceReg1 = LowRegisterExpr(line, &lineIndex);
+      if (line[lineIndex] != Comma) {
+        switch (opcodeValue) {
+          case ThumbLSLrriCode: opcodeValue = ThumbLSLCode; goto outputThumbDP;
+          case ThumbLSRrriCode: opcodeValue = ThumbLSRCode; goto outputThumbDP;
+          case ThumbASRrriCode: opcodeValue = ThumbASRCode; goto outputThumbDP;
+        }
+      }
+      lineIndex++;
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    ThumbShiftNoRn:
+      lineIndex++;
+      immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
+      if ((opcodeValue == ThumbLSLrriCode && immValue > 31) ||
+          (opcodeValue != ThumbLSLrriCode && (immValue < 1 || immValue > 32)))
+      { Report(AsmError, errors_ImmValRange, immValue);
+        return FALSE;
+      }
+      CodeHalfword(opcodeValue + (immValue&0x1f)*0x40 + sourceReg1*0x8 + destReg);
+      break;
+
+      case ThumbDataProcessing:
+      destReg = LowRegisterExpr(line, &lineIndex);
+      lineIndex++; /*Step past comma*/
+      sourceReg1 = LowRegisterExpr(line, &lineIndex);
+      outputThumbDP:
+      CodeHalfword(opcodeValue + sourceReg1*0x8 + destReg);
+      break;
+
+      case ThumbBranch:
+      value = AddressExpr(line, &lineIndex, FALSE, &defined);
+      if (errorFound) { return FALSE; };
+      value -= programCounter+4;
+      value1 = ((long)value < 0) ? -value-2 : value;
+      if ((opcodeValue != ThumbBCode && value1 >= 0x100) || value1 >= 0x800)
+      { Report(AsmError,errors_BrOff); value = 0; }
+      if (value & 1) Report(AsmError,p2line_p2line_B_unalign);
+      if (opcodeValue == ThumbBCode)
+        value = ((value+1) >> 1) & 0x07ff;
+      else
+        value = ((value+1) >> 1) & 0x00ff;
+      CodeHalfword(opcodeValue + value);
+      break;
+
+      case ThumbBranchLongX:
+      if (IsRegisterExpr(line, lineIndex)) {
+        opcodeValue = ThumbBLXCodeR;
+        goto thumb_bx;
+      }
+      if (errorFound) return FALSE;
+      /* Fall through into ThumbBranchLong */
+
+      case ThumbBranchLong:
+      type=UnDefOT;
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer == NULL)
+      {
+        value = ConstantOrAddressExpr(line, &lineIndex, &type, FALSE, &defined);
+        if (errorFound) { return FALSE; };
+        if (type == ConstantOT) {
+          symbolPointer = LookupFixed(currArea->name, FALSE);
+        }
+      }
+      if (((currArea->dec.area_attributes & AOF_ABSAT) && type==ConstantOT)
+          || symbolPointer==NULL)
+        value -= programCounter+4;
+      else
+      { Relocation reloc;
+        if (output_style == AofOS)
+        { reloc.aof_reloc.rel_offset = (int32)programCounter | 1;
+          reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_R | REL_INSTR |
+            ((symbolPointer->u.s.sdt == ExternalSDT) ?
+             (REL_A | (symbolPointer->aOFData.symbolId & 0xffffff)) :
+             (symbolPointer->area - 1L));
+                 /* Note inconsistent use of area number */
+          value += currArea->dec.area_base - programCounter - 4;
+              /* Account for offset into this area */
+        }
+        else
+        { Report(AsmError,errors_BadAoutAdr);
+          return FALSE;
+        }
+        PutReloc(reloc);
+      }
+      if (opcodeValue == ThumbBLXCode)
+        value1 = 3;
+      else
+        value1 = 1;
+      if (value1 == 3) value += (programCounter & 2);
+      if (value & value1) {
+        Report(AsmError,p2line_p2line_B_unalign);
+        value = (value + value1) &~ value1;
+      }
+      value1 = ((long)value < 0) ? -value-2 : value;
+      if (value1 >= 0x400000) { Report(AsmError,errors_BrOff);  return FALSE;}
+      MapThumbBranchLong();
+      CodeHalfword(ThumbBLPreCode + ((value >> 12) & 0x07ff));
+      CodeHalfword(opcodeValue + ((value >> 1) & 0x07ff));
+      break;
+
+      case ThumbSWI:
+      case ThumbBreakpoint:
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer != NULL)
+      { Relocation reloc;
+        if (output_style == AofOS)
+        { reloc.aof_reloc.rel_offset = (int32)programCounter;
+          reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_SHORT | REL_A |
+            (symbolPointer->aOFData.symbolId & 0xffffff);
+        }
+        else
+        { Report(AsmError,errors_BadAoutAdr);
+          return FALSE;
+        }
+        PutReloc(reloc);
+      }
+      else
+        value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+      if (value >= 0x100) {
+        Report(AsmError,errors_ImmValRange,value);  return FALSE;}
+      CodeHalfword(opcodeValue + value);
+      break;
+
+      case ThumbBranchXReg:
+      thumb_bx:
+      sourceReg1 = RegisterExpr(line, &lineIndex);
+      CodeHalfword(opcodeValue + sourceReg1*0x8);
+      break;
+
+      case ThumbBlockData:
+      sourceReg1 = LowRegisterExpr(line, &lineIndex);
+      lineIndex++; /* ! */
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      lineIndex++; /* , */
+      value = RegisterListExpr(line, &lineIndex);
+      CodeHalfword(opcodeValue + sourceReg1*0x100 + value);
+      break;
+
+      case ThumbPop:
+      case ThumbPush:
+      value1 = RegisterListExpr(line, &lineIndex);
+      value = value1 & 0xFF;
+      if (value1 & 0xC000) value |= 0x100;
+      CodeHalfword(opcodeValue + value);
+      break;
+
+      case ThumbADR:
+      destReg = LowRegisterExpr(line, &lineIndex);
+      lineIndex++;
+      immValue =
+          NotStringExpr(line, &lineIndex, &sourceReg1, &type, FALSE, FALSE, &defined);
+      if (errorFound) return FALSE;
+      value1 = (programCounter &~ 3) + 4; /* word align */
+      opcodeValue = -1;
+      switch (type) {
+        case ConstantOT:
+        if ((asmMode == AbsoluteAM) &&
+          ((immValue - value1) < 0x400) &&
+          ((immValue - value1) % 4) == 0) {
+          immValue = (immValue - value1) / 4;
+          opcodeValue = ThumbADDrpiCode + destReg*0x100 + immValue;
+        } else if (immValue < 0x100) {
+          opcodeValue = ThumbMOVriCode + destReg*0x100 +immValue;
+        }
+        break;
+
+        case PCRelOT:
+        immValue -= value1;
+        if (immValue < 0x400 && (immValue % 4) == 0) {
+          opcodeValue = ThumbADDrpiCode + destReg*0x100 + immValue/4;
+        }
+        break;
+
+        case RegRelOT:
+        if (sourceReg1 >= 8 && sourceReg1 != 13) {
+          Report(AsmError, errors_BadThumbReg);
+          return FALSE;
+        }
+        if (sourceReg1 < 8 && immValue < 8) {
+          opcodeValue = ThumbADDrriCode + immValue*0x40 + sourceReg1*0x8 + destReg;
+        }
+        else if (sourceReg1 == 13 &&
+                 immValue < 0x400 && (immValue % 4) == 0) {
+          opcodeValue = ThumbADDrsiCode + destReg*0x100 + immValue/4;
+        }
+      }
+      if (opcodeValue == -1) {
+        Report(AsmError,errors_ImmValRange,immValue);
+        return FALSE;
+      }
+      CodeHalfword(opcodeValue);
+      break;
+
+      case ThumbDataTransfer:
+      destReg = LowRegisterExpr(line, &lineIndex); /* Destination/source */
+      lineIndex++; /* Step past comma */
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      sourceReg2 = 0;
+      if (line[lineIndex] == SquareBra)
+      { lineIndex++;
+        sourceReg1 = RegisterExpr(line, &lineIndex);
+        /* Here we split according to pre/post indexing */
+        if (line[lineIndex] == SquareKet)
+        { /* Zero offset */
+          lineIndex++;
+          immValue = 0;
+        }
+        else
+        { /* This is definitely pre-indexed */
+          lineIndex++;/*Past comma*/
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash) {
+            lineIndex++;
+            immValue = ConstantExpr(line, &lineIndex, FALSE, &defined);
+            if (errorFound) return FALSE;
+          } else {
+            immValue = -1;
+            /*Here we must allow an optional +*/
+            if (line[lineIndex] == PlusSign) {
+              lineIndex++;
+            }
+            sourceReg2 = LowRegisterExpr(line, &lineIndex);
+          }
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+        }
+      }
+      else
+      { /* Look for a PC or register relative expression or a literal. */
+        if (((line[lineIndex] == Equals) && (input_style == ObjAsmIS)) ||
+            ((line[lineIndex] == Hash) && (input_style == AsIS)))
+        {
+          lineIndex++;
+          symbolPointer = ExternalExpr(line, &lineIndex, &value);
+          sourceReg1 = 15;
+          opcodeValue = ThumbLDRCodeP;
+          if (symbolPointer == NULL) {
+            #if 0
+            value = ConstantOrAddressExpr(line, &lineIndex, &type, FALSE,
+              &defined);
+            #else
+            value = NotStringExpr(line, &lineIndex, &sourceReg1, &type,
+              TRUE, FALSE, &defined);
+            #endif
+            if (errorFound) { return FALSE; }; /* if */
+            if (type==PCRelOT) {
+              immValue = AddThumbAddressLiteral(value, DEFINED);
+            } else if (type==RegRelOT) {
+              if (sourceReg1 >= 256) {
+                immValue = AddThumbBasedLiteral(value, DEFINED);
+                sourceReg1 = 15;
+              }
+              else
+                immValue = value;
+            } else if (value < 0x100) {
+              opcodeValue = ThumbMOVriCode;
+              immValue = value;
+              CodeHalfword(opcodeValue + immValue);
+              break;
+            } else {
+              immValue = AddThumbLiteral(TRUE, FALSE, value);
+            }
+          }
+          else
+            immValue = AddThumbExternalLiteral(symbolPointer, value);
+        }
+        else
+        {
+          immValue = RegisterRelExpr(line, &lineIndex, &sourceReg1, FALSE,
+                                     &defined);
+          if (sourceReg1 >= 256)
+          { Relocation reloc;
+            if (output_style == AofOS)
+            { if (opcodeValue != ThumbLDRCodeR && opcodeValue != ThumbSTRCodeR)
+              { Report(AsmError, errors_ExtAreaSym);
+                return FALSE;
+              }
+              /* Now done with type 2 relocations */
+              reloc.aof_reloc.rel_offset = (int32)programCounter | 1;
+              sourceReg1 &= 15;
+              reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_B |
+                    REL_INSTR | (area_of_base[sourceReg1] - 1);
+            }
+            else
+            { Report(AsmError,errors_BadAoutAdr);
+              return FALSE;
+            }
+            PutReloc(reloc);
+          }
+          if (errorFound) return FALSE;
+          if (sourceReg1 >= 8 && sourceReg1 != 13 && sourceReg1 != 15) {
+            Report(AsmError, errors_BadThumbReg);
+            return FALSE;
+          }
+        }
+        /* Always adjust PC relative offsets */
+        if (sourceReg1 == 15) immValue -= (programCounter&~3)+4;
+      }
+      if (immValue != -1)
+      { CARDINAL mul=4, max=0x1F;
+        switch (opcodeValue)
+        { case ThumbSTRCodeR:  opcodeValue = ThumbSTRCodeI;           break;
+          case ThumbSTRHCodeR: opcodeValue = ThumbSTRHCodeI; mul = 2; break;
+          case ThumbSTRBCodeR: opcodeValue = ThumbSTRBCodeI; mul = 1; break;
+          case ThumbLDRCodeR:  opcodeValue = ThumbLDRCodeI;           break;
+          case ThumbLDRHCodeR: opcodeValue = ThumbLDRHCodeI; mul = 2; break;
+          case ThumbLDRBCodeR: opcodeValue = ThumbLDRBCodeI; mul = 1; break;
+        }
+        if (sourceReg1 == 13)
+        {
+          opcodeValue += ThumbSTRCodeS - ThumbSTRCodeI;
+          max = 0xFF;
+        }
+        else if (sourceReg1 == 15)
+        {
+          opcodeValue = ThumbLDRCodeP;
+          max = 0xFF;
+        }
+        if ((immValue % mul) != 0 || (immValue / mul) > max) {
+          Report(AsmError,errors_DatOff);
+          return FALSE;
+        }
+        immValue /= mul;
+        if (sourceReg1 < 8)
+          CodeHalfword(opcodeValue + immValue*0x40 + sourceReg1*0x8 + destReg);
+        else
+          CodeHalfword(opcodeValue + destReg*0x100 + immValue);
+      }
+      else
+        CodeHalfword(opcodeValue + sourceReg2*0x40 + sourceReg1*0x8 + destReg);
+      break;
+
+      case ThumbNOP:
+      CodeHalfword(opcodeValue);
       break;
 
     }; /* switch */

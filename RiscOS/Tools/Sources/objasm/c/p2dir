@@ -26,6 +26,7 @@
 #include "literals.h"
 #include "locallab.h"
 #include "macrotyp.h"
+#include "mapping.h"
 #include "nametyp.h"
 #include "p1line.h"
 #include "p2dir.h"
@@ -359,7 +360,7 @@ The returned value indicates error OR handled (i.e. was directive)
       };
 #endif
       value =
-          NotStringExpr(line, &lineIndex, &i, &operandType, FALSE, &defined);
+          NotStringExpr(line, &lineIndex, &i, &operandType, TRUE, FALSE, &defined);
       if (errorFound) return TRUE;
       ListWordValue(value);
       symbolPointer = LookupRef(name, FALSE);
@@ -380,7 +381,8 @@ The returned value indicates error OR handled (i.e. was directive)
 
         case RegRelOT:
         symbolPointer->u.s.fst = RegisterRelativeFST;
-        symbolPointer->u.s.fsr = (BITFIELD) i;
+        symbolPointer->u.s.fsr = (BITFIELD) (i & 0xF);
+        symbolPointer->u.s.bt = (BITFIELD) (i >> 8);
       }; /* case */
       symbolPointer->u.s.sds = DefinedSDS;
       symbolPointer->length = 0;
@@ -442,18 +444,11 @@ The returned value indicates error OR handled (i.e. was directive)
       do {
         value = ConstantExpr(line, &lineIndex, FALSE, &defined);
         if (errorFound) return TRUE;
-        if (value >= 0x10000) {
+        if (value >= 0x10000 && value < -0x8000) {
           Report(AsmError,errors_ImmValRange,value);
           return TRUE;
         }
-        if (target_is_big_endian)
-        { CodeByte(((int)value >> 8) & 255);
-          CodeByte((int)value & 255);
-        }
-        else
-        { CodeByte((int)value & 255);
-          CodeByte(((int)value >> 8) & 255);
-        }
+        CodeDataHalfword(value);
         if (line[lineIndex] != Comma) break;
         lineIndex++;
       } while (1);
@@ -471,14 +466,7 @@ The returned value indicates error OR handled (i.e. was directive)
       while ((programCounter % 4) != 0) CodeByte(0);
       do {
 #ifndef AAsm
-        if (output_style == AofOS)
-          eSymbolPointer = ExternalExprAbsOrRel(line, &lineIndex, &value, &ifBool);
-        else {
-          /* I'm sure a.out could do it, but I don't know how, and it's totally
-           * obsolete anyway. KJB */
-          eSymbolPointer = ExternalExpr(line, &lineIndex, &value);
-          ifBool = FALSE;
-        }
+        eSymbolPointer = ExternalExprAbsOrRel(line, &lineIndex, &value, &ifBool);
         /* Just use first one for the moment */
         if (eSymbolPointer == NULL) {
           value = ConstantOrAddressExpr(line, &lineIndex, &operandType, FALSE,
@@ -533,11 +521,11 @@ The returned value indicates error OR handled (i.e. was directive)
               reloc.aout_reloc.r_symbolnum =
                  (int)(eSymbolPointer->aOFData.symbolId);
               reloc.aout_reloc.r_length = 2; /* long */
-              reloc.aout_reloc.r_pcrel = 0;  /* No PC relocation needed */
+              reloc.aout_reloc.r_pcrel = ifBool;
               reloc.aout_reloc.r_extern = 1; /* Use symbol */
             } else {
               reloc.aout_reloc.r_length = 2; /* long */
-              reloc.aout_reloc.r_pcrel = 0;  /* No PC relocation needed */
+              reloc.aout_reloc.r_pcrel = ifBool;
               reloc.aout_reloc.r_extern = 0; /* Don't use symbol */
               if (input_style == ObjAsmIS) {
                 aof_area *dec = GetArea(eSymbolPointer->area);
@@ -578,6 +566,89 @@ The returned value indicates error OR handled (i.e. was directive)
 #endif
         if (errorFound) return TRUE;
         CodeDataWord(value);
+        if (line[lineIndex] != Comma) break;
+        lineIndex++;
+      } while (1);
+      break;
+
+      case TDCDO:
+      if (symbolFound && ((symbolPointer=LookupRef(name,FALSE))!=0)) {
+        if ((keepingAll && symbolPointer->u.s.at==NoneAT) ||
+                           symbolPointer->u.s.at==KeptAT) {
+          AddSymbolToTable(symbolPointer, name, FALSE, FALSE);
+          symbolPointer->u.s.at = KeptAT;
+        }
+      }
+      /*Now handle value to be output */
+      while ((programCounter % 4) != 0) CodeByte(0);
+      do {
+        eSymbolPointer = ExternalExpr(line, &lineIndex, &value);
+        /* Just use first one for the moment */
+        if (eSymbolPointer == NULL) {
+          value = RegisterRelExpr(line, &lineIndex, &i, FALSE,
+            &defined);
+          if ((i & 256) || i == 15)
+          { if (output_style == AofOS)
+            { Relocation reloc;
+              reloc.aof_reloc.rel_offset = (int32)programCounter;
+              reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_LONG | REL_B |
+                ((i == 15 ? areaNumber : area_of_base[i & 0xF]) - 1L);
+                /* Note inconsistent use of area number */
+              PutReloc(reloc);
+            }
+            else
+            { Report(AsmError, errors_BadExprType);
+            }
+          }
+        }
+        else
+        { Relocation reloc;
+          if (output_style == AofOS)
+          { reloc.aof_reloc.rel_offset = (int32)programCounter;
+            reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_LONG | REL_B |
+              ((eSymbolPointer->u.s.sdt == ExternalSDT) ?
+               (REL_A | (eSymbolPointer->aOFData.symbolId & 0xffffff)) :
+               (eSymbolPointer->area - 1L));
+              /* Note inconsistent use of area number */
+            PutReloc(reloc);
+          }
+          else
+          { Report(AsmError, errors_ExtAreaSym);
+          }
+        }
+        if (errorFound) return TRUE;
+        CodeDataWord(value);
+        if (line[lineIndex] != Comma) break;
+        lineIndex++;
+      } while (1);
+      break;
+
+      case TDCI:
+      if (symbolFound && ((symbolPointer=LookupRef(name,FALSE))!=0)) {
+        if ((keepingAll && symbolPointer->u.s.at==NoneAT) ||
+                           symbolPointer->u.s.at==KeptAT) {
+          AddSymbolToTable(symbolPointer, name, FALSE, FALSE);
+          symbolPointer->u.s.at = KeptAT;
+        }
+      }
+      /*Now handle value to be output */
+      if (thumbMode) {
+        if (programCounter & 1) CodeByte(0);
+      }
+      else
+        while ((programCounter % 4) != 0) CodeByte(0);
+      do {
+        value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+        if (errorFound) return TRUE;
+        if (thumbMode) {
+          if (value >= 0x10000) {
+            Report(AsmError,errors_ImmValRange,value);
+            return TRUE;
+          }
+          CodeHalfword(value);
+        }
+        else
+          CodeWord(value);
         if (line[lineIndex] != Comma) break;
         lineIndex++;
       } while (1);
@@ -834,6 +905,13 @@ The returned value indicates error OR handled (i.e. was directive)
       case TROUT:
       while ((programCounter % 4) != 0) CodeByte(0);
       symbolPointer = (symbolFound) ? LookupFixed(name, FALSE) : NULL;
+      if (symbolPointer) {
+        if ((keepingAll && symbolPointer->u.s.at==NoneAT) ||
+                           symbolPointer->u.s.at==KeptAT) {
+          AddSymbolToTable(symbolPointer, name, FALSE, FALSE);
+          symbolPointer->u.s.at = KeptAT;
+        }
+      }
       NewRoutine(symbolPointer);
       break;
 
@@ -854,7 +932,14 @@ The returned value indicates error OR handled (i.e. was directive)
       while ((programCounter - i) % value != 0) CodeByte(0);
       break;
 
+      case TCODE16:
+      thumbMode = TRUE;
+      if (areaNumber)
+        if (programCounter % 2 != 0) CodeByte(0);
+      break;
+
       case TCODE32:
+      thumbMode = FALSE;
       if (areaNumber)
         while (programCounter % 4 != 0) CodeByte(0);
       break;
@@ -957,9 +1042,11 @@ The returned value indicates error OR handled (i.e. was directive)
       AddAreaDeclaration(symbolPointer, 0, 0);
       /* Fix up the start value of the Area Name symbol if an ABSOLUTE area */
       if (currArea->dec.area_attributes & AOF_ABSAT) {
+        symbolPointer->u.s.fst = AbsoluteFST;
         symbolPointer->value.card=currArea->dec.area_base;
       }
       RelocInit();
+      MapInit();
       areaNumber++;
       if (symbolPointer->u.s.at == NoneAT) {
         AddSymbolToTable(symbolPointer, name, FALSE, FALSE);
@@ -1015,6 +1102,16 @@ try_rlist:
       ListWordValue(value);
       break;
 
+      case TDATA:
+      if (symbolFound && ((symbolPointer=LookupRef(name,FALSE))!=0)) {
+        if ((keepingAll && symbolPointer->u.s.at==NoneAT) ||
+                           symbolPointer->u.s.at==KeptAT) {
+          AddSymbolToTable(symbolPointer, name, FALSE, FALSE);
+          symbolPointer->u.s.at = KeptAT;
+        }
+      }
+      break;
+
 /*
       case TNOFP:
       case TENTRY:
@@ -1022,9 +1119,6 @@ try_rlist:
       case TAOF:
       break;
 */
-      case TNOOP:
-      CodeWord(0xe1a00000);   /* MOV r0, r0 */
-      break;
     };
     if (exception != None) {
 /*

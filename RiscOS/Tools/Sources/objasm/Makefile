@@ -32,6 +32,7 @@ SQUEEZE = squeeze
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
+LDFLAGS = 
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
@@ -64,9 +65,9 @@ EXPORTS    =
 
 OBJS=	o.apply o.applysub o.asdsupp o.asm o.cli o.code o.condasm o.errors \
 	o.expr o.exprstor o.formatio o.fpio o.getdir o.getline o.globvars o.initdir \
-	o.listing o.literals o.locallab o.macrotyp o.nametyp o.occur o.opcode \
-	o.p1dir o.p1line o.p2dir o.p2line o.stats o.store o.symdump o.tables \
-	o.tokens o.vars o.aasm o.hostdep 
+	o.listing o.literals o.locallab o.macrotyp o.mapping o.nametyp o.occur \
+        o.opcode o.p1dir o.p1line o.p2dir o.p2line o.stats o.store o.symdump \
+        o.tables o.tokens o.vars o.aasm o.hostdep 
 
 LIBS=	${CLXLIB} ${CLIB}
 

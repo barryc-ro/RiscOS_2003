@@ -1,4 +1,4 @@
-    /* -> opcode.c
+/* -> opcode.c
  * Title:  The opcode detection routine
  * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
  */
@@ -9,6 +9,7 @@
  */
 
 #include "hostdep.h"
+#include "errors.h"
 #include "globvars.h"
 #include "nametyp.h"
 #include "opcode.h"
@@ -29,8 +30,7 @@ typedef struct {
   Name key;
   CARDINAL   value;
 } CondEntry;
-
-#define TableSize 82
+#define TableSize 84
 
 #define CondSize  64
 
@@ -232,10 +232,7 @@ typedef struct {
 #define LongMultiplySBit 0x00100000
 
 /*Group 25*/
-#define LDRHCode  0x001000B0
-#define LDRSHCode 0x001000F0
-#define LDRSBCode 0x001000D0
-#define STRHCode  0x000000B0
+/* Load/Store halfword,signed,double - all in opcode.h */
 
 /*Group 26*/
 #define CLZCode   0x016F0F10
@@ -245,6 +242,12 @@ typedef struct {
 
 /*Group 28*/
 #define BXCode    0x012FFF10
+
+/*Group 29*/
+#define NOPCode   0x01A00000
+
+/*Group 30*/
+#define PLDCode   0x1550F000
 
 /*Extra bits*/
 /*For data operations*/
@@ -310,8 +313,10 @@ static OpcodeEntry opcodes[TableSize] = {
   {"MUL", MULCode, MUL},
   {"MVF", MVFCode, FPMonadic},
   {"MVN", MVNCode, DataProcessing},
+  {"NOP", NOPCode, NOP},
   {"NRM", NRMCode, FPNorm},
   {"ORR", ORRCode, DataProcessing},
+  {"PLD", PLDCode, PLD},
   {"POL", POLCode, FPDyadic},
   {"POW", POWCode, FPDyadic},
   {"QMA", MLACode, MLA},
@@ -349,11 +354,11 @@ static OpcodeEntry opcodes[TableSize] = {
   {"WFS", WFSCode, FPStatus}
 };
 
-static int32 OpcodeFind(Name name)
+static int32 OpcodeFind(const OpcodeEntry *opcodes, CARDINAL ub, Name name)
 {
-  CARDINAL i,lb=0,ub=TableSize;
+  CARDINAL i,lb=0;
   int32 cmp;
-  char *nptr=name.key, *iptr;
+  const char *nptr=name.key, *iptr;
 
 /* Do a binary chop on the ordered array of OpcodeEntries */
 
@@ -382,6 +387,8 @@ static void Conditional(CARDINAL index, CARDINAL *condition,
     if ((cond->key.length == 2) && (*op == *cond->key.key) &&
       (op[1] == cond->key.key[1])) {
       *condition = cond->value;
+      if (pass == 1 && cond->value == NVCond)
+        Report(ReportWarning,p1line_p1line_res_instr);
       /* Only copy opcode if there is a conditional in the middle */
       memcpy(opcodeChars, name->key, (size_t)index);
       memcpy(opcodeChars + index, name->key + index + 2,
@@ -392,7 +399,7 @@ static void Conditional(CARDINAL index, CARDINAL *condition,
   }
 }
 
-BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
+static BOOLEAN OpcodeARM(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
 /*The result is TRUE iff the name is an opcode*/
 {
   CARDINAL conditionalPart = ALCond,
@@ -514,7 +521,7 @@ BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
     case 6:
     case 7:
     case 8:
-    index = OpcodeFind(name);
+    index = OpcodeFind(opcodes, TableSize, name);
     { OpcodeEntry *opc = opcodes + index;
       if (index>=0 && (memcmp(name.key, opc->key, 3) == 0))
         {
@@ -531,7 +538,9 @@ BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
             }
             Conditional(3, &conditionalPart, &name, opcodeChars);
             break;
+          case PLD :
           case BKPT :
+          case NOP :
             break;
           default:
             Conditional(3, &conditionalPart, &name, opcodeChars);
@@ -562,6 +571,8 @@ BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
             case SWP:
             case MVP:
             case CLZ:
+            case NOP:
+            case PLD:
             break;
 
             case Branch:
@@ -586,13 +597,23 @@ BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
             else return FALSE;
             break;
 
-            case DataTransfer:
             case SWP:
             if (ch == 'B') *opcodeValue += LDRBCode-LDRCode;
-            else if ((ch == 'T') && (opc->type != SWP))
+            break;
+
+            case DataTransfer:
+            if (ch == 'B') *opcodeValue += LDRBCode-LDRCode;
+            else if (ch == 'T')
               *opcodeValue += LDRTCode-LDRCode;
-            else if ((ch == 'H') && (opc->type != SWP)) {
+            else if (ch == 'H') {
               *opcodeValue += LDRHCode-LDRCode;
+              *opcodeType = DataTransfer_v4;
+            }
+            else if (ch == 'D') {
+              if (*opcodeValue == LDRCode)
+                *opcodeValue = LDRDCode + conditionalPart;
+              else
+                *opcodeValue = STRDCode + conditionalPart;
               *opcodeType = DataTransfer_v4;
             }
             else return FALSE;
@@ -827,6 +848,218 @@ BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
   return FALSE;
 } /* End Opcode */
 
+#define ThumbTableSize 31
+
+/*Data processing (Rn=Rn op Rm)*/
+#define ThumbANDCode 0x4000
+#define ThumbEORCode 0x4040
+/*#define ThumbLSLCode 0x4080*/
+/*#define ThumbLSRCode 0x40C0*/
+/*#define ThumbASRCode 0x4100*/
+#define ThumbADCCode 0x4140
+#define ThumbSBCCode 0x4180
+#define ThumbRORCode 0x41C0
+#define ThumbTSTCode 0x4200
+#define ThumbNEGCode 0x4240
+/*#define ThumbCMPCode 0x4280*/
+#define ThumbCMNCode 0x42C0
+#define ThumbORRCode 0x4300
+#define ThumbMULCode 0x4340
+#define ThumbBICCode 0x4380
+#define ThumbMVNCode 0x43C0
+
+#define ThumbNOPCode 0x46C0
+
+/*Block data transfer*/
+#define ThumbPUSHCode  0xB400
+#define ThumbPOPCode   0xBC00
+#define ThumbSTMIACode 0xC000
+#define ThumbLDMIACode 0xC800
+
+/*Exceptions*/
+#define ThumbBKPTCode 0xBE00
+#define ThumbSWICode  0xDF00
+
+static OpcodeEntry thumb_opcodes[ThumbTableSize] = {
+  {"ADC", ThumbADCCode, ThumbDataProcessing},
+  {"ADD", ThumbADDriCode, ThumbMovCmpAddSub},
+  {"ADR", ThumbADDrpiCode, ThumbADR},
+  {"AND", ThumbANDCode, ThumbDataProcessing},
+  {"ASL", ThumbLSLrriCode, ThumbShift},
+  {"ASR", ThumbASRrriCode, ThumbShift},
+  {"BIC", ThumbBICCode, ThumbDataProcessing},
+  {"BKP", ThumbBKPTCode, ThumbBreakpoint},
+  {"BLX", ThumbBLXCode, ThumbBranchLongX},
+  {"CMN", ThumbCMNCode, ThumbDataProcessing},
+  {"CMP", ThumbCMPriCode, ThumbMovCmpAddSub},
+  {"EOR", ThumbEORCode, ThumbDataProcessing},
+  {"LDM", ThumbLDMIACode, ThumbBlockData},
+  {"LDR", ThumbLDRCodeR, ThumbDataTransfer},
+  {"LSL", ThumbLSLrriCode, ThumbShift},
+  {"LSR", ThumbLSRrriCode, ThumbShift},
+  {"MOV", ThumbMOVriCode, ThumbMovCmpAddSub},
+  {"MUL", ThumbMULCode, ThumbDataProcessing},
+  {"MVN", ThumbMVNCode, ThumbDataProcessing},
+  {"NEG", ThumbNEGCode, ThumbDataProcessing},
+  {"NOP", ThumbNOPCode, ThumbNOP},
+  {"ORR", ThumbORRCode, ThumbDataProcessing},
+  {"POP", ThumbPOPCode, ThumbPop},
+  {"PUS", ThumbPUSHCode,ThumbPush},
+  {"ROR", ThumbRORCode, ThumbDataProcessing},
+  {"SBC", ThumbSBCCode, ThumbDataProcessing},
+  {"STM", ThumbSTMIACode, ThumbBlockData},
+  {"STR", ThumbSTRCodeR, ThumbDataTransfer},
+  {"SUB", ThumbSUBriCode, ThumbMovCmpAddSub},
+  {"SWI", ThumbSWICode, ThumbSWI},
+  {"TST", ThumbTSTCode, ThumbDataProcessing},
+};
+
+static BOOLEAN OpcodeThumb(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
+/*The result is TRUE iff the name is an opcode*/
+{
+  CARDINAL i;
+  int32    index;
+  char     chs[9],
+           opcodeChars[8],
+           ch;
+
+#ifdef HOST_IS_RISCOS
+  if (!uppercase_flag)  /* IDJ (Acorn) support for -UpperCase */
+#endif
+  if ((name.length >= 1) && (name.length <= 8))
+  { i = 0;
+    while ((i < name.length) && islower(name.key[i]))
+    { chs[i] = toupper(name.key[i]);
+      i++;
+    }
+    if (i == name.length)
+      /* Was all lower case, so we can try it as an opcode */
+      name.key = chs;
+  }
+
+  switch (name.length) {
+    case 1:
+    if (*name.key == 'B') {
+      *opcodeValue = ThumbBCode;
+      *opcodeType = ThumbBranch;
+      return TRUE;
+    };
+    return FALSE;
+
+    case 2:
+    if ((*name.key == 'B') && (name.key[1] == 'L')) {
+      *opcodeValue = ThumbBLCode;
+      *opcodeType = ThumbBranchLong;
+      return TRUE;
+    }
+    else if ((*name.key == 'B') && (name.key[1] == 'X')) {
+      *opcodeValue = ThumbBXCode;
+      *opcodeType = ThumbBranchXReg;
+      return TRUE;
+    }
+    return FALSE;
+
+    case 3:
+    { CARDINAL conditionalPart;
+      if (*name.key == 'B')
+        Conditional(1, &conditionalPart, &name, opcodeChars);
+      if (name.length == 1 && conditionalPart < ALCond) {
+        *opcodeValue = ThumbBccCode | (conditionalPart >> 20);
+        *opcodeType = ThumbBranch;
+        return TRUE;
+      }
+    } /* Fall through */
+    case 4:
+    case 5:
+    index = OpcodeFind(thumb_opcodes, ThumbTableSize, name);
+    { OpcodeEntry *opc = thumb_opcodes + index;
+      if (index>=0 && (memcmp(name.key, opc->key, 3) == 0))
+        {
+        *opcodeValue = opc->value;
+        *opcodeType = opc->type;
+        switch (name.length) {
+          case 3:
+          switch (opc->type) {
+            case ThumbDataProcessing:
+            case ThumbMovCmpAddSub:
+            case ThumbADR:
+            case ThumbShift:
+            case ThumbDataTransfer:
+            case ThumbBranchLongX:
+            case ThumbPop:
+            case ThumbSWI:
+            case ThumbNOP:
+            break;
+
+            default:
+            return FALSE;
+          }; /* case */
+          break;
+
+          case 4:
+          ch = (name.key[3]);
+          switch (opc->type) {
+            case ThumbPush:
+            if (ch != 'H') return FALSE;
+            break;
+
+            case ThumbBreakpoint:
+            if (ch != 'T') return FALSE;
+            break;
+
+            case ThumbDataTransfer:
+            if (ch == 'B')
+              *opcodeValue |= ThumbLDRBCodeR - ThumbLDRCodeR;
+            else if (ch == 'H')
+              *opcodeValue |= ThumbLDRHCodeR - ThumbLDRCodeR;
+            else
+              return FALSE;
+            break;
+
+            default:
+            return FALSE;
+          }; /* case */
+          break;
+
+          case 5:
+          switch (opc->type) {
+            case ThumbBlockData:
+            if ((name.key[3] != 'I') || (name.key[4] != 'A'))
+              return FALSE;
+            break;
+
+            case ThumbDataTransfer:
+            if (name.key[3] == 'S' && opc->value == ThumbLDRCodeR) {
+              if (name.key[4] == 'H')
+                *opcodeValue += ThumbLDRSHCodeR - ThumbLDRCodeR;
+              else if (name.key[4] == 'B')
+                *opcodeValue += ThumbLDRSBCodeR - ThumbLDRCodeR;
+              else
+                return FALSE;
+            }
+            else
+              return FALSE;
+            break;
+
+            default:
+            return FALSE;
+          }; /* case */
+        }; /* case */
+        return TRUE;
+      }; /* if */
+    };
+  }; /* case */
+  return FALSE;
+} /* End Opcode */
+
+BOOLEAN Opcode(Name name, OpcodeType *opcodeType, CARDINAL *opcodeValue)
+{
+  if (thumbMode)
+    return OpcodeThumb(name, opcodeType, opcodeValue);
+  else
+    return OpcodeARM(name, opcodeType, opcodeValue);
+}
+
 static void InitCond(char *chars, CARDINAL condValue)
 {
   CARDINAL index = ((32L*(chars[0]-0x40L)+chars[1]-0x40) >> 2) & (CondSize-1L);
@@ -871,6 +1104,12 @@ void InitOpcode(void)
       if (strcmp(opcodes[i].key,opcodes[i+1].key)>=0) {
         fprintf(stderr,opcode_initop_internal_err,
           i,opcodes[i].key,i+1,opcodes[i+1].key);
+      }
+    }
+    for (i=0; i<ThumbTableSize-1; i++) {
+      if (strcmp(thumb_opcodes[i].key,thumb_opcodes[i+1].key)>=0) {
+        fprintf(stderr,opcode_initop_internal_err,
+          i,thumb_opcodes[i].key,i+1,thumb_opcodes[i+1].key);
       }
     }
     initialised = TRUE;
