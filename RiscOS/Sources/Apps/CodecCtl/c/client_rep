@@ -56,6 +56,8 @@ wimp_NULL_REASON_CODE that will force the file closed.
 
  */
 
+#define DELAY_RMA_FREE 1
+
 /* ----------------------------------------------------------------------
  * CONSTANTS
  * ----------------------------------------------------------------------
@@ -174,6 +176,9 @@ static int client_replay_file_types[] =
 
 static WimpEventHandler   client_replay_open_win_handler;
 static WimpMessageHandler client_replay_closedown_handler;
+#if DELAY_RMA_FREE
+static WimpMessageHandler client_replay_closedown_handler_2;
+#endif
 
 /* ----------------------------------------------------------------------
  * UTILITY FUNCTIONS
@@ -385,7 +390,7 @@ static void force_to_plain (char *file_name)
 {
    FILE *file;
 
-   TRACE3 ("+force_to_plain");
+   TRACE3 ("+force_to_plain\n");
 
    if ((file = fopen (file_name, "r")) != NULL)
    {
@@ -395,7 +400,7 @@ static void force_to_plain (char *file_name)
    else
       TRACE1 ("image file couldn't be forced back to plain\n");
 
-   TRACE3 ("-force_to_plain");
+   TRACE3 ("-force_to_plain\n");
 }
 
 static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file_name,
@@ -829,7 +834,7 @@ finish:
    the Wimp_CloseDown message handler) OR when the browser wants to stop the
    Replay task (as a result of user interaction.*/
 
-static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_browser)
+static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_browser, BOOL called_from_closedown)
 {
    pluginclient_instance *plugin;
    WimpMessage            message;
@@ -862,11 +867,25 @@ static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_brows
    plugin = crp->plugin;
 
    err_report(event_deregister_message_handler (Wimp_MTaskCloseDown,
-	 &client_replay_closedown_handler, crp));
+     &client_replay_closedown_handler, crp));
 
-   m_RMA_FREE (crp->replay->rma, sizeof *crp->replay->rma);
+#if DELAY_RMA_FREE
+   /* register a special closedown handler to cleanup the rma
+    * allocation once replay has definitely closed down just in case.
+    * ownership of the RMA allocation is transferred into this event
+    * handler in this case */
+   if (!called_from_closedown)
+   {
+       err_report(event_register_message_handler (Wimp_MTaskCloseDown,
+						  &client_replay_closedown_handler_2, crp->replay));
+   }
+   else
+#endif
+   {
+       m_RMA_FREE (crp->replay->rma, sizeof *crp->replay->rma);
+       m_FREE (crp->replay, sizeof *crp->replay);
+   }
 
-   m_FREE (crp->replay, sizeof *crp->replay);
    crp->replay = NULL;
 
    if (tell_browser)
@@ -881,6 +900,35 @@ static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_brows
  * ----------------------------------------------------------------------
  */
 
+#if DELAY_RMA_FREE
+/* This is registered from multi_end(). It's only purpose is to ensure
+ * that the RMA data is only freed once the replay task has closed
+ * down in case replay makes use of it again. */
+
+static int client_replay_closedown_handler_2(WimpMessage *message, void *handle)
+{
+   client_replay_control *replay = (client_replay_control *) handle;
+
+   TRACE2 ("+client_replay_closedown_handler_2: replay %p\n" _ replay);
+   m_ASSERT (replay != NULL);
+
+   if (replay->replay_task == message->hdr.sender)
+   {
+       err_report(event_deregister_message_handler (Wimp_MTaskCloseDown,
+						    &client_replay_closedown_handler_2, replay));
+
+       m_RMA_FREE (replay->rma, sizeof *replay->rma);
+       m_FREE (replay, sizeof *replay);
+	 
+       TRACE2 ("-client_replay_closedown_handler_2\n");
+       return 1;
+   } /* if */
+
+   TRACE2 ("-client_replay_closedown_handler_2\n");
+   return 0;
+} /* client_replay_closedown_handler_2 */
+#endif
+
 static int client_replay_closedown_handler(WimpMessage *message, void *handle)
 {
    client_replay_ptr crp = (client_replay_ptr) handle;
@@ -892,7 +940,7 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
    if (pluginclient_exists (crp->plugin))
       if (crp->replay->replay_task == message->hdr.sender)
       {
-         replay_multi_end (crp, /*tell_browser?*/ TRUE);
+         replay_multi_end (crp, /*tell_browser?*/ TRUE, TRUE);
 
 	 if (has_pick_streams(crp->file_type))
 	 {
@@ -908,7 +956,7 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
 
    TRACE2 ("-client_replay_closedown_handler\n");
    return 0;
-} /* client_replay_closedown_handler */
+}
 
 static int client_replay_open_win_handler(int event_code, WimpPollBlock *event,
                                           IdBlock *id_block, void *handle)
@@ -1025,7 +1073,7 @@ static _kernel_oserror *client_replay_close(client_ptr *cp)
             crp->file_name = NULL;
 
       replay_multi_end (crp, /*don't tell browser, as higher layer should
-            know we're stopping*/ FALSE);
+            know we're stopping*/ FALSE, FALSE);
    }
    else
    {
@@ -1112,7 +1160,7 @@ static _kernel_oserror *client_replay_action (client_ptr cp, int reason)
    {
       case plugin_state_STOP:
          if (crp->replay != NULL)
-            if ((error = replay_multi_end (crp, /*tell_browser?*/ TRUE)) != NULL)
+            if ((error = replay_multi_end (crp, /*tell_browser?*/ TRUE, FALSE)) != NULL)
                goto finish;
       break;
 
@@ -1134,7 +1182,7 @@ static _kernel_oserror *client_replay_action (client_ptr cp, int reason)
 
             /* restart playback */
             if (crp->replay != NULL)
-               (void) replay_multi_end (crp, /*tell browser?*/ FALSE);
+               (void) replay_multi_end (crp, /*tell browser?*/ FALSE, FALSE);
 
 	    crp->stream_index = 0;
             if ((error = replay_multi_start (crp)) != NULL)
