@@ -39,7 +39,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 INCLUDES = -IC:
 
 #DFLAGS   = -DDEBUG
-DFLAGS   =
+DFLAGS   = -D${Machine}
 
 #
 # Program specific options:
@@ -147,3 +147,40 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+
+o.fsICS2:	c.fsynth
+o.fsICS2:	C:h.kernel
+o.fsICS2:	C:h.swis
+o.fsICS2:	h.chrontel
+o.fsCtel:	c.fsynth
+o.fsCtel:	C:h.kernel
+o.fsCtel:	C:h.swis
+o.fsCtel:	h.chrontel
+o.fsNone:	c.fsynth
+o.fsNone:	C:h.kernel
+o.fsNone:	C:h.swis
+o.fsNone:	h.chrontel
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.module
+o.module:	h.chrontel
+o.module:	h.header
+o.module:	h.debugit
+o.chrontel:	c.chrontel
+o.chrontel:	C:h.kernel
+o.chrontel:	C:h.swis
+o.chrontel:	h.chrontel
+o.chrontel:	h.iomd
+o.chrontel:	C:h.nvram
+o.chrontel:	C:h.standby
+o.chrontel:	h.debugit
+o.debugit:	c.debugit
+o.debugit:	h.debugit
+o.debugit:	C:h.swis
+o.debugit:	C:h.kernel
+o.debugit:	C:h.kernel
+o.fsICS:	c.fsynth
+o.fsICS:	C:h.kernel
+o.fsICS:	C:h.swis
+o.fsICS:	h.chrontel
