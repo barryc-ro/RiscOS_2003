@@ -102,11 +102,7 @@ resources:
         ${CP} Global.${LOCALE}.Messages ${RESDIR}.Resources.Global.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${DATA}.Tokenised
-	${MKDIR} Data
-	${MKDIR} Data.${LOCALE}
-	${MKDIR} Data.${LOCALE}.${BUILD}
-	${MKDIR} rm.${LOCALE}.${BUILD}
+${TARGET}: ${SOURCE} ${DATA}.Tokenised dirs
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
@@ -157,7 +153,10 @@ ${TAGEXT}:
         Up
 
 dirs:
+	${MKDIR} Data
+	${MKDIR} Data.${LOCALE}
 	${MKDIR} ${DATA}
+	${MKDIR} rm.${LOCALE}.${BUILD}
 
 # Dynamic dependencies:
 rm.Morris4.Messages: Hdr:ListOpts
