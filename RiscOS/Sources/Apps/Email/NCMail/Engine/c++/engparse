@@ -7,17 +7,23 @@
 #include "time.h"
 #include "string.h"
 #include "ctype.h"
+#include "swis.h"
 
 #include "DebugLib/DebugLib.h"
 
 #include "Email/EmailLib/rfc822msg.h"
 #include "Email/EmailLib/MIMEentity.h"
+#include "Email/EmailLib/MIMEtext.h"
 #include "Email/EmailLib/MIMEmultip.h"
 #include "Email/EmailLib/date.h"
 #include "Email/EmailLib/entity.h"
 #include "Email/EmailLib/to.h"
 #include "Email/EmailLib/subject.h"
 #include "Email/EmailLib/body.h"
+#include "Email/EmailLib/ELib.h"
+#include "Email/EmailLib/from.h"
+
+#include "Email/Mailbox/SendQ/SendQMailbox.h"
 
 #include "engtypes.h"
 #include "engmanager.h"
@@ -25,6 +31,8 @@
 #include "engdownld.h"
 #include "engstr.h"
 #include "enguiapi.h"
+#include "enginit.h"
+#include "engprocess.h"
 
 
 eng_rcode FinishParseMessage(MessageDescriptor *msgptr);
@@ -58,7 +66,9 @@ eng_rcode GetHeader(char **dest, headers *hdrs, ELIB_HDR_TYPE type)
     code = h->GetUnfoldedNoCommentsBody(ptr, len);
     dprintf(("Eng", "Got Body, len=%d, code=%d\n",len,code));
     if (code < 0)
+    {
       return (eng_rcode) code;
+    }
 
   }
 
@@ -170,21 +180,37 @@ void FinishParseHeader(void)
 {
 
   eng_rcode code;
-  char *file;
+  char *file, *ptr;
   bool errorflag = false;
+  uint32 len = 0;
   MessageDescriptor *msg = state.download.msg;
 
   dprintf(("Eng", "Finished parsing header for message %d\n",msg->ID));
   /* get headers into descriptor */
   headers *hdrs = state.download.ent->GetHdrs();
   dprintf(("Eng", "About to get From\n"));
-  if ((code = GetHeader(&msg->from, hdrs, ELIB_HDR_FROM)) < 0)
   {
-    errorflag = true;
-    state.download.rc = code;
+
+    from *h = (from *) hdrs->FindHdr(ELIB_HDR_FROM);
+    code = (eng_rcode) h->GetRealName(0, len);
+    if ((msg->fromreal = malloc(len + 1)) == 0)
+      errorflag = true;
+    else
+    {
+      code = (eng_rcode) h->GetRealName(msg->fromreal, len);
+      dprintf(("Eng", "From Realname = %s\n",msg->fromreal));
+    }
+    len = 0;
+    code = (eng_rcode) h->GetAddress(0, len);
+    if ((msg->fromaddr = malloc(len + 1)) == 0)
+      errorflag = true;
+    else
+    {
+      code = (eng_rcode) h->GetAddress(msg->fromaddr, len);
+      dprintf(("Eng", "From Address = %s\n",msg->fromaddr));
+    }
   }
-  else
-    dprintf(("Eng", "From = %s\n",msg->from));
+
   dprintf(("Eng", "About to get Subject\n"));
   if ((code = GetHeader(&msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
   {
@@ -203,8 +229,11 @@ void FinishParseHeader(void)
     dprintf(("Eng", "Time is %s\n",asctime(msg->datestruct)));
 
   /* clean up */
+  dprintf(("Eng", "About to destroy context\n"));
   destroy_context(&state.download.context);
+  dprintf(("Eng", "About to delete entity\n"));
   delete state.download.ent;
+  dprintf(("Eng", "About to remove file\n"));
   file = SetFilename(msg->ID, true);
   UnlockFile(msg->ID, true);
   remove(file);
@@ -232,6 +261,7 @@ eng_rcode GetRFC822Body(rfc822msg *rfc, MessageDescriptor *msgptr)
   }
 
   e->ent = (entity *) rfc;
+  e->flags |= ENTITY_OK;
 
   return ENG_COMPLETED;
 }
@@ -285,6 +315,12 @@ eng_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
       if (e->charset)
         msgptr->charset = e->charset;
     }
+
+    /*
+    ** We need to read major_content_type at this point
+    ** and set entity flags according to whether it can be
+    ** displayed or not.
+    */
   }
 
   return code;
@@ -511,14 +547,13 @@ void DoSend(void)
     {
       rfc822msg *rfc = new rfc822msg(true, 0, 0, 0, true);
       headers *hdrs = rfc->GetHdrs();
-      header *tohdr = new header(false, msg->to, 0, strlen(msg->to) + 1, ELIB_HDR_TO, false);
-      header *subhdr = new header(false, msg->subject, 0, strlen(msg->subject) + 1, ELIB_HDR_SUBJECT, false);
-/*       to tohdr(false, msg->to, 0, strlen(msg->to) + 1, false); */
-/*       subject subhdr(false, msg->subject, 0, strlen(msg->subject) + 1, false); */
-
       int len = GetFileLength(state.send.fname);
-      body *msgbody = new body(true, state.send.fname, 0, len, ELIB_TE_UNKNOWN, false);
+      body *msgbody = new body(true, state.send.fname, 0, len, ELIB_TE_UNKNOWN, true);
+      MIMEtext *ent = new MIMEtext(false, 0, 0, 0, ELIB_CT_TEXT_PLAIN, true);
       FILE *f = fopen("NCMailStore:SendTemp", "w");
+      to *tohdr = new to(false, 0, 0, 0, true);
+      subject *subhdr = new subject(false, 0, 0, 0, true);
+      from *fromhdr = new from(false, 0, 0, 0, true);
 
       dprintf(("", "New RFC822 created at 0x%x, headers at 0x%x\n",rfc,hdrs));      
 dprintf(("", "About to parse new message body in file %s\n",state.send.fname));
@@ -530,10 +565,13 @@ dprintf(("", "About to parse new message body in file %s\n",state.send.fname));
       else
       {
         clock_t t = clock();
-/*         msgbody->ParseData(state.send.context, t + 500); */
-/*         dprintf(("", "Message body parsed\n")); */
-        code = hdrs->AddHdr(*tohdr);
-        dprintf(("Eng", "Added To header, rc=%d\n",code));
+        tohdr->SetAddress(msg->to);
+        code = rfc->SetTo(*tohdr);
+        dprintf(("Eng", "Added To header %s, rc=%d\n",msg->to,code));
+        fromhdr->SetAddress(emailaddr);
+        code = rfc->SetFrom(*fromhdr);
+        dprintf(("Eng", "Added From header, rc=%d\n",code));
+        subhdr->SetBody(msg->subject);
         code = hdrs->AddHdr(*subhdr);
         dprintf(("Eng", "Added Subject header, rc=%d\n",code));
         code = rfc->ReplaceBody(msgbody);
@@ -542,6 +580,8 @@ dprintf(("", "About to parse new message body in file %s\n",state.send.fname));
         code = rfc->WriteOut(state.send.context, t + 500, f);
         dprintf(("Eng", "Writing out file\n"));
         fclose(f);
+
+        SendMessage("NCMailStore:SendTemp", msg);
       }
       state.state &= ~SEND;
       break;
