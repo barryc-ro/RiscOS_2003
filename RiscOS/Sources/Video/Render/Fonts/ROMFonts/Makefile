@@ -80,7 +80,6 @@ install_JC: install_C install_J
 
 install: install_$(OPTIONS) dirs aliases
         $(CP) LocalUserIFRes:!Boot $(INSTDIR).!Boot $(CPFLAGS)
-        $(CP) LocalUserIFRes:!Help $(INSTDIR).!Help $(CPFLAGS)
         $(CHMOD) $(INSTDIR)
         @echo $(COMPONENT): installed to $(INSTDIR)
 
