@@ -71,8 +71,7 @@ char *state_string(BOOTBLOCK_STATE state)
     "State_WroteIndex",
     "State_StartBootBlockWrite",
     "State_StartAlternateRead",
-    "State_ReadAlternate",
-    "State_AlternateRead"
+    "State_ReadAlternate"
   };
 
   return(s_table[state]);
@@ -515,10 +514,30 @@ BOOTBLOCK_STATE machine(BOOTBLOCK_TRANS trans)
 
 		if(index_version == 0) { /* new smartcard, although the criteria are a bit dodgy */
 		  DBUG_PRINTF(DBUG_LVL_DIAG, "NCbootblock: unregistered smartcard\n");
-		  set_status_bits(SELECT_SC_STATUS, BB_STATUS_BB_VALID | BB_STATUS_READOK);
+		  set_status_bits(SELECT_SC_STATUS, BB_STATUS_BB_VALID);
 		  clr_status_bits(SELECT_SC_STATUS, BB_STATUS_BADVERSION);
+		  /* tell the file sequencer to attempt to read a few bytes from a bit bucket,
+		     so that we can make sure that the CHV is OK (normally a new card will do
+		     no further reads because there's no file sequence on the card */
+
+		  fresco_data_present = 0;
+
+		  if(build_index_cmds(0x21, 0, 4)<0) {
+		      DBUG_PRINTF(DBUG_LVL_ERROR, "NCbootblock: failed to build bootblock read sequence\n");
+		      set_status_bits(SELECT_SC_STATUS, BB_STATUS_READFAIL);
+		      status_service_call();
+		      return(State_BadCard);
+		  }
+
+		  DBUG_PRINTF(DBUG_LVL_DIAG, "NCBootblock: sequenced short read on virgin card\n");
+
 		  status_service_call();
-		  return(State_CardInserted);
+		  enterprise_block_start = 0x21;
+		  enterprise_block_offset = 0;
+		  enterprise_block_bytes = 4;
+		  bootblock_trans = Trans_CompleteOK;
+		  setcallback();
+		  return(State_StartBootBlockRead);
 		}
 
                 if(index_version<0) {
@@ -588,6 +607,10 @@ BOOTBLOCK_STATE machine(BOOTBLOCK_TRANS trans)
              	  if(enterprise_block_bytes > BOOTBLOCK_BUFFER_SIZE) {
              	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCbootblock: enterprise block too large\n");
              	      return(State_BadCard);
+             	  }
+
+             	  if(enterprise_block_bytes == 4) {
+             	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCbootblock: starting short read on virgin card\n");
              	  }
 
              	  if((l = pop_file_cmd())<0) { /* get the first file command */
@@ -674,6 +697,18 @@ BOOTBLOCK_STATE machine(BOOTBLOCK_TRANS trans)
 
            	clr_status_bits(SELECT_SC_STATUS, BB_STATUS_LOCKED | BB_STATUS_AUTHFAIL);
            	status_service_call();
+
+		if((enterprise_block_start == 0x21) &&
+		   (enterprise_block_offset == 0) &&
+		   (enterprise_block_bytes == 4)) {
+		       DBUG_PRINTF(DBUG_LVL_DIAG, "NCbootblock: short read on virgin card completed OK - idling\n");
+		       bootblock_authentic = 0;
+		       bootblock_loaded = 0;
+		       alternate_rs_loaded = 0;
+		       set_status_bits(SELECT_SC_STATUS, BB_STATUS_READOK);
+		       status_service_call();
+		       return(State_CardInserted);
+		   }
 
 		l = pop_last_file_cmd();
 		sc_bb_ptr += bb_file_command[l].bytes;
