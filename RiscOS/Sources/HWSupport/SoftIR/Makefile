@@ -52,6 +52,7 @@ DEBUGLIB   = C:DebugLib.o.DebugLibzm
 INETLIB    = TCPIPLibs:o.inetlibzm
 SOCKLIB    = TCPIPLibs:o.socklib5zm
 UNIXLIB    = TCPIPLibs:o.unixlibzm
+ASMUTILS   = <Lib$Dir>.AsmUtils.o.AsmUtilszm
 DEBUGLIBS  = ${DEBUGLIB} ${INETLIB} ${SOCKLIB} ${UNIXLIB}
 
 #
@@ -163,11 +164,11 @@ rom_link:
 #
 ${RMTARGET}: ${OBJS} ${DIRS}
         ${MKDIR} rm
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${ASMUTILS}
 
 ${DBGTARGET}: ${OBJS_D} ${DIRS}
         ${MKDIR} rm
-        ${LD} -rmf -o $@ ${OBJS_D} ${CLIB} ${DEBUGLIBS}
+        ${LD} -rmf -o $@ ${OBJS_D} ${CLIB} ${ASMUTILS} ${DEBUGLIBS} 
 
 ${EXP_C_H}.${COMPONENT}:     h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
