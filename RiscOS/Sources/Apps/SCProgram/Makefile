@@ -6,7 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 30-Aug-96  RWB 	  New for !SCProgram
-#
+# 10-Jan-97  RWB	  Added object console
 
 #
 # Paths
@@ -45,11 +45,12 @@ INCLUDES = -IC:
 # Program specific options:
 #
 COMPONENT   = SCProgram
-APPLICATION = !RunImage
+APPLICATION = ${COMPONENT}
 
 OBJS      =	\
 o.main		\
-o.error
+o.error		\
+o.console
   
 #
 # Rule patterns
@@ -81,10 +82,14 @@ ${APPLICATION}: ${OBJS}
 o.error:	c.error
 o.error:	C:h.kernel
 o.error:	h.constants
+o.console:	c.console
+o.console:	C:h.kernel
+o.console:	C:h.swis
 o.main:	c.main
 o.main:	C:h.kernel
 o.main:	C:h.swis
 o.main:	h.error
 o.main:	C:h.kernel
 o.main:	h.constants
+o.main:	h.console
 o.main:	C:h.scinter
