@@ -84,9 +84,8 @@ all: ${FILES}
         @echo ${COMPONENT}: Application built (Disc)
 
 install: ${FILES}
-        ${MKDIR} ${INSTDIR}
-        ${MKDIR} ${INSTDIR}.AutoSense
         ${MKDIR} ${INSTDIR}.Blanks
+        ${MKDIR} ${INSTDIR}.AutoSense
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
         ${CP} ${LDIR}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
         ${CP} ${LDIR}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
@@ -101,7 +100,7 @@ install: ${FILES}
         ${CP} ${LDIR}.Res        ${INSTDIR}.Res        ${CPFLAGS}
         ${CP} ${LDIR}.Sprites    ${INSTDIR}.Sprites    ${CPFLAGS}
         ${CP} ${LDIR}.Sprites22  ${INSTDIR}.Sprites22  ${CPFLAGS}
-        Access ${INSTDIR} /
+        Access ${INSTDIR} /r
         Access ${INSTDIR}.* wr/r
         Access ${INSTDIR}.Blanks.* wr/r
         @echo ${COMPONENT}: Application installed (Disc)
