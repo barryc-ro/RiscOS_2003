@@ -31,14 +31,13 @@ DEFMOD  = DefMod
 AR	= LibFile
 STRIP   = stripdepnd
 
-THROWBACK = -Throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CMHGFLAGS = -p -depend !Depend -throwback
+CMHGFLAGS = -p -depend !Depend ${THROWBACK}
 INCLUDES= -IC:,TCPIPLibs: -IC:AsmUtils
 
 DIRS    = o._dirs
