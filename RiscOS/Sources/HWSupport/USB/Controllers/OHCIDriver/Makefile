@@ -34,8 +34,10 @@ export_libs:
 
 export_hdrs:
         ${MKDIR} ${USBDIR}.h
+        ${MKDIR} ${USBDIR}.hdr
         ${CP} h.OHCI     ${USBDIR}.h.OHCI          ${CPFLAGS}
         ${CP} h.ohcireg  ${USBDIR}.h.ohcireg       ${CPFLAGS}
+        ${CP} hdr.ohcireg  ${USBDIR}.hdr.ohcireg   ${CPFLAGS}
         ${CP} VersionNum ${USBDIR}.OHCIVersion     ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
 
