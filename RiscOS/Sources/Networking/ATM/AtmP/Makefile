@@ -8,6 +8,8 @@ EXP_HDR = <export$dir>.^.Interface2
 EXP_C_H = <Cexport$dir>.h
 EXP_C_O = <Cexport$dir>.o
 
+LIBDIR = <Lib$Dir>
+
 #
 # Generic options:
 #
@@ -28,7 +30,7 @@ CHMOD	= access
 
 FLAG_OPTS = -UFIFO_RECOVER -DDEBUG_TRAIL -UDEBUG -URUNS_ON_ARM700 \
 		-DLIMIT_TABLES -DPACKET_JUNKING -DUSE_DYNAMIC_AREAS \
-		-DNDEBUG
+		-UNDEBUG #-DDEBUGLIB
 
 
 #FLAG_OPTS = -UFIFO_RECOVER -DDEBUG_TRAIL -DDEBUG -URUNS_ON_ARM700 \
@@ -55,7 +57,12 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-REMOTEDB   = C:debug.o.remotezm
+DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
+INETLIB		= TCPIPLibs:o.inetlibzm
+SOCKLIB		= TCPIPLibs:o.socklib5zm
+
+LIBS = $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
+
 #
 # Include files
 #
@@ -71,7 +78,8 @@ EXPORTS   = ${EXP_C_H}.${COMPONENT}
 OBJS      = atmio.o buffers.o mbuf.o module.o panther.o utils.o header.o \
 		localarp.o atmswis.o mast.o atmsock.o \
 		dci_stuff.o resources.o callproto.o commands.o boson.o \
-		listen.o pvc.o nvram.o atm_conf.o ipconv.o nbit_mask.o
+		listen.o pvc.o nvram.o atm_conf.o nbit_mask.o\
+		error.o nvparams.o ipconv.o
 
 HDR = h.header
 
@@ -114,8 +122,8 @@ clean:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} $(LIBS) ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} $(LIBS) ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -129,8 +137,8 @@ rom_link:
 #
 # Relocatable module target
 #
-${RMTARGET}: ${OBJS} $(HDR)
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+${RMTARGET}: ${OBJS} $(LIBS) $(HDR)
+        ${LD} -rmf -o $@ ${OBJS} $(LIBS) ${CLIB}
         ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}

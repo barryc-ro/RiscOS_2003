@@ -53,12 +53,15 @@ Date      Who     Description of change
 
 ***************************************************************************/
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
 
 #include <kernel.h>
 #include <swis.h>
+
+#include "DebugLib/debuglib.h"
 
 #include "header.h"
 
@@ -83,19 +86,19 @@ Date      Who     Description of change
 #include "services.h"
 #include "panther.h"
 #include "atmswis.h"
-#include "ASSERTION.H"
 #include "sockcmds.h"
 #include "resources.h"
 #include "commands.h"
 #include "boson.h"
 #include "listen.h"
-#include "nvram.h"
+#include "nvparams.h"
 #include "pvc.h"
 #include "atm_conf.h"
 #include "ipconv.h"
 // bit nasty - make nbit_mask.h internal to this source, as nbit_mask routines are in assembler
 #define PROTOTYPES_INTERNAL
 #include "nbit_mask.h"
+#include "error.h"
 
 /* 28/1/97:CP:added prototype */
 void _asm_get_msg(unsigned int, unsigned char *, unsigned int);
@@ -151,6 +154,9 @@ _kernel_oserror *module_init(const char *cmd_tail, int pbase, void *pw)
 
     module_wsp = pw;
 
+    debug_initialise (NULL, NULL, NULL);
+    debug_output_device (TML_OUTPUT);
+
 /*     ASSERT(SIZEOF_AS_CONNECT_REQ_PARAMS == sizeof(AS_CONNECT_REQ_PARAMS)); */
 /*     ASSERT(SIZEOF_AS_CONNECT_ACK_PARAMS == sizeof(AS_CONNECT_ACK_PARAMS)); */
 
@@ -200,14 +206,18 @@ _kernel_oserror *module_init(const char *cmd_tail, int pbase, void *pw)
       DBUG printf("Read PnP$Podule as %d\n", podule);
     }
 
+    if (nvparams_init (podule))
+    {
+        return &i;
+    }
 
     if(claim_call_resources() == 0) return(&d); /* set up MAST buffers */
 
     DBUG printf("Reading NVRAM parameters...\n");
 
-    do_vc  = read_nvram_bit(BOOTPARAMLOC, VCMUX_BIT);
-    do_arp = read_nvram_bit(BOOTPARAMLOC, DYNAMICARP_BIT);
-    do_pvc = ((read_nvram_byte(PVCPARAMLOC_HIGH)<<8) | read_nvram_byte(PVCPARAMLOC_LOW));
+    do_vc  = nvparams_read_multiproto_enc ();
+    do_arp = nvparams_read_dynamic_arp ();
+    do_pvc = nvparams_read_pvc ();
 
     DBUG printf("Read NVRAM parameters.\n");
 
@@ -220,7 +230,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int pbase, void *pw)
     }
 
     init_bs_buffers(DEFAULT_MEMORY_POOL); /* claim some space for MPEG buffers- but it's not initialized yet */
-    bswait_init(); /* initialize the MPEG buffer control structure */
 
     reset_panther();     /* mask out all the interrupts */
 
@@ -489,6 +498,16 @@ HEAVYWEIGHT DEBUGGING ON TRANSMIT
           error = atm_txframe(r);
        break;
 
+       /* Temporary grotty hack-in so other people can start using the API */
+       case ATM_BootConfig:
+            error = atm_bootconfig (r);
+            if (error)
+            {
+                oserr = error_table[error - 1];
+                error = 0;
+            }
+            break;
+
        default:
           oserr = error_BAD_SWI;
        break;
@@ -506,8 +525,56 @@ HEAVYWEIGHT DEBUGGING ON TRANSMIT
 
 
 
+/* -----------------------------------------------------------------------------
+   str_ctrl_dup
+
+   Create a 0 terminated duplicate of a control character terminated string.
+   Client is responsible for freeing memory.
+
+   Inputs
+   s: pointer to string to duplicate
+
+   Returns
+   success: pointer to duplicated string
+   failure: NULL
+ */
+
+static char *str_ctrl_dup (const char *const s)
+{
+    size_t len = 0;
+    const char *c = s;
+    char *p;
+
+    while (!iscntrl (*c))
+    {
+        ++c;
+        ++len;
+    }
+
+    p = malloc (len + 1);
+    if (p)
+    {
+        memcpy (p, s, len);
+        p[len] = 0;
+    }
+
+    return p;
+}
+
+
+
+
 _kernel_oserror *atm_cli_handler(const char *arg_string, int arg_count, int cmd_no, void *pw)
 {
+  char *  writeable_arg_string = str_ctrl_dup (arg_string);
+
+  if (!writeable_arg_string)
+  {
+      puts ("Out of memory");
+      return NULL;
+  }
+
+  printf ("%d %p\n%s\n", arg_count, arg_string, writeable_arg_string);
 
   switch(cmd_no) {
 
@@ -526,7 +593,7 @@ _kernel_oserror *atm_cli_handler(const char *arg_string, int arg_count, int cmd_
     case 4:   atm_trail();
     	      break;
 
-    case 5:   atm_cci(arg_string);
+    case 5:   atm_cci(writeable_arg_string);
     	      break;
 
     case 6:   atm_listen();
@@ -538,36 +605,39 @@ _kernel_oserror *atm_cli_handler(const char *arg_string, int arg_count, int cmd_
     case 8:   atm_buffers();
     	      break;
 
-    case 9:   atm_pvc((char *)arg_string);
+    case 9:   atm_pvc(writeable_arg_string);
     	      break;
 
-    case 10:  atm_pvcdelete((char *)arg_string);
+    case 10:  atm_pvcdelete(writeable_arg_string);
     	      break;
 
-    case 11:  atm_conf_arp(arg_string);
+    case 11:  atm_conf_arp(writeable_arg_string);
     	      break;
 
-    case 12:  atm_conf_llc(arg_string);
+    case 12:  atm_conf_llc(writeable_arg_string);
     	      break;
 
-    case 13:  atm_conf_vc(arg_string);
+    case 13:  atm_conf_vc(writeable_arg_string);
     	      break;
 
-    case 14:  atm_conf_pvc(arg_string);
+    case 14:  atm_conf_pvc(writeable_arg_string);
     	      break;
 
     case 15:  atm_mast_data();
     	      break;
 
     /* 21/1/97:CP:Added new command */
-    case 16:  atm_changebufferpool(arg_string);
+    case 16:  atm_changebufferpool(writeable_arg_string);
     	      break;
 
     /* 6/2/97:CP:Added new command */
-    case 17:  atm_changeupstreambandwidth(arg_string);
+    case 17:  atm_changeupstreambandwidth(writeable_arg_string);
               break;
 
   }
+
+  free (writeable_arg_string);
+
   return((_kernel_oserror *)(NULL));
 
 
@@ -962,7 +1032,12 @@ _kernel_oserror * atm_irq_handler(_kernel_swi_regs *r, void *pw)
 		if(m->m_originator) service_type = m->m_port;
 		else service_type = m->m_local_port;
 
-		if(!msg_type && ((msg_cmd == AS_DATA) || (msg_cmd == AS_DATA_END) || (msg_cmd == AS_DATA_ABORT))) {
+		if (!msg_type &&
+		    (msg_cmd == AS_DATA ||
+		     msg_cmd == AS_DATA_END ||
+		     msg_cmd == AS_DATA_LENGTH ||
+		     msg_cmd == AS_DATA_ABORT))
+		{
 
 		  	if(!(m->m_status & M_CONNECT)) { /* no data on unconnected socket, thank you */
 #ifdef PACKET_JUNKING
@@ -976,88 +1051,119 @@ _kernel_oserror * atm_irq_handler(_kernel_swi_regs *r, void *pw)
 			is_mpeg = 0;
 			if(msg_cmd == AS_DATA)
 			{
-			  irq_datas++;
+				irq_datas++;
 			}
 			else
 			{
-			  irq_data_ends++;
+				irq_data_ends++;
 			}
 
-
-			if(service_type == M_MPEG_AAL5)
-			{ /* it's video data */
-				is_mpeg = 1;
-				if(m->m_rbuf == NULL) { /* got no buffer! */
-				  mpeg_discards1++;
-#ifdef PACKET_JUNKING
-/* 				  asm_junk_msg(CommitFromARMAddr, packet_bytes); */
-				  ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
-#endif
-				  m->m_rbuf = (char *)get_empty_buffer();
-				  continue;
+			/* 1999-03-04: BAL */
+			if (msg_cmd == AS_DATA_LENGTH)
+			{
+				if (packet_bytes == sizeof (U32))
+				{
+					ASM_GET_MSG (CommitFromARMAddr, (unsigned char *) &m->m_offset, sizeof (U32));
 				}
-
-				bytes_left = bs_buffer_sizeG - m->m_offset;
-				bs = (struct bs_buffer *)m->m_rbuf;
-				  if(packet_bytes > bytes_left) {
-				  	bs->bs_len = m->m_offset;
-				  	m->m_offset = 0;
-/* 				  	bs->bs_handle = m->m_streamhandle; */
-					bs->bs_handle = streamhandle;
-				  	save_full_buf(bs, 0);
-				  	m->m_rbuf = (char *)get_empty_buffer();
-				        mpeg_discards2++;
+				else
+				{
+					/* larger than expected message - read, but ignore */
+					ASM_GET_MSG (CommitFromARMAddr, irq_buffer, packet_bytes);
+				}
+			}
+			else if (msg_cmd == AS_DATA_ABORT)
+			{
 #ifdef PACKET_JUNKING
-/* 				  		asm_junk_msg(CommitFromARMAddr, packet_bytes); */
-						ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
+				ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
 #endif
-				  	continue;
-
-				  	bs = (struct bs_buffer *)m->m_rbuf;
-				  	/* m->m_datacount = 0; */
-				  	bytes_left = bs_buffer_sizeG;
-
-				  	if(packet_bytes > bs_buffer_sizeG) {
-				  		mpeg_discards3++;
-#ifdef PACKET_JUNKING
-/* 				  		asm_junk_msg(CommitFromARMAddr, packet_bytes); */
-				  		ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
-#endif
-				  		continue; /* get next data from ATM card */
-				  	}
-				  }
-
-                                  /* 28/1/97:CP:bs->bs_data is no longer an array, so need to explicitly define address */
-				  cp = (unsigned char *)&bs->bs_data;
-			} /* endof MPEG AAL5 */
-
-			if((service_type == M_IP) || (service_type == M_LLC))
-			{ /* IP data */
-				bytes_left = MAST_RXBUFSIZE - m->m_offset;
-				cp = (unsigned char *)m->m_rbuf;
-
-				if(packet_bytes > bytes_left) {
-					irq_rx_discards++;
+				if (service_type == M_MPEG_AAL5)
+				{
+					bs->bs_len = m->m_offset;
 					m->m_offset = 0;
-#ifdef PACKET_JUNKING
-/* 					asm_junk_msg(CommitFromARMAddr, packet_bytes); */
-					ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
-#endif
+					/* bs->bs_handle = m->m_streamhandle; */
+					bs->bs_handle = streamhandle;
+					save_full_buf(bs, 0);
+					m->m_rbuf = (char *)get_empty_buffer();
+					mpeg_discards2++;
 					continue;
 				}
-			} /* endof IP data */
+
+				if (service_type == M_IP || service_type == M_LLC)
+				{
+					irq_rx_discards++;
+					m->m_offset = 0;
+					continue;
+				}
+			}
+			else	/* actually have data (AS_DATA or AS_DATA_END) */
+			{
+				if(service_type == M_MPEG_AAL5)
+				{ /* it's video data */
+					is_mpeg = 1;
+					if(m->m_rbuf == NULL)
+					{ /* got no buffer! */
+						mpeg_discards1++;
+#ifdef PACKET_JUNKING
+						/* asm_junk_msg(CommitFromARMAddr, packet_bytes); */
+						ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
+#endif
+						m->m_rbuf = (char *)get_empty_buffer();
+						continue;
+					}
+
+					bytes_left = bs_buffer_sizeG - m->m_offset;
+					bs = (struct bs_buffer *)m->m_rbuf;
+					if(packet_bytes > bytes_left)
+					{
+						bs->bs_len = m->m_offset;
+						m->m_offset = 0;
+						/* bs->bs_handle = m->m_streamhandle; */
+						bs->bs_handle = streamhandle;
+						save_full_buf(bs, 0);
+						m->m_rbuf = (char *)get_empty_buffer();
+						mpeg_discards2++;
+#ifdef PACKET_JUNKING
+						/* asm_junk_msg(CommitFromARMAddr, packet_bytes); */
+						ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
+#endif
+						continue;
+					}
+
+					/* 28/1/97:CP:bs->bs_data is no longer an array, so need to explicitly define address */
+					cp = (unsigned char *)&bs->bs_data;
+				} /* endof MPEG AAL5 */
+
+				if((service_type == M_IP) || (service_type == M_LLC))
+				{ /* IP data */
+					bytes_left = ATM_MTU - m->m_offset;
+					cp = (unsigned char *)m->m_rbuf;
+
+					if(packet_bytes > bytes_left) {
+						irq_rx_discards++;
+						m->m_offset = 0;
+#ifdef PACKET_JUNKING
+ 						/* asm_junk_msg(CommitFromARMAddr, packet_bytes); */
+						ASM_GET_MSG(CommitFromARMAddr, irq_buffer, packet_bytes);
+#endif
+						continue;
+					}
+				} /* endof IP data */
 
 
-			cp += m->m_offset;
-		        ASM_GET_MSG(CommitFromARMAddr, cp, packet_bytes);
-			m->m_offset += packet_bytes;
-			m->m_datacount += packet_bytes;
+				cp += m->m_offset;
+				ASM_GET_MSG(CommitFromARMAddr, cp, packet_bytes);
+				m->m_offset += packet_bytes;
+				m->m_datacount += packet_bytes;
+			}
 
-			if(((msg_cmd == AS_DATA_ABORT) || (msg_cmd == AS_DATA_END)) && (temp & DATA_LAST)) { /* end of frame */
-				if(is_mpeg) {
+			if ((msg_cmd == AS_DATA_END || msg_cmd == AS_DATA_LENGTH) &&
+			    (temp & DATA_LAST))
+			{ /* end of frame */
+				if(is_mpeg)
+				{
 					mpeg_rx++;
 					bs->bs_len = m->m_offset;
-/* 					bs->bs_handle = m->m_streamhandle; */
+					/* bs->bs_handle = m->m_streamhandle; */
 					bs->bs_handle = streamhandle;
 					save_full_buf(bs, 0);
 					m->m_offset = 0;
@@ -1073,12 +1179,8 @@ _kernel_oserror * atm_irq_handler(_kernel_swi_regs *r, void *pw)
 					/* pass IP packet (ie. AAL5 payload less LLC header) up to protocol */
 					if(rx_dci(rb+LLC_HDR_SIZE, m->m_offset-LLC_HDR_SIZE, ftype)==0)
 					{
-					  irq_ip_pkts_dropped++;
-					  m->m_datalost += (m->m_offset-LLC_HDR_SIZE);
-/*
- this will blow up the kernel stck if left in!
-					  printf("%x %x %x %x %x %x %x %x => %x\n", rb[0], rb[1], rb[2], rb[3], rb[4], rb[5], rb[6], rb[7], ftype);
-*/
+						irq_ip_pkts_dropped++;
+						m->m_datalost += (m->m_offset-LLC_HDR_SIZE);
 					}
 
 					m->m_offset = 0;

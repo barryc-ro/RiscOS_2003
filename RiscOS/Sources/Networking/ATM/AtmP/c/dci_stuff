@@ -21,6 +21,9 @@ Date      Who     Description of change
 #include <stdlib.h>
 #include "kernel.h"
 #include "swis.h"
+
+#include "DebugLib/debuglib.h"
+
 #define PROTOTYPES_INTERNAL
 #include "dci_stuff.h"
 #define MBCTL_NAME mbctl
@@ -45,7 +48,7 @@ Date      Who     Description of change
 
 extern Dib dib;
 extern int callproto(Dib *, struct mbuf *, void (*pi_handler)(), int);
-int txbuf[512];
+int txbuf[ATM_MTU  / sizeof (int)];
 unsigned char hw_bcast_adr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 unsigned char arpserver[6] = { 0, 0, 0xff, 0xff, 0xff, 0xff };
 
@@ -120,6 +123,77 @@ int rx_dci(char *packet, int datalen, unsigned short type)
 }
 
 
+#define MAX_DUMP_BYTES  128
+
+#ifdef DEBUGLIB
+
+static void dump_pkt (u_char *  rptr, int pktlen)
+{
+    char buf[3*MAX_DUMP_BYTES+4];
+    char *bp = buf;
+    static const char digits[] = "0123456789abcdef";
+
+    while (pktlen--)
+    {
+        if (bp > buf + sizeof(buf) - 3)
+            goto done;
+        *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
+        *bp++ = digits[*rptr++ & 0xf];
+        *bp++ = ' ';
+    }
+
+done:
+    *bp = 0;
+    dprintf (("", "%s\n", buf));
+}
+
+
+
+static void dumpm(struct mbuf *m0, int pktlen)
+{
+    char buf[3*MAX_DUMP_BYTES+4];
+    char *bp = buf;
+    struct mbuf *m;
+    static const char digits[] = "0123456789abcdef";
+
+    for (m = m0; m && pktlen; m = m->m_next)
+    {
+        int l = m->m_len;
+        u_char *rptr = mtod(m, u_char *);
+
+        if (pktlen > 0)
+        {
+            if (l > pktlen)
+                l = pktlen;
+            pktlen -= l;
+        }
+        while (l--)
+        {
+            if (bp > buf + sizeof(buf) - 4)
+                goto done;
+            *bp++ = digits[*rptr >> 4]; /* convert byte to ascii hex */
+            *bp++ = digits[*rptr++ & 0xf];
+            *bp++ = ' ';
+        }
+
+        if (m->m_next)
+        {
+            if (bp > buf + sizeof(buf) - 3)
+                goto done;
+            *bp++ = '|';
+        }
+        else
+            *bp++ = ' ';
+    }
+done:
+    if (m && pktlen)
+        *bp++ = '>';
+    *bp = 0;
+    dprintf (("", "%s\n", buf));
+}
+
+#endif
+
 int atm_transmit(_kernel_swi_regs *r)
 {
     int flags, type, unit, datalen;
@@ -134,9 +208,7 @@ int atm_transmit(_kernel_swi_regs *r)
 
     if(atm_transmit_inuse)
     {
-#ifdef DEBUG
-       printf("atm_transmit: re-entered.\n");
-#endif
+       dprintf (("", "atm_transmit: re-entered.\n"));
        return(0x20e86); /* transmission is blocked */
     }
 
@@ -151,9 +223,7 @@ int atm_transmit(_kernel_swi_regs *r)
     if (unit != 0 || m0 == 0)
     {
         atm_transmit_inuse = 0;
-#ifdef DEBUG
-        printf("atm_transmit: wrong unit.\n");
-#endif
+        dprintf (("", "atm_transmit: wrong unit.\n"));
         return (EINVAL);
     }
     /*
@@ -192,9 +262,7 @@ int atm_transmit(_kernel_swi_regs *r)
                 else
                 {
                     discard_arp_count++;
-#ifdef DEBUG
-                    printf("atm_transmit: discarding ARP %i\n", discard_arp_count);
-#endif
+                    dprintf (("", "atm_transmit: discarding ARP %i\n", discard_arp_count));
                 }
             } /* it wasn't an ARP message - ignore this broadcast */
             discard = 1;
@@ -217,9 +285,7 @@ int atm_transmit(_kernel_swi_regs *r)
         atm_ref(mdst, &mref, &llc_needed); /* find the conection resources */
         if (mref == 0)
         {
-#ifdef DEBUG
-            printf("atm_transmit: couldn't find connection resources\n");
-#endif
+            dprintf (("", "atm_transmit: couldn't find connection resources\n"));
             discard = 1; /* dump the packet if we couldn't find / connect to the peer */
         }
     }
@@ -231,9 +297,7 @@ int atm_transmit(_kernel_swi_regs *r)
       if(!(ant_tmp->m_status & M_CONNECT))
       { /* this connection is not yet established - drop the packet */
 /*       printf("atm_transmit: dropping packet pending connection\n"); */
-#ifdef DEBUG
-         printf("atm_transmit: connection resource not yet ready\n");
-#endif
+         dprintf (("", "atm_transmit: connection resource not yet ready\n"));
          discard = 1;
       }
 
@@ -251,12 +315,14 @@ int atm_transmit(_kernel_swi_regs *r)
             datalen += m->m_len;
         }
 
+#ifdef DEBUGLIB
+        /* dumpm (m0, datalen); */
+#endif
+
         if( datalen > ATM_MTU )
         {/* not enough? DUmp it */
             // discard = 1;
-#ifdef DEBUG
-            printf("atm_transmit: ATM_MTU exceeded.\n");
-#endif
+            dprintf (("", "atm_transmit: ATM_MTU exceeded.\n"));
             atm_transmit_inuse = 0;
 	    return(EMSGSIZE); /* added in the Great Internet Errors Rethink */
         }
@@ -265,9 +331,8 @@ int atm_transmit(_kernel_swi_regs *r)
 
         if (!discard)
         {
-#ifdef DEBUG
-    printf("tx_atm: handle:%d port:%d size:%d LLC:%d\n", ant_tmp->m_socket_handle, ant_tmp->m_port, datalen, llc_needed);
-#endif
+            dprintf (("", "tx_atm: handle:%d port:%d size:%d LLC:%d\n",
+                      ant_tmp->m_socket_handle, ant_tmp->m_port, datalen, llc_needed));
 
             t = (char *)txbuf;
 
@@ -293,22 +358,33 @@ int atm_transmit(_kernel_swi_regs *r)
                 t += m->m_len;
             }
 
+#ifdef DEBUGLIB
+            dump_pkt ((u_char *) txbuf, datalen);
+#endif
+
 //            ip_tx++;
 
 
+            /* 1999-03-02: BAL
+             * Replaced with new Write_Data_Msg - asm_write_fifo can't cope with blocks >1536 bytes
+             */
+#if 0
 	    if(asm_write_fifo(ant_tmp->m_socket_handle, AS_DATA_END, (unsigned char *)txbuf, (unsigned int)datalen,BlockToARMAddr)<0)
 	    {
-#ifdef DEBUG
-	      printf("atm_transmit: ran out of FIFO space!\n");
-#endif
+	      dprintf (("", "atm_transmit: ran out of FIFO space!\n"));
 	    }
 
 	    else
 	    {
 	      ip_tx++;
 	    }
-
+#else
+            Write_Data_Msg (ant_tmp->m_socket_handle,
+                            (unsigned int *) txbuf,
+                            datalen);
 /* 	    Write_Fifo_Fast(ant_tmp->m_socket_handle, AS_DATA_END, (unsigned char *)txbuf, (unsigned int)datalen); */
+            ip_tx++;
+#endif
 	    ant_tmp->m_status |= M_USED;
         }/* endif !discard */
 
