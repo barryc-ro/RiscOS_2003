@@ -46,7 +46,7 @@ EXP_HDR =	<export$dir>
 #
 # Generic options:
 #
-MKDIR =		cdir
+MKDIR =		do mkdir -p
 AS =		objasm -tb
 CC =		$(MemCheckCC) cc
 CMHG =		cmhg
@@ -149,6 +149,11 @@ export_hdrs: h.AcornSMTP local_dirs
 export_libs: o.AcornSMTP local_dirs
 	$(CP)	o.AcornSMTP	$(EXP_C_O).AcornSMTP	$(CPFLAGS)
 	@echo $(COMPONENT): export complete (libs)
+
+install: $(TARGET)
+	$(MKDIR) $(INSTDIR)
+	$(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): ram module installed
 
 install_rom: $(ROMTARGET)
 	$(CP) $(ROMTARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
