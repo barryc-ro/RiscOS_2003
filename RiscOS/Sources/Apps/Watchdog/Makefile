@@ -17,6 +17,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS} -DCARET_MESSAGE_14
@@ -100,7 +101,7 @@ install: ${TARGETSA}
         @echo ${COMPONENT}: module installed
 
 ram:    ${TARGETSA}
-	@echo ${COMPONENT}: soft-load module installed
+        @echo ${COMPONENT}: soft-load module installed
 
 clean:
         ${WIPE} o.* ${WFLAGS}
@@ -109,6 +110,7 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${APP}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -121,16 +123,16 @@ resources:
 # Static dependencies
 #
 ${APP}: ${OBJS} ${LIBS}
-	${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
 
 ${TARGETSA}: ${OBJSZRAM} ${LIBSZRAM}
-	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
+        ${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
 
 oz.ModuleWrap: s.ModuleWrap s.AppName
-	${AS} ${AFLAGS} s.ModuleWrap $@
+        ${AS} ${AFLAGS} s.ModuleWrap $@
 
 oz.ModuleWra1: s.ModuleWrap s.AppName
-	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
+        ${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
 
 #s.ModuleWrap: ${WRAPPER}
 #        ${CP} ${WRAPPER} $@ ${CPFLAGS}
