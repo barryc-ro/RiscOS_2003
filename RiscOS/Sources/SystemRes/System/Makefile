@@ -13,6 +13,7 @@
 #                     Installs 360.Modules
 # 31-Jan-95      AMcC No longer installs !Sprites23. Modules writable by owner
 #
+# 03-Jul-96      KJB  Added 370 directory
 
 VPATH = @ <Support$Dir>
 
@@ -67,7 +68,9 @@ MODULES = \
       310.Modules.ABIMod \
       310.Modules.DDEUtils \
       310.Modules.DDT \
-      310.Modules.FrontEnd
+      310.Modules.FrontEnd \
+      310.Modules.Network.URL.File \
+      310.Modules.Network.URL.URL
 
 FILES =\
  ${LDIR}.!Boot\
@@ -111,11 +114,14 @@ install: ${FILES}
         ${MKDIR} ${INSTDIR}.310
         ${MKDIR} ${INSTDIR}.350
         ${MKDIR} ${INSTDIR}.360
+        ${MKDIR} ${INSTDIR}.370
         ${CP} 200 ${INSTDIR}.200 ${CPFLAGS}
         ${CP} 300 ${INSTDIR}.300 ${CPFLAGS}
         ${CP} 310 ${INSTDIR}.310 ${CPFLAGS}
         ${CP} 350 ${INSTDIR}.350 ${CPFLAGS}
         ${CP} 360 ${INSTDIR}.360 ${CPFLAGS}
+        ${CP} 370 ${INSTDIR}.370 ${CPFLAGS}
+        ${CP} Modules ${INSTDIR}.Modules ${CPFLAGS} #shouldn't really be anything in Modules, but SSound currently is
         |
         ${ATTR} -directories +wr ${INSTDIR}
         ${ATTR} -files +ol +or -ow +wr -ww ${INSTDIR}
@@ -125,6 +131,7 @@ install: ${FILES}
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.310
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.350
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.360
+        ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.370
         |
         @echo ${COMPONENT}: All installed (Disc)
 
@@ -172,9 +179,11 @@ o.main:	OS:h.macros
 o.main:	OS:h.os
 o.main:	OS:h.types
 o.main:	OS:h.osgbpb
+o.main:	OS:h.fileswitch
 o.main:	Support:h.x
 o.x:	<Support$Dir>.c.x
 o.x:	C:h.kernel
+o.x:	C:h.swis
 o.x:	OS:h.macros
 o.x:	OS:h.os
 o.x:	OS:h.types
