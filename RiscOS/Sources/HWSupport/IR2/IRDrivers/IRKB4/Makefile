@@ -107,3 +107,36 @@ rom_link:
 
 
 
+
+# Dynamic dependencies:
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.utils
+o.module:	h.ir_api
+o.module:	h.module
+o.module:	h.keyboard
+o.driver:	c.driver
+o.driver:	C:h.kernel
+o.driver:	C:h.swis
+o.driver:	h.utils
+o.driver:	h.ir_api
+o.driver:	h.veneers
+o.driver:	h.irqs
+o.driver:	h.keyboard
+o.driver:	h.module
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
+o.keyboard:	c.keyboard
+o.keyboard:	C:h.kernel
+o.keyboard:	C:h.swis
+o.keyboard:	h.utils
+o.keyboard:	h.ir_api
+o.keyboard:	h.veneers
+o.keyboard:	h.irqs
+o.keyboard:	h.keyboard
+o.keyboard:	h.module
