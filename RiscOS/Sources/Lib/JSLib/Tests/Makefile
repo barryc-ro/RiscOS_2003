@@ -9,6 +9,14 @@
 # Date		Name	Description
 # ====		====	===========
 # 28-Apr-98	ADH	Created.
+# 02-Jun-98	ADH	Added USEMEMLIB option to DFLAGS and DDFLAGS
+#			to fit in with similar useage in JSLib and
+#			NSPRLib themselves.
+# 10-Sep-1998	ADH	Updated DFLAGS and DDFLAGS fit with new NSPRLib
+#			USE_NSPRLIB_ALLOC_REGISTRATION option. MEMLIB
+#			added to libraries list now that it won't be part
+#			of NSPRLib or JSLib and this test program does
+#			reregister malloc() etc. to MemLib versions.
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -51,18 +59,21 @@ ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
 JSLIB		= C:JSLib.o.JSLib
 NSPRLIB		= C:NSPRLib.o.NSPRLib
+MEMLIB		= C:MemLib.o.MemLib
 
 LIBS = \
  ${CLIB} \
  ${INETLIB} \
  ${JSLIB} \
- ${NSPRLIB}
+ ${NSPRLIB} \
+ ${MEMLIB}
 
 LIBSD = \
  ${CLIB} \
  ${INETLIB} \
  ${JSLIB} \
- ${NSPRLIB}
+ ${NSPRLIB} \
+ ${MEMLIB}
 
 # -----------------------------------------------------------------------------
 # Include files
@@ -75,8 +86,8 @@ INCLUDES	= -IC:,TCPIPLibs:,C:NSPRLib,C:JSLib
 #
 
 UFLAGS		= -UXP_UNIX  -UXP_OS2  -UXP_MAC
-DFLAGS		= -DCOMPAT_INET4  -DRISCOS  -DNSPR20  -DJSFILE
-DDFLAGS		= -DCOMPAT_INET4  -DRISCOS  -DNSPR20  -DJSFILE  -DTRACE
+DFLAGS		= -DCOMPAT_INET4  -DRISCOS  -DNSPR20  -DJSFILE  -DUSE_NSPRLIB_ALLOC_REGISTRATION
+DDFLAGS		= -DCOMPAT_INET4  -DRISCOS  -DNSPR20  -DJSFILE  -DUSE_NSPRLIB_ALLOC_REGISTRATION  -DTRACE
 
 # -----------------------------------------------------------------------------
 # Program specific options:

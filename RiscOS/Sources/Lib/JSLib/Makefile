@@ -8,7 +8,19 @@
 
 # Date		Name	Description
 # ====		====	===========
-# 28-Apr-98	ADH	Created.
+# 28-Apr-1998	ADH	Created.
+# 19-May-1998	ADH	Uses MemLib if USEMEMLIB is defined; MemLib needs to
+#			be initialised through MemHeap_Initialise by the
+#			client of the library. It isn't done by the library
+#			itself in case the client wants to use the same heap.
+#			So, place '-DUSEMEMLIB' on the end of DFLAGS below
+#			to make the library use MemLib
+# 10-Sep-1998	ADH	USEMEMLIB removed, changes made to NSPRLib to allow
+#			much more flexible registration of arbitrary malloc()
+#			family style functions. See NSPRLib for more. If
+#			JSLib's own malloc() etc. calls are to be replaced,
+#			add '-DUSE_NSPRLIB_ALLOC_REGISTRATION' to DFLAGS
+#			(this is done by default).
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -19,7 +31,7 @@ LIBDIR		= <Lib$Dir>
 JSLIBDIR	= ${LIBDIR}.JSLib
 
 # -----------------------------------------------------------------------------
-# Generic options:
+# Generic options
 #
 
 MKDIR		= cdir
@@ -51,16 +63,19 @@ ROMSTUBS	= RISCOSLIB:o.romstubs
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
 NSPRLIB		= C:NSPRLib.o.NSPRLib
+MEMLIB		= C:MemLib.o.MemLib
 
 LIBSI = \
  ${CLIB} \
  ${INETLIB} \
- ${NSPRLIB}
+ ${NSPRLIB} \
+ ${MEMLIB}
 
 LIBSID = \
  ${CLIB} \
  ${INETLIB} \
- ${NSPRLIB}
+ ${NSPRLIB} \
+ ${MEMLIB}
 
 # -----------------------------------------------------------------------------
 # Include files
@@ -73,11 +88,11 @@ VPATH		= RISCOSconf Core
 # Compile-time options
 #
 
-DFLAGS		= -DCOMPAT_INET4  -DRISCOS  -DNSPR20  -DJSFILE
+DFLAGS		= -DCOMPAT_INET4  -DRISCOS  -DNSPR20  -DJSFILE  -DUSE_NSPRLIB_ALLOC_REGISTRATION
 UFLAGS		= -UXP_UNIX  -UXP_OS2  -UXP_MAC
 
 # -----------------------------------------------------------------------------
-# Program specific options:
+# Program specific options
 #
 
 COMPONENT	= JSLib
@@ -250,13 +265,13 @@ OBJSID =\
 		@${CM} ${CMFLAGS} -d $@ $<
 
 # -----------------------------------------------------------------------------
-# Build the library:
+# Build the library
 #
 
 all:		${COMPONENT} ${COMPONENTZ}
 
 # -----------------------------------------------------------------------------
-# RISC OS ROM build rules:
+# RISC OS ROM build rules
 #
 
 rom: ${TARGET} ${TARGETZ}
