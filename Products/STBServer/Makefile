@@ -18,7 +18,7 @@ all: scripts modgen modsqz mtftpd
 	Tools/Sources/ResGen/ports/solaris/modgen \
 	Tools/Sources/modsqz/ports/solaris/modsqz \
 	RiscOS/Sources/Networking/TFTPserver/ports/solaris/mtftpd 
-        gzip dist-server.tar
+	gzip dist-server.tar
 	@echo All done
 
 scripts:
