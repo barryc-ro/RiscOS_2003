@@ -1,0 +1,230 @@
+/*
+ Finger.c
+
+ Finger protocol for InterTalk
+ (c) Copyright 1995 STNC Enterprises
+*/
+
+#include <stdio.h>
+#include <string.h>
+
+#include "in.h"
+#include "socket.h"
+#include "ioctl.h"
+#include "netdb.h"
+#include "sock_err.h"
+
+#include "finger.h"
+#include "errno.h"
+
+#include "error.h"
+#include "log.h"
+#include "token.h"
+#include "wimp.h"
+
+#include "swis.h"
+
+#define FALSE 0
+
+
+static char temp_buf[4096];
+
+static void do_send(int socket,char *text)
+{
+ int cc,ptr=0;
+ strcpy(temp_buf,text);
+
+ while (ptr!=strlen(text))
+ {
+  cc=send(socket,temp_buf+ptr,strlen(temp_buf)-ptr,0);
+  if ((cc==-1) && (errno!=EWOULDBLOCK))
+  {
+   char buf[256];
+   sprintf(buf,token_get("ER10"),_inet_error.errmess);
+   error_report_string(buf);
+   shutdown(socket,2);
+   socketclose(socket);
+   return;
+  }
+  if (cc==-1) cc=0;
+  ptr+=cc;
+ }
+}
+
+
+void finger(char *what,int err)
+{
+ int s;
+ struct sockaddr_in sin;
+ struct hostent *server;
+ int on=1;
+ char *c, *rty;
+ char host[256],buf[256];
+ int bufptr;
+ int cc,i;
+ 
+ _kernel_swi_regs regs;           //for monononic timer ,ne
+ unsigned int timeout;
+
+ c=strrchr(what,'@');  /* changed to using str_r_chr to search from the end backwards to find the correct host ! DNW*/
+ if (!c)
+ {
+  if (err) error_report_string(token_get("ER44"));
+     else log_report(LOG_ERROR,token_get("ER44"));
+  return;
+ } else
+ {
+  strcpy(host,c+1);
+ }
+
+ /* start by creating a TCP socket */
+
+ s=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+ if (s==-1)
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER42"),_inet_error.errmess);
+  if (err) error_report_string(buf);
+     else log_report(LOG_ERROR,buf);
+  return;
+ }
+
+/* not yet implemented on the acorn stack (DNW 8/3/96)
+ setsockopt(s,SOL_SOCKET,SO_SNDTIMEO, (char*)&timeout,sizeof(int));
+ setsockopt(s,SOL_SOCKET,SO_RCVTIMEO, (char*)&timeout,sizeof(int));
+ */
+
+ /*  Why ?
+ sin.sin_family=PF_INET;
+ sin.sin_addr.s_addr=htonl(INADDR_ANY);
+ sin.sin_port=htons(79);
+
+ if (bind(s,(struct sockaddr*)&sin,sizeof(sin)))
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER43"),errno);
+  if (err) error_report_string(buf);
+     else log_report(LOG_ERROR,buf);
+  shutdown(s,2);
+  socketclose(s);
+  return;
+ }
+ */
+ /* Socket bound to local port, now conect to server */
+
+ /* First find server's address */
+
+ hourglass_on();
+ server=gethostbyname(host);
+ hourglass_off();
+
+
+ if (server==NULL)
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER45"),host);
+  if (err) error_report_string(buf);
+     else log_report(LOG_ERROR,buf);
+  shutdown(s,2);
+  socketclose(s);
+  return;
+ }
+
+ /* And connect to the FINGER port */
+ sin.sin_family=PF_INET;
+ memcpy((char*)&sin.sin_addr.s_addr,server->h_addr,server->h_length);
+ sin.sin_port=htons(79);  /* POP3 port number */
+
+ /* Now mark socket as non-blocking */
+
+ if (socketioctl(s,FIONBIO,&on))
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER47"),_inet_error.errmess);
+  error_report_string(buf);
+  shutdown(s,2);
+  socketclose(s);
+  return;
+ }
+
+ while (connect(s,(struct sockaddr*)&sin,sizeof(sin))==-1)
+	{
+ 	if (errno==EWOULDBLOCK || errno == EINPROGRESS  || errno == EALREADY )
+ 		{
+ 		wimp_do_poll(FALSE);
+ 		continue;
+ 		}
+ 	else if ( errno== EISCONN )
+ 		{
+ 		break;
+ 		}
+ 	else
+ 		{
+ 		char buf[256];
+ 		hourglass_off();
+		sprintf(buf,token_get("ER46"),_inet_error.errmess);
+		error_report_string(buf);
+		shutdown(s,2);
+		socketclose(s);
+		return ;
+		}
+	}
+
+
+ {
+  char buf[1024];   /* altered. now only sends what is before the last '@' symbol. as i pointed out
+                       in RFC 1288  DNW 5/3/1996 */                     
+  rty = strrchr(what, (int) '@');
+  *rty = '\0';
+  strcpy(buf, what);
+  strcat(buf, "\r\n");
+  do_send(s,buf);
+  *rty = '@';
+
+  sprintf(buf, "[%s]", host);
+  log_report(LOG_INFO,buf);
+
+
+ }
+
+ bufptr=0;
+ 
+ 
+ _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+ timeout=regs.r[0] + 1500;    //timeout = current time + 15 secs
+ 
+ do
+ {   
+   cc=recv(s,buf+bufptr,sizeof(buf)-bufptr,0);
+   //  for debugging   
+    //  sprintf(temp,"cc = %d errno = %d time = %u",cc,errno,time);  //ne
+    //  log_report(LOG_INFO,temp);    //ne
+    
+     if (cc>0)     //got some characters
+     {
+       //reset timeout 
+       _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+       timeout=regs.r[0] + 1500;    //timeout = current time + 15 secs 
+       bufptr+=cc;           
+     }       
+   
+     for (i=0;i<bufptr;i++)
+      {
+        if (buf[i]=='\n')
+      	{
+      	  buf[i]=0;
+      	  log_report(LOG_INFO,buf);
+     	  wimp_do_poll(FALSE);
+      	  memcpy(buf,buf+i+1,sizeof(buf)-i-1);
+      	  bufptr-=i+1;
+      	  i=0;
+      	}
+      }        
+  wimp_do_poll(FALSE);
+  _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);   //get current time
+ } 
+ while (regs.r[0] < timeout);
+ 
+ shutdown(s,2);
+ socketclose(s);
+}

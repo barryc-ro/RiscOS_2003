@@ -1,0 +1,1930 @@
+/*
+ nntp.c
+ Handle the NNTP protocol for the Merc
+ ury server
+ (C)1994 STNC Enterprises
+ */
+
+/*
+****************************************************************
+             Standard includes
+****************************************************************
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+
+/*
+****************************************************************
+             RISC OS includes
+****************************************************************
+*/
+#include "kernel.h"
+#include "swis.h"
+
+/*
+****************************************************************
+             RISC OS InetLib includes
+****************************************************************
+*/
+#include "in.h"
+#include "socket.h"
+#include "ioctl.h"
+#include "netdb.h"
+#include "sock_err.h"
+#include "errno.h"
+
+/*
+******************************************************************
+            Local Includes
+******************************************************************
+*/
+#include "scan.h"
+#include "wimp.h"
+#include "log.h"
+#include "error.h"
+#include "message.h"
+#include "nntp.h"
+#include "file.h"
+#include "debug.h"
+#include "token.h"
+#include "smtp.h"
+#include "error.h"
+#include "database.h"
+#include "users.h"
+#include "nglist.h"
+
+/*
+******************************************************************
+Local defines
+******************************************************************
+*/
+#define TRUE 1
+#define FALSE 0
+
+#define MAX_NNTP_LINE_LENGTH 4096
+
+
+#define NNTP_ST_IDLE              0
+#define NNTP_ST_ACTIVE            1
+#define NNTP_ST_GET_NEW_GROUPS    2
+#define NNTP_ST_GET_ARTICLES      3
+#define NNTP_ST_GET_ARTICLE_TEXT  4
+#define NNTP_ST_GET_IDS           5
+
+#define NNTP_REPLY_READY          200
+#define NNTP_REPLY_READY_NOPOST   201
+#define NNTP_REPLY_GROUP          211
+#define NNTP_REPLY_NEWSGROUPS1    215
+#define NNTP_REPLY_ARTICLE        220
+#define NNTP_REPLY_IDS_FOLLOW     230
+#define NNTP_REPLY_NEWSGROUPS     231
+#define NNTP_REPLY_ARTICLEPOSTED  240
+#define NNTP_REPLY_SENDPOSTDATA   340
+#define NNTP_REPLY_CLOSING        400
+#define NNTP_REPLY_NOGROUP        411
+#define NNTP_REPLY_NOARTICLE_HERE 423
+#define NNTP_REPLY_NOARTICLE      430
+#define NNTP_REPLY_NOPOSTINGS     440
+#define NNTP_REPLY_POSTFAILED     441
+
+/*
+******************************************************************
+ External variables
+******************************************************************
+*/
+extern int total_news_size;
+extern char po_path[];
+extern int news_limit;
+extern char smtp_domain[];
+extern char current_pass[];
+extern int update_nglist;
+
+extern char mail_domain[];
+extern char news_key[];
+
+extern int nntp_retries;
+
+extern int nglist_handle;
+
+/*
+******************************************************************
+ Static variables
+******************************************************************
+*/
+
+static int nntp_state=NNTP_ST_IDLE;
+static int nntp_socket=-1;
+static int nntp_out_file;
+static int nntp_in_file;
+static int nntp_group_fileh;
+static int nntp_id_file;
+
+static int nntp_post_index;
+static int nntp_post_pos;
+static int nntp_post_end;
+static int nntp_post_timer;
+
+static char *temp_buf=0;
+
+static char nntp_organisation[MAX_NNTP_LINE_LENGTH];
+static char nntp_po[MAX_NNTP_LINE_LENGTH];
+static char nntp_host[MAX_NNTP_LINE_LENGTH];
+static char nntp_subject[256];
+static char nntp_group_from[256];
+static char nntp_group_date[256];
+static time_t nntp_watchdog=0;
+extern time_t connect_watchdog;
+static char nntp_newsgroups_updated_time[40];
+
+static int nntp_group_first;
+static int nntp_group_time;
+static int nntp_group_last;
+static int nntp_group_current;
+static char nntp_group_name[256];
+static char nntp_group_file[256];
+static int nntp_group_pos;
+static int nntp_group_end;
+static int nntp_group_num;
+
+/*
+******************************************************************
+ Static functions
+******************************************************************
+*/
+
+/*
+ get_num(char *s)
+ Get reply code from given string
+
+ Returns
+  NNTP reply code
+  0 if not found or continuation line
+*/
+static int get_num(char *str)
+{
+ if (str[3]!='-') return (str[0]-'0')*100+(str[1]-'0')*10+(str[2]-'0')*1;
+ else return 0;
+}
+
+/* Free buffer used by transmit routine */
+static void free_tempbuf(void)
+{
+ _kernel_swi_regs r;
+ r.r[0]=7;
+ r.r[2]=(int)temp_buf;
+ _kernel_swi(OS_Module,&r,&r);
+}
+
+/* Merge times from times file into active file
+   before we start getting news, just in case of a crash the time before...
+*/
+static void nntp_merge_times(void)
+{
+ int in,out,times;
+ char buf[256];
+
+ if (!file_exists("<MailServ$Dir>.Times")) return;  /* No times to merge */
+ if (!file_exists("<MailServ$Dir>.Active")) return; /* No Active file */
+ if (file_get_length("<MailServ$Dir>.Active")==0) return; /* Active file empty*/
+
+ in=file_open("<MailServ$Dir>.Active",TRUE);
+ if (in==0) return;
+
+ times=file_open("<MailServ$Dir>.Times",TRUE);
+ if (times==0)
+ {
+  file_close(&in);
+  return;
+ }
+
+ out=file_open_create("<MailServ$Dir>.ActiveZ",ACCESS_RW);
+ if (out==0)
+ {
+  file_close(&in);
+  file_close(&times);
+  return;
+ }
+
+ /* All files open */
+
+ while (file_get_line(in,buf,FALSE)) /* For every active group */
+ {
+  int n,first,last;
+  char group[256],file[256];
+  sscanf(buf,"%i %i %i %s %s",&n,&first,&last,group,file);
+
+  file_set_ptr(times,0); /* start from start of times file */
+  while (file_get_line(times,buf,FALSE))
+  {
+   char gr[256];
+   int date;
+   sscanf(buf,"%i %s",&date,gr);
+   if (strcmpci(gr,group))
+   {
+    n=date;
+    break;
+   }
+  }
+  sprintf(buf,"%i %i %i %s %s\n",n,first,last,group,file);
+  file_write_line(out,buf,FALSE);
+ }
+
+ file_close(&in);
+ file_close(&out);
+ file_close(&times);
+
+ file_delete("<MailServ$Dir>.Active");
+ file_rename("<MailServ$Dir>.ActiveZ", "<MailServ$Dir>.Active");
+ file_delete("<MailServ$Dir>.Times");
+}
+
+/* Send bytes to the remote server */
+static void do_send(int socket,char *text)
+{
+ int cc,ptr=0;
+
+#if 0
+ DEBUG((dbg,"Sending line %s\n",text));
+#endif
+
+ strcpy(temp_buf,text);
+
+ while (ptr!=strlen(text))   /* As long as there is something to send */
+ {
+  cc=send(socket,temp_buf+ptr,strlen(temp_buf)-ptr,0);  /* sent cc bytes */
+
+  if (cc==-1)   /* An error */
+  {
+   char buf[256];
+   sprintf(buf,token_get("ER28"),_inet_error.errmess);
+   error_report_string(buf);
+   shutdown(socket,2);
+   socketclose(socket);
+   nntp_state=NNTP_ST_IDLE;
+   return;
+  }
+
+  ptr+=cc; /* Retry from where we left off */
+ }
+ connect_watchdog=time(NULL);
+ nntp_watchdog=time(NULL);
+}
+
+static void nntp_get_next_active(void)
+{
+ char buf[256];
+ char timebuf[20];
+
+
+ if (total_news_size>=news_limit*1024*1024) /* Overflowed allowed space ? */
+ {
+  error_report_string(token_get("FD11"));
+
+  while (file_get_line(nntp_in_file,buf,FALSE)) /* Copy remaining lines */
+  {
+   file_write_line(nntp_out_file,buf,TRUE);
+  }
+
+  file_close(&nntp_in_file);
+  file_close(&nntp_out_file);
+  file_delete("<MailServ$Dir>.Active");
+  file_rename("<MailServ$Dir>.Active1","<MailServ$Dir>.Active");
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_socket=-1;
+  nntp_state=NNTP_ST_IDLE;
+  return;
+ }
+
+ if (total_news_size>news_limit*1024*1024-(news_limit*1024*1024)/10) /* Warning now due */
+ {
+  error_report_string(token_get("SW02"));
+  deliver_warning(token_get("SW02"));
+ }
+
+ if (file_get_line(nntp_in_file,buf,FALSE)==0) /* End of file got all groups*/
+ {
+  file_close(&nntp_in_file);
+  file_close(&nntp_out_file);
+  file_delete("<MailServ$Dir>.Active");
+  file_rename("<MailServ$Dir>.Active1","<MailServ$Dir>.Active");
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_socket=-1;
+  nntp_state=NNTP_ST_IDLE;
+  return;
+ }
+
+ /* get the current group details */
+ if (sscanf(buf,"%i %i %i %s %s\n",&nntp_group_time,&nntp_group_first,
+            &nntp_group_last,nntp_group_name,nntp_group_file)!=5)
+ {
+  error_report_string(token_get("E17"));
+  return;
+ }
+
+ /* We have a group to ask for. Ask for list of new articles .... */
+ nntp_id_file=file_open_create("<MailServ$Dir>.IDs",ACCESS_RW);
+ file_delete("<MailServ$Dir>.NewsIndex");       /* Delete old index file */
+ nntp_group_current=nntp_group_last+1;
+
+ if (nntp_id_file==0)
+ {
+  error_report_string(token_get("E58"));   /* No point going on with no ID file */
+
+  while (file_get_line(nntp_in_file,buf,FALSE)) /* Copy remaining lines */
+  {
+   file_write_line(nntp_out_file,buf,TRUE);
+  }
+
+  file_close(&nntp_in_file);
+  file_close(&nntp_out_file);
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_socket=-1;
+  nntp_state=NNTP_ST_IDLE;
+  return;
+ }
+
+ /* Now ask for any new news */
+ strftime(timebuf,sizeof(timebuf),"%y%m%d %H%M00 GMT",gmtime((time_t *)&nntp_group_time));
+ sprintf(buf,"NEWNEWS %s %s\r\n",nntp_group_name,timebuf);
+ nntp_state=NNTP_ST_ACTIVE;
+ do_send(nntp_socket,buf);
+ log_report(LOG_INFO,buf);
+}
+
+
+void nntp_do_expire(void)
+{
+ int f,timer;
+ char buf[256];
+
+DEBUG((dbg,"Do expire"));
+
+ f=file_open("<MailServ$Dir>.DataLog",FALSE);
+ if (f!=0)
+ {
+  file_get_line(f,buf,FALSE);
+  file_close(&f);
+  sscanf(buf,"%i",&timer);
+  if ((time(NULL)-timer)<OneDay) return;
+ }
+
+ f=file_open("<MailServ$Dir>.Active",FALSE);
+ if (f==0) return; /* No active groups */
+
+ while (file_get_line(f,buf,FALSE)) /* For every active group */
+ {
+  int n,first,last;
+  char group[256],file[256];
+  char *buf1=group;
+  int exp;
+  int in,out;
+  int datain,dataout;
+  char subject[300];
+  int done_subject=FALSE;
+
+  sscanf(buf,"%i %i %i %s %s",&n,&first,&last,group,file);
+
+  /* Get newsgroup expiry time */
+  exp=get_expire(FALSE,group);
+DEBUG((dbg,"Expire for %s is %i days",group,exp));
+
+  /* Scan index file and remove old articles */
+
+  sprintf(buf,"%s.News.Index.%s",po_path,file);
+  in=file_open(buf,TRUE);
+  if (in==0) continue;  /* do next group */
+
+  sprintf(buf1,"%s.News.Index.%sz",po_path,file);
+  out=file_open_create(buf1,ACCESS_DIR);
+  if (out==0)
+  {
+   file_close(&in);
+   continue;  /* do next group */
+  }
+
+  sprintf(buf,"%s.News.Data.%s",po_path,file);
+  datain=file_open(buf,TRUE);
+  if (datain==0)
+  {
+   file_close(&in);
+   file_close(&out);
+   continue;  /* do next group */
+  }
+
+  sprintf(buf1,"%s.News.Data.%sz",po_path,file);
+  dataout=file_open_create(buf1,ACCESS_DIR);
+  if (dataout==0)
+  {
+   file_close(&in);
+   file_close(&out);
+   file_close(&datain);
+   continue;  /* do next group */
+  }
+
+
+
+  while (file_get_line(in,buf,FALSE))
+  {
+   if ((buf[0]!='+') && (buf[0]!='='))
+   {
+    strcpy(subject,buf);
+    done_subject=FALSE;
+   }
+   else if (buf[0]=='+')
+   {
+    int num,timer,pos,end;
+    char from[300];
+
+    sscanf(buf,"+%i %i %i %i %s",&num,&timer,&pos,&end,from);
+
+    if ( ( time(NULL) - timer ) < ( OneDay * exp ) )   /* Write it out */
+    {
+     if (!done_subject)
+     {
+      wimp_do_poll(FALSE);
+      file_write_line(out,subject,TRUE);
+      done_subject=TRUE;
+     }
+     {
+      /* copy data to data file */
+      int new_pos=file_get_pos(dataout);
+      int size;
+
+      size=end-pos;
+      end=new_pos+size;
+
+      while (size>0)
+      {
+       char buf[256];
+       int bytes=size>256?256:size;
+       file_get_bytes(datain,buf,pos,bytes);
+       file_put_bytes(dataout,buf,bytes);
+       size-=bytes;
+       pos+=bytes;
+      }
+      sprintf(buf,"+%i %i %i %i %s",num,timer,new_pos,end,from); /* Write new info */
+      file_write_line(out,buf,TRUE);
+     }
+    } else file_get_line(in,buf,FALSE);  /* Skip date line */
+   }
+   else file_write_line(out,buf,TRUE);  /* Write any other lines */
+  } /* While index lines */
+
+  file_close(&in);
+  file_close(&out);
+  file_close(&datain);
+  file_close(&dataout);
+
+  sprintf(buf,"%s.News.Data.%s",po_path,file);
+  sprintf(buf1,"%s.News.Data.%sz",po_path,file);
+  file_delete(buf);
+  file_rename(buf1,buf);
+
+  sprintf(buf, "%s.News.Index.%s",po_path,file);
+  sprintf(buf1,"%s.News.Index.%sz",po_path,file);
+  file_delete(buf);
+  file_rename(buf1,buf);
+
+ } /* while newsgroups */
+ file_close(&f);
+
+ f=file_open_create("<MailServ$Dir>.DataLog",ACCESS_RW);
+ DEBUG((dbg, "file_open_create for DataLog returned %d", f));
+ if (f!=0)
+ {
+         DEBUG((dbg, "Writing DataLog"));
+  sprintf(buf,"%i",time(NULL));
+  DEBUG((dbg, "DataLog contains %s", buf));
+  file_write_line(f,buf,TRUE);
+  file_close(&f);
+ }
+
+ sprintf(buf,"%s.News.Data",po_path);
+ total_news_size=file_get_total_size(buf);
+}
+
+/* A position of a thread in the new file */
+typedef struct tpos
+{
+ int pos;
+ struct tpos *next;
+} thread_pos;
+
+typedef struct th
+{
+ char          text[256];   /* the thread */
+ int           done;        /* saved to file ? */
+ thread_pos    *pos;        /* List of positions */
+ struct th     *next;       /* Next thread in list */
+} new_thread;
+
+#define NEW_MERGE  1 /* New faster merge */
+
+#ifdef NEW_MERGE
+
+static void free_thread_pos(thread_pos *p)
+{
+ if (p==NULL) return;
+ free_thread_pos(p->next);
+ free(p);
+}
+
+static void free_new_threads(new_thread *t)
+{
+ if (t==NULL) return;
+ free_new_threads(t->next);
+ free_thread_pos(t->pos);
+ free(t);
+}
+
+#endif
+
+static void nntp_merge_index(void)  /* Merge index file into newsgroup index */
+{
+ char buf[256],buf1[256],buf2[256];
+ int in,out;
+
+#ifdef NEW_MERGE
+ new_thread    *new_threads=NULL;
+ new_thread  *t;
+#endif
+
+
+ in = file_open("<MailServ$Dir>.NewsIndex",FALSE);
+
+ if (in==0)  /* No articles to merge */
+ {
+  nntp_get_next_active();
+  return;
+ }
+
+#ifdef NEW_MERGE      /* Cache positions of threads in new file */
+
+ while (file_get_line(in,buf,FALSE))
+ {
+  char        stripped[256]; /* stripped subject */
+  new_thread  *t;
+  int         done=FALSE;
+
+  if ((buf[0]=='=') || (buf[0]=='+')) continue;  /* Not interested in article details */
+
+  /* add thread (or position) to list */
+
+  strcpy(stripped,nntp_strip_subject(buf));
+
+  t=new_threads;
+  while (t)
+  {
+   if (nntp_equal_subject(t->text,stripped))  /* Found thread */
+   {
+    thread_pos *p=malloc(sizeof(thread_pos));
+
+    if (p)
+    {
+     p->pos=file_get_pos(in);
+     p->next=t->pos;
+     t->pos=p;
+    } else
+    {
+     file_close(&in);
+     error_report_string(token_get("E64"));
+     nntp_get_next_active();
+     return;
+    }
+    done=TRUE;
+    break;
+   }
+   t=t->next;
+  } /* while t */
+
+  if (!done)  /* Not added already */
+  {
+   thread_pos *p=malloc(sizeof(thread_pos));
+   t=malloc(sizeof(new_thread));
+
+   if (t && p)
+   {
+    strcpy(t->text,stripped);
+    t->pos=p;
+    t->done=FALSE;
+
+    p->next=NULL;
+    p->pos=file_get_pos(in);
+
+    t->next=new_threads;
+    new_threads=t;
+   } else
+   {
+     file_close(&in);
+     if (p) free(p);
+     if (t) free(t);
+     error_report_string(token_get("E64"));
+     nntp_get_next_active();
+     return;
+   }
+  } /* if !done */
+ } /* while get_line */
+
+ /* Now all threads are cached */
+
+#endif
+
+ sprintf(buf,"%s.News.Index.%s",nntp_po,nntp_group_file);
+ nntp_group_fileh=file_open(buf,ACCESS_DIR);
+ if (nntp_group_fileh==0)
+ {
+  error_report_string1(token_get("E22"),nntp_group_name);
+  free_new_threads(new_threads);
+  nntp_get_next_active();
+  return;
+ }
+
+ strcpy(buf1,buf);
+ strcat(buf1,"z");
+
+ out = file_open_create(buf1,ACCESS_DIR);   /* New index file */
+
+ if (out==0)
+ {
+  file_close(&nntp_group_fileh);
+  error_report_string1(token_get("E22"),nntp_group_name);
+  free_new_threads(new_threads);
+  nntp_get_next_active();
+  return;
+ }
+
+
+ while (file_get_line(nntp_group_fileh,buf,FALSE))  /* For every thread in the file */
+ {
+#ifdef NEW_MERGE
+  new_thread  *t;
+#endif
+
+
+  if (file_write_line(out,buf,TRUE)==0)
+  {
+   file_close(&nntp_group_fileh);
+   file_close(&out);
+   file_close(&in);
+   error_report_string1(token_get("E22"),nntp_group_name);
+   nntp_get_next_active();
+   return;
+  }
+  if ((buf[0]=='+') || (buf[0]=='=')) continue;  /* An article, not a thread */
+
+  /* Find all matching threads in the new index, and add them in */
+
+#ifdef NEW_MERGE
+  t=new_threads;
+  while (t)
+  {
+   if (nntp_equal_subject(t->text,buf))  /* Found it */
+   {
+    thread_pos *p=t->pos;
+    while (p)
+    {
+     file_set_ptr(in,p->pos);  /* set pointer */
+     file_get_line(in,buf1,TRUE); /* get lines */
+     file_get_line(in,buf2,TRUE);
+     if ((file_write_line(out,buf1,TRUE)==0) || (file_write_line(out,buf2,TRUE)==0))
+     {
+      file_close(&nntp_group_fileh);
+      file_close(&out);
+      file_close(&in);
+      free_new_threads(new_threads);
+      error_report_string1(token_get("E22"),nntp_group_name);
+      nntp_get_next_active();
+      return;
+     }
+     p=p->next;
+    } /* while p */
+    t->done=TRUE;
+    break;
+   } /* If equal subject */
+   t=t->next;
+  } /* while t */
+
+#else
+
+
+  file_set_ptr(in,0);  /* Start from start of file */
+
+  while (
+         file_get_line(in,nntp_subject,TRUE) &&
+         file_get_line(in,buf1,TRUE) &&
+         file_get_line(in,buf2,TRUE)
+        )
+  {
+   if (nntp_equal_subject(buf,nntp_subject))         /* Same thread */
+   {
+    if ((file_write_line(out,buf1,TRUE)==0) || (file_write_line(out,buf2,TRUE)==0))
+    {
+     file_close(&nntp_group_fileh);
+     file_close(&out);
+     file_close(&in);
+     error_report_string1(token_get("E22"),nntp_group_name);
+     nntp_get_next_active();
+     return;
+    }
+   }
+  }
+
+#endif
+
+ } /* Do for all threads */
+
+#ifdef NEW_MERGE   /* now add remaining threads at end */
+ t=new_threads;
+ while (t)
+ {
+  if (!t->done)  /* not done already */
+  {
+   thread_pos *p;
+   if (file_write_line(out,t->text,TRUE)==0)
+   {
+    file_close(&nntp_group_fileh);
+    file_close(&out);
+    file_close(&in);
+    free_new_threads(new_threads);
+    error_report_string1(token_get("E22"),nntp_group_name);
+    nntp_get_next_active();
+    return;
+   }
+
+   p=t->pos;
+   while (p)
+   {
+    file_set_ptr(in,p->pos);  /* set pointer */
+    file_get_line(in,buf1,TRUE); /* get lines */
+    file_get_line(in,buf2,TRUE);
+    if ((file_write_line(out,buf1,TRUE)==0) || (file_write_line(out,buf2,TRUE)==0))
+    {
+     file_close(&nntp_group_fileh);
+     file_close(&out);
+     file_close(&in);
+     free_new_threads(new_threads);
+     error_report_string1(token_get("E22"),nntp_group_name);
+     nntp_get_next_active();
+     return;
+    }
+    p=p->next;
+   } /* while p */
+  } /* if !done */
+  t=t->next;
+ }/* while t */
+
+ free_new_threads(new_threads);
+ file_close(&in);
+
+#endif
+
+ file_close(&nntp_group_fileh);
+ file_close(&out);
+ sprintf(buf,"%s.News.Index.%s",nntp_po,nntp_group_file);
+ file_delete(buf);
+ sprintf(buf1,"%s.News.Index.%sz",nntp_po,nntp_group_file);
+ file_rename(buf1,buf);
+
+#ifndef NEW_MERGE
+
+ nntp_group_fileh=file_open_append(buf,TRUE);
+ if (nntp_group_fileh==0)
+ {
+  file_close(&in);
+  error_report_string1(token_get("E22"),nntp_group_name);
+  nntp_get_next_active();
+  return;
+ }
+
+
+ /*  Add any new threads at end */
+
+ file_set_ptr(in,0);  /* Start from start of file */
+
+ /* For every thread in new file */
+ while (
+        file_get_line(in,nntp_subject,FALSE) &&
+        file_get_line(in,buf1,FALSE) &&
+        file_get_line(in,buf2,FALSE)
+       )
+ {
+  int done=FALSE;
+  file_set_ptr(nntp_group_fileh,0);  /* Start from start of file */
+
+  while (file_get_line(nntp_group_fileh,buf,FALSE))  /* For every thread in the original file */
+  {
+   if ((buf[0]=='+') || (buf[0]=='=')) continue;     /* An article, not a thread */
+   if (nntp_equal_subject(buf,nntp_subject))         /* Same thread */
+   {
+    done=TRUE;
+    break;
+   }
+  }
+
+  if (!done)
+  {
+   sprintf(buf,"%s\n",nntp_strip_subject(nntp_subject));
+   if ((file_write_line(nntp_group_fileh,buf,FALSE)==0) ||
+       (file_write_line(nntp_group_fileh,buf1,TRUE)==0) ||
+       (file_write_line(nntp_group_fileh,buf2,TRUE)==0)
+      )
+   {
+    file_close(&nntp_group_fileh);
+    file_close(&in);
+    error_report_string1(token_get("E22"),nntp_group_name);
+    nntp_get_next_active();
+    return;
+   }
+  }
+ } /* Do for every new thread */
+
+ /* Now close files */
+ file_close(&in);
+ file_close(&nntp_group_fileh);
+
+#endif
+
+ /* append group to times file, to avoid getting it again */
+
+ out=file_open_append("<MailServ$Dir>.Times",FALSE);
+ if (out==0) out=file_open_create("<MailServ$Dir>.Times",ACCESS_RW);
+ if (out!=0) /* If we can't it's only inefficient, so continue :-) */
+ {
+  sprintf(buf,"%i %s\n",time(NULL),nntp_group_name);
+  file_write_line(out,buf,FALSE);
+  file_close(&out);
+ }
+
+
+ nntp_get_next_active();
+}
+
+/* decode encoded data (only in site license version) */
+
+void decode_data(char *data,int len,char *pass,int keepnl,int magic)
+{
+ char password[256];
+ char p;
+
+#if 0  /* Single user ? */
+ return;
+#else
+ int i;
+ char *c;
+
+ strcpy(password,pass);
+
+ /* Now decode the data */
+ c=data;
+ i=0;
+ while (c<data+len)
+ {
+  p=password[i];
+  if ((!keepnl) || ((*c!='\n') && (((*c)^p)!='\n')))
+  {
+   if ((*c!=0) && (*c!=p)) *c=(*c)^p;
+  }
+  i++;
+  if (password[i]<32)
+  {
+   unsigned int r1,r2,tmp;
+   if (magic)
+   {
+    sscanf(password,"%8x%8x",&r1,&r2);
+    tmp = r2 &  1;
+    r2  = r2 >> 1;
+    if (r1 & 1) r2 |= (1U<<31);
+    r1  = r1 >> 1;
+    if (tmp) r1 |= (1U<<31);
+    sprintf(password,"%08x%08x",r1,r2);
+   }
+   i=0;
+  }
+  c++;
+ }
+#endif
+}
+
+/*
+ Abort or end posting, and return to command state
+*/
+static void nntp_post_final(void)
+{
+ do_send(nntp_socket,"\r\n");
+ do_send(nntp_socket,".\r\n");
+}
+
+/* Send actual data for article */
+static void nntp_send_article_data(void)
+{
+ char *data=malloc(nntp_post_end-nntp_post_pos+2);
+ int data_file;
+ char buf[MAX_NNTP_LINE_LENGTH];
+ char *c,*d;
+ int len;
+
+ if (data==NULL)
+ {
+  error_report_string(token_get("E63"));
+  nntp_post_final();
+  return;
+ }
+
+ len = nntp_post_end-nntp_post_pos;
+ sprintf(buf,"%s.News.Data.%s",nntp_po,nntp_group_file);
+ data_file=file_open(buf,TRUE);
+ if (
+     (data_file==0) ||
+     (!file_get_bytes(data_file,data,nntp_post_pos,len))
+    )
+ {
+  free(data);
+  file_close(&data_file);
+  nntp_post_final();
+  return;
+ }
+ DEBUG((dbg,"posting, data loaded"));
+
+ file_close(&data_file);
+
+ decode_data(data,len,news_key,FALSE,TRUE);
+
+ /* Now we have raw data, send it line by line */
+ buf[0]='.';
+ buf[1]=0;
+ c=data;
+ d=buf+1;
+
+ while (c-data<len)
+ {
+  if (*c=='\n') /* End of line */
+  {
+   *d++='\r';
+   *d++='\n';
+   *d=0;
+   do_send(nntp_socket,(buf[1]=='.')?buf:buf+1);  /* Add '.' if needed */
+   buf[1]=0;  /* And start on new line */
+   d=buf+1;
+   c++;
+   wimp_do_poll(FALSE);
+  } else
+  {
+   *d++=*c++;
+   *d=0;
+  }
+ }
+
+ nntp_post_final();
+}
+
+/* Search for nect article that needs posting */
+static void nntp_post_next(void)
+{
+ char from[256],buf[256];
+ int num;
+ char id[256];
+
+ DEBUG((dbg,"post next"));
+ do
+ {
+  int atend;
+  atend=file_get_line(nntp_post_index,buf,FALSE);
+
+  if (atend==0) /* end of file */
+  {
+   DEBUG((dbg,"end of file"));
+   file_close(&nntp_post_index);
+   nntp_merge_index();
+   return;
+  }
+
+  if (buf[0]=='+')  /* An article */
+  {
+   DEBUG((dbg,"check %s",buf));
+   sscanf(buf,"+%i %i %i %i %s",&num,&nntp_post_timer,
+                      &nntp_post_pos,&nntp_post_end,from);
+   DEBUG((dbg,"Time = Article %i Group %i",nntp_post_timer,nntp_group_time));
+  } else
+  {
+//   DEBUG((dbg,"Skip %s",buf));
+  }
+ } while (
+          (buf[0]!='+') || /* Not an article line */
+          (sscanf(buf,"+%i %i %i %i %s",&num,&nntp_post_timer,
+                      &nntp_post_pos,&nntp_post_end,from)!=5) ||/* something wrong..*/
+          (nntp_post_timer<=nntp_group_time)
+         );
+
+ DEBUG((dbg,"Doing post..."));
+ /* Got an article to send */
+
+ sprintf(id,"<%x%x.%x@%s>",nntp_post_pos,nntp_post_end,nntp_post_timer,smtp_domain);
+
+ sprintf(buf,"POST \r\n");
+ do_send(nntp_socket,buf);
+ nntp_state=NNTP_ST_ACTIVE;
+}
+
+
+static void nntp_post_articles(void)
+{
+ char buf[256];
+
+ sprintf(buf,"%s.News.Index.%s",nntp_po,nntp_group_file);
+ DEBUG((dbg,"Looking for articles to post in %s",buf));
+ nntp_post_index=file_open(buf,TRUE);
+ if (nntp_post_index==0)
+ {
+  nntp_merge_index();
+  return;
+ }
+ DEBUG((dbg,"Index file opened"));
+ nntp_post_next();
+}
+
+static void nntp_get_next_article(void)
+{
+ char buf[256],buf1[256];
+
+DEBUG((dbg,"Get next article"));
+
+ if (!file_get_line(nntp_id_file,buf,FALSE))
+ {
+
+  /* write new group info to the active file */
+   sprintf(buf,"%i %i %i %s %s\n",time(NULL),nntp_group_first,nntp_group_num,
+               nntp_group_name,nntp_group_file);
+   if (file_write_line(nntp_out_file,buf,FALSE)==0)
+   {
+    error_report_string(token_get("E20"));
+    nntp_state=NNTP_ST_IDLE;
+    file_close(&nntp_in_file);
+    file_close(&nntp_out_file);
+    file_close(&nntp_id_file);
+    file_close(&nntp_group_fileh);
+    shutdown(nntp_socket,2);
+    socketclose(nntp_socket);
+    nntp_socket=-1;
+    return;
+   }
+
+
+  /* End of articles for this group */
+  file_close(&nntp_id_file);
+  file_close(&nntp_group_fileh);  /* got all data, so close data file */
+  nntp_post_articles();
+  return;
+ }
+
+ /* Get this article */
+ sprintf(buf1,"ARTICLE %s\r\n",buf);
+ do_send(nntp_socket,buf1);
+ nntp_state=NNTP_ST_ACTIVE;
+ wimp_do_poll(FALSE);   /* DNW added to make this 'friendly' ?  */
+}
+
+#if 0  /* This is for getting articles by numbers */
+/* Ask for the next article header and body */
+static void nntp_get_next_article(void)
+{
+ char buf[256];
+ /* Any more ? */
+ nntp_group_current++;
+ if (nntp_group_current>nntp_group_last) /* Got last article */
+ {
+  /* write new group info to the active file */
+  sprintf(buf,"%i %i %i %s %s\n",time(NULL),nntp_group_first,nntp_group_last,
+               nntp_group_name,nntp_group_file);
+  if (file_write_line(nntp_out_file,buf,FALSE)==0)
+  {
+   error_report_string(token_get("E20"));
+   nntp_state=NNTP_ST_IDLE;
+   file_close(&nntp_in_file);
+   file_close(&nntp_out_file);
+   shutdown(nntp_socket,2);
+   socketclose(nntp_socket);
+   nntp_socket=-1;
+   return;
+  }
+  nntp_get_next_active();
+  return;
+ }
+
+ /* Now open the data file for the group */
+ sprintf(buf,"%s.news.data.%s",nntp_po,nntp_group_file);
+ nntp_group_fileh=file_open_append(buf,TRUE);
+ if (nntp_group_fileh==0)
+ {
+  error_report_string1(token_get("E19"),nntp_group_name);
+  nntp_get_next_active();
+  return;
+ }
+ nntp_group_pos=file_get_pos(nntp_group_fileh);
+ nntp_group_num=nntp_group_current;
+ nntp_state=NNTP_ST_ACTIVE;
+ sprintf(buf,"ARTICLE %i\r\n",nntp_group_current);
+ do_send(nntp_socket,buf);
+ wimp_do_poll(FALSE);   /* DNW added to make this 'friendly' ?  */
+
+}
+#endif
+
+
+static void nntp_group_reply(char *l)
+{
+ int num,first,last,code;
+ if ((sscanf(l,"%i %i %i %i",&code,&num,&first,&last)==4) &&
+     (code==211)) /* Only if reply as expected */
+ {
+  /* Get all between out last and server's last */
+  nntp_group_current=(nntp_group_last+1>first)?nntp_group_last:first-1;
+  if (nntp_group_first==0) nntp_group_first=first;
+  if (nntp_group_current<=last)
+  {
+   nntp_group_last=last;
+   /* There are some articles to get */
+   nntp_get_next_article();
+   return;
+  }
+ }
+ /* Otherwise get next group */
+ nntp_get_next_active();
+}
+
+char *nntp_strip_subject(char *s1)
+{
+ char *c;
+ while (1)
+ {
+  while (isspace(*s1)) s1++;  /* Skip white space */
+  if ((*s1!='R') && (*s1!='r')) break;
+  if ((*(s1+1)!='E') && (*(s1+1)!='e')) break;
+  if (*(s1+2)!=':') break;
+  s1+=3;
+ }
+ for (c=s1;*c>31;c++);
+ *c=0;
+ return s1;
+}
+
+static void nntp_update_index(void)
+{
+ char buf[256],buf1[256];
+ int out;
+
+ total_news_size+=nntp_group_end-nntp_group_pos;
+
+ smtp_get_domain(nntp_group_from,buf);
+ if (strcmpci(buf,mail_domain))   /* We sent it, so no neeed to add it again */
+ {
+  nntp_get_next_article();
+  return;
+ }
+
+ out=file_open_append("<MailServ$Dir>.NewsIndex",FALSE);
+ if (out==0) out=file_open_create("<MailServ$Dir>.NewsIndex",ACCESS_RW);
+ if (out==0) /* Can't create a temp index file */
+ {
+  error_report_string(token_get("E61"));   /* No point going on with no Index file */
+  file_close(&nntp_id_file);
+  file_close(&nntp_in_file);
+  file_close(&nntp_out_file);
+  file_close(&nntp_group_fileh);
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_socket=-1;
+  nntp_state=NNTP_ST_IDLE;
+  return;
+ }
+
+ /* Now add new index lines */
+  sprintf(buf,"%s\n",nntp_strip_subject(nntp_subject));  /* Subject */
+
+  sprintf(buf1,"+%i %i %i %i %s",nntp_group_num++,nntp_get_time(),nntp_group_pos,
+               nntp_group_end,nntp_group_from);  /* Flags + From */
+
+  if (
+      (file_write_line(out,buf,FALSE)==0)  ||
+      (file_write_line(out,buf1,FALSE)==0) ||
+      (file_write_line(out,"=",FALSE)==0) ||
+      (file_write_line(out,nntp_group_date,FALSE)==0)
+     )
+  {
+   file_close(&nntp_group_fileh);
+   file_close(&nntp_id_file);
+   file_close(&out);
+   error_report_string1(token_get("E22"),nntp_group_name);
+   nntp_get_next_active();
+   return;
+  }
+  file_close(&out);
+  nntp_group_pos=file_get_pos(nntp_group_fileh);
+  nntp_get_next_article();
+}
+
+
+#if 0  /* used to update index for every article */
+ sprintf(buf,"%s.News.Index.%s",nntp_po,nntp_group_file);
+ nntp_group_fileh=file_open(buf,ACCESS_DIR);
+ if (nntp_group_fileh==0)
+ {
+  error_report_string1(token_get("E22"),nntp_group_name);
+  nntp_get_next_active();
+  return;
+ }
+ strcpy(buf1,buf);
+ strcat(buf1,"z");
+ out = file_open_create(buf1,ACCESS_DIR);
+ if (out==0)
+ {
+  file_close(&nntp_group_fileh);
+  error_report_string1(token_get("E22"),nntp_group_name);
+  nntp_get_next_active();
+  return;
+ }
+
+ while (file_get_line(nntp_group_fileh,buf,FALSE))  /* For every thread in the file */
+ {
+  if (file_write_line(out,buf,TRUE)==0)
+  {
+   file_close(&nntp_group_fileh);
+   file_close(&out);
+   error_report_string1(token_get("E22"),nntp_group_name);
+   nntp_get_next_active();
+   return;
+  }
+  if ((buf[0]=='+') || (buf[0]=='=')) continue; /* An article, not a thread */
+  if (nntp_equal_subject(buf,nntp_subject)) /* Same thread */
+  {
+   sprintf(buf,"+%i %i %i %i %s",nntp_group_num,nntp_get_time(),nntp_group_pos,nntp_group_end,nntp_group_from);
+   if (file_write_line(out,buf,FALSE)==0)
+   {
+    file_close(&nntp_group_fileh);
+    file_close(&out);
+    error_report_string1(token_get("E22"),nntp_group_name);
+    nntp_get_next_active();
+    return;
+   }
+   done=TRUE;
+  }
+ }
+ if (!done)  /* add at end */
+ {
+  sprintf(buf,"%s\n",nntp_strip_subject(nntp_subject));
+  sprintf(buf1,"+%i %i %i %i %s\n",nntp_group_num,nntp_get_time(),nntp_group_pos,nntp_group_end,nntp_group_from);
+  if ((file_write_line(out,buf,FALSE)==0) ||(file_write_line(out,buf1,FALSE)==0))
+  {
+   file_close(&nntp_group_fileh);
+   file_close(&out);
+   error_report_string1(token_get("E22"),nntp_group_name);
+   nntp_get_next_active();
+   return;
+  }
+ }
+ /* Now close and copy new index file into place */
+ file_close(&out);
+ file_close(&nntp_group_fileh);
+ sprintf(buf,"%s.News.Index.%s",nntp_po,nntp_group_file);
+ file_delete(buf);
+ sprintf(buf1,"%s.News.Index.%sz",nntp_po,nntp_group_file);
+ file_rename(buf1,buf);
+ file_close(&nntp_group_fileh);
+ nntp_get_next_article();
+}
+#endif
+
+static void nntp_get_article_data(char *buf)
+{
+ static int hdr=TRUE;
+ int pos,err;
+ char command[256];
+ char line[MAX_NNTP_LINE_LENGTH];
+// char nix_buf[20];   //ne
+
+//DEBUG((dbg,"Line is%s\n",buf));
+
+
+ /* Check for subject field */
+ if ((hdr) && hdr_get_command(buf,command,&pos))
+ {
+  if (strcmpci(command,"Subject"))
+  {
+  strcpy(nntp_subject,buf+pos);
+#if NNTP_DEBUG
+   DEBUG((dbg,"Subject is %s\n",nntp_subject));
+#endif
+  } else
+  if (strcmpci(command,"From"))
+  {
+  strcpy(nntp_group_from,buf+pos);
+
+#if NNTP_DEBUG
+   DEBUG((dbg,"From line is %s\n",nntp_group_from));
+#endif
+  }
+  else
+  if (strcmpci(command,"Date"))
+  {
+  strcpy(nntp_group_date,buf+pos);
+#if NNTP_DEBUG
+   DEBUG((dbg,"Date line is %s\n",nntp_group_date));
+#endif
+  }
+ }
+
+ if (buf[0]=='\n') hdr=FALSE;  /* No hdr fields after here */
+
+ if ((buf[0]=='.') && (buf[1]=='\n'))
+ {
+  /* End of data reached */
+  nntp_group_end=file_get_pos(nntp_group_fileh);
+//  file_close(&nntp_group_fileh);
+  hdr=TRUE; /* ready for next article */
+  nntp_update_index();
+  return;
+ }
+
+ strcpy(line,(buf[0]=='.')?buf+1:buf);
+ line[strlen(line)-1]=0;
+
+ encode_line(line,FALSE,TRUE);
+
+ err=file_write_line(nntp_group_fileh,line,FALSE);
+
+ if (err==0)  /* Unable to write data to file */
+ {
+  file_close(&nntp_group_fileh);
+  error_report_string1(token_get("E21"),nntp_group_name);
+  hdr=TRUE; /* ready for next article */
+  nntp_get_next_article();
+  return;
+ }
+ /* Wait for next line */
+}
+
+static void nntp_get_group(char *b)
+{
+ int err;
+ char buf[MAX_NNTP_LINE_LENGTH];
+ char *c=buf;
+
+
+ if (strlen(b) < sizeof(buf))
+   strcpy(buf,b);
+ else
+   return;
+
+ while (*c>32) c++;
+ *c=0;
+
+ err=0;
+#if NNTP_DEBUG
+ DEBUG((dbg,"get group: %s\n",buf));
+#endif
+
+
+ if ((buf[0]=='.') && (buf[1]==0)) /* End of newsgroup list reached */
+ {
+  if (nglist_save()) /* Saved new list, update time stamp */
+  {
+   Object *o=database_find("List","Newsgroups");
+   if (!o) o=database_add("List","Newsgroups");
+   if (o)
+   {
+    AttributeValue *v=database_get_attribute(o,"TimeUpdated",FALSE);
+    if (v) database_remove_attribute_value(o,"TimeUpdated",v->value);
+    database_add_attribute(o,"TimeUpdated",nntp_newsgroups_updated_time,FALSE,TRUE);
+    database_save("<MailServ$Dir>.Database");
+   }
+  }
+
+  /* Got all new groups, now get update on active ones */
+  nntp_in_file=file_open("<MailServ$Dir>.Active",FALSE);
+  if (nntp_in_file==0)  /* we don't have any active groups */
+  {
+   error_report_string(token_get("E15"));
+   nntp_state=NNTP_ST_IDLE;
+   shutdown(nntp_socket,2);
+   socketclose(nntp_socket);
+   nntp_socket=-1;
+   return;
+  }
+
+  nntp_out_file=file_open_create("<MailServ$Dir>.Active1",ACCESS_RW);
+  if (nntp_out_file==0)
+  {
+   file_close(&nntp_in_file);
+   error_report_string(token_get("E16"));
+   nntp_state=NNTP_ST_IDLE;
+   shutdown(nntp_socket,2);
+   socketclose(nntp_socket);
+   nntp_socket=-1;
+   return;
+  }
+  nntp_get_next_active();
+  return;
+ }
+
+ nglist_add_group(buf);
+ wimp_invalidate_window(nglist_handle);
+#if 0
+ err=file_write_line(nntp_out_file,buf,TRUE);
+ if (err==0)
+ {
+  error_report_string(token_get("E14"));
+  file_close(&nntp_out_file);
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_socket=-1;
+  nntp_state=NNTP_ST_IDLE;
+ }
+#endif
+}
+
+
+static void nntp_get_id(char *s)
+{
+ char buf[256];
+
+ DEBUG((dbg,"Got id: %s",s));
+
+ if ((s[0]=='.') && (s[1]=='\n'))  /* Got all IDs */
+ {
+  DEBUG((dbg,"Got last id"));
+  file_close(&nntp_id_file);  /* Close the file, and re-open for input */
+  nntp_id_file=file_open("<MailServ$Dir>.IDs",TRUE);
+  if (nntp_id_file==0) /* Ah? we just wrote it ... */
+  {
+   error_report_string(token_get("E60"));   /* No point going on with no ID file */
+   file_close(&nntp_in_file);
+   file_close(&nntp_out_file);
+   shutdown(nntp_socket,2);
+   socketclose(nntp_socket);
+   nntp_socket=-1;
+   nntp_state=NNTP_ST_IDLE;
+   return;
+  }
+  /* Ok, opened id file */
+  /* Now open the data file for the group */
+
+  sprintf(buf,"%s.news.data.%s",nntp_po,nntp_group_file);
+  nntp_group_fileh=file_open_append(buf,TRUE);
+  if (nntp_group_fileh==0)
+  {
+   error_report_string1(token_get("E19"),nntp_group_name);
+   file_close(&nntp_id_file);
+   nntp_get_next_active();
+   return;
+  }
+
+  nntp_group_pos=file_get_pos(nntp_group_fileh);
+  nntp_group_num=nntp_group_current;
+  nntp_state=NNTP_ST_ACTIVE;
+  nntp_get_next_article();
+  return;
+ }
+
+ if (!file_write_line(nntp_id_file,s,FALSE)) /* Failed writing line */
+ {
+  error_report_string(token_get("E59"));   /* No point going on with no ID file */
+  file_close(&nntp_id_file);
+  file_close(&nntp_in_file);
+  file_close(&nntp_out_file);
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_socket=-1;
+  nntp_state=NNTP_ST_IDLE;
+  return;
+ }
+}
+
+/* process next transaction on NNTP socket */
+
+static void nntp_process_next(void)
+{
+ static int bufptr=0;
+ static char buf[MAX_NNTP_LINE_LENGTH];
+ int cc,code;
+ int i;
+
+ /* Get any pending data */
+ cc=recv(nntp_socket,buf+bufptr,MAX_NNTP_LINE_LENGTH-bufptr,0);
+ if (cc==-1)
+ {
+  char buf[256];
+  if (errno==EWOULDBLOCK)
+  {
+   return;  /* No pending data */
+  }
+  sprintf(buf,token_get("ER29"),_inet_error.errmess);
+  error_report_string(buf);
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+  nntp_state=NNTP_ST_IDLE;
+  nntp_socket=-1;
+  return;
+ }
+ nntp_watchdog=time(NULL);
+ connect_watchdog=time(NULL);
+
+ bufptr+=cc;
+#if NNTP_DEBUG
+// DEBUG((dbg,"%i\n",(int)bufptr));
+#endif
+ /* We have some data, is it complete? */
+
+ while (1)
+ {
+  /* write out any complete lines */
+  for (i=1;i<bufptr;i++)
+  {
+   if ((buf[i]=='\n') && (buf[i-1]=='\r')) break;
+  }
+  if (i>=bufptr) return; /* No complete lines */
+
+  buf[i]=0;
+  buf[i-1]='\n';
+
+  switch(nntp_state)
+  {
+   case NNTP_ST_GET_NEW_GROUPS:
+        nntp_get_group(buf);
+        memcpy(buf,buf+i+1,MAX_NNTP_LINE_LENGTH-i);
+        bufptr=bufptr-(i+1);
+        continue;
+   case NNTP_ST_GET_IDS:
+        nntp_get_id(buf);
+        memcpy(buf,buf+i+1,MAX_NNTP_LINE_LENGTH-i);
+        bufptr=bufptr-(i+1);
+        continue;
+   case NNTP_ST_GET_ARTICLE_TEXT:
+        nntp_get_article_data(buf);
+        memcpy(buf,buf+i+1,MAX_NNTP_LINE_LENGTH-i);
+        bufptr=bufptr-(i+1);
+        continue;
+  }
+
+  code=get_num(buf);
+
+#if NNTP_DEBUG
+  DEBUG((dbg,"input line is %s (code = %i)\n",buf,code));
+#endif
+
+wimp_do_poll(FALSE); /* DNW - let try to make this software friendly !  */
+
+
+  switch(code)
+  {
+   case 0:
+       break;
+   case NNTP_REPLY_READY:   /* Connection established */
+   case NNTP_REPLY_READY_NOPOST:
+       if (!update_nglist)    /* Get update on active groups */
+       {
+        nntp_in_file=file_open("<MailServ$Dir>.Active",FALSE);
+        if (nntp_in_file==0)  /* we don't have any active groups */
+        {
+         error_report_string(token_get("E15"));
+         nntp_state=NNTP_ST_IDLE;
+         shutdown(nntp_socket,2);
+         socketclose(nntp_socket);
+         nntp_socket=-1;
+         break;
+        }
+
+
+        nntp_out_file=file_open_create("<MailServ$Dir>.Active1",ACCESS_RW);
+        if (nntp_out_file==0)
+        {
+         file_close(&nntp_in_file);
+         error_report_string(token_get("E16"));
+         nntp_state=NNTP_ST_IDLE;
+         shutdown(nntp_socket,2);
+         socketclose(nntp_socket);
+         nntp_socket=-1;
+         break;
+        }
+        nntp_get_next_active();
+        break;
+       }
+       else
+       {                                       /* Ask for any new news groups */
+        _kernel_swi_regs r;
+        Object *o=database_find("List","Newsgroups");
+        AttributeValue *v=NULL;
+        int stamp[2];
+
+        if (o) v=database_get_attribute(o,"TimeUpdated",FALSE);
+
+        if (v)
+        {
+         nglist_load();
+         sprintf(buf,"NEWGROUPS %s\r\n",v->value); /* Has previous stamp */
+        }
+        else sprintf(buf,"LIST\r\n");
+
+        /* Prepare stamp string */
+        r.r[0]=14;
+        r.r[1]=(int)stamp;
+        *(char *)stamp=3;
+        _kernel_swi(OS_Word,&r,&r);   /* Read time */
+
+        r.r[0]=(int)stamp;
+        r.r[1]=(int)nntp_newsgroups_updated_time;
+        r.r[2]=sizeof(nntp_newsgroups_updated_time);
+        r.r[3]=(int)"%YR%MN%DY %24%MI%SE";
+         _kernel_swi(OS_ConvertDateAndTime,&r,&r);
+
+        do_send(nntp_socket,buf);
+       }
+       break;
+   case NNTP_REPLY_ARTICLE:
+       nntp_state=NNTP_ST_GET_ARTICLE_TEXT;
+       pass_pos=0;
+       strcpy(current_pass,news_key);
+       break;
+   case NNTP_REPLY_NOARTICLE:
+   case NNTP_REPLY_NOARTICLE_HERE:
+#if 0
+/* Was used for old method of getting articles*/
+       file_close(&nntp_group_fileh);
+#endif
+       nntp_get_next_article();
+       break;
+   case NNTP_REPLY_NEWSGROUPS:
+   case NNTP_REPLY_NEWSGROUPS1:
+       nntp_state=NNTP_ST_GET_NEW_GROUPS;
+       break;
+   case NNTP_REPLY_IDS_FOLLOW:
+       nntp_state=NNTP_ST_GET_IDS;
+       break;
+   case NNTP_REPLY_GROUP:
+       nntp_group_reply(buf);
+       break;
+   case NNTP_REPLY_NOGROUP:
+       error_report_string1(token_get("E18"),nntp_group_name);
+       sprintf(buf,"%i %i %i %s %s\n",time(NULL),nntp_group_first,nntp_group_last,
+               nntp_group_name,nntp_group_file);
+       if (file_write_line(nntp_out_file,buf,FALSE)==0)
+       {
+        error_report_string(token_get("E20"));
+        nntp_state=NNTP_ST_IDLE;
+        file_close(&nntp_in_file);
+        file_close(&nntp_out_file);
+        shutdown(nntp_socket,2);
+        socketclose(nntp_socket);
+        nntp_socket=-1;
+        return;
+       }
+       nntp_get_next_active();
+       break;
+   case NNTP_REPLY_CLOSING:
+       nntp_state=NNTP_ST_IDLE;
+       shutdown(nntp_socket,2);
+       socketclose(nntp_socket);
+       nntp_socket=-1;
+       if (nntp_retries)
+       {
+        nntp_retries--;
+        nntp_connect(nntp_host,nntp_po,nntp_organisation);
+        log_report(LOG_INFO,token_get("I00"));
+       }
+       break;
+   case NNTP_REPLY_NOPOSTINGS:
+   case NNTP_REPLY_POSTFAILED:
+   case NNTP_REPLY_ARTICLEPOSTED:
+       nntp_post_next();
+       break;
+   case NNTP_REPLY_SENDPOSTDATA:
+       nntp_send_article_data();
+       break;
+   default:
+       shutdown(nntp_socket,2);
+       socketclose(nntp_socket);
+       nntp_state=NNTP_ST_IDLE;
+       nntp_socket=-1;
+       break;
+  }
+  memcpy(buf,buf+i+1,MAX_NNTP_LINE_LENGTH-i);
+  bufptr=bufptr-(i+1);
+ }
+}
+
+/*
+******************************************************************
+ Exported functions
+******************************************************************
+*/
+
+void nntp_close(void)
+{
+ if (nntp_socket>=0)
+ {
+  shutdown(nntp_socket,2);
+  socketclose(nntp_socket);
+ }
+ nntp_state=NNTP_ST_IDLE;
+ file_close(&nntp_out_file);
+ file_close(&nntp_in_file);
+ file_close(&nntp_group_fileh);
+ file_close(&nntp_id_file);
+ file_close(&nntp_post_index);
+ return;
+}
+
+
+/* Main exported routine. Deliver any pending news to the
+   specified NNTP host, and accept any new news.
+
+   Returns TRUE is successful.
+*/
+
+
+int nntp_connect(
+   char *host,               /* Host to connect to */
+   char *po,                 /* Path of post office directory */
+   char *org                 /* Local organization */
+  )
+{
+ int s;
+ struct sockaddr_in sin;
+ struct hostent *server;
+ int on=1;
+
+
+ if (temp_buf==0)
+ {
+  _kernel_swi_regs r;
+  r.r[0]=6;
+  r.r[3]=4096;
+  _kernel_swi(OS_Module,&r,&r);
+  temp_buf=(char *)r.r[2];
+  atexit(free_tempbuf);
+ }
+
+ strcpy(nntp_host,host);
+ strcpy(nntp_organisation,org);
+ strcpy(nntp_po,po);
+
+ nntp_merge_times();
+
+/* start by creating a TCP socket */
+
+ s=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+ if (s==-1)
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER23"),_inet_error.errmess);
+  error_report_string(buf);
+  return FALSE;
+ }
+/*
+ sin.sin_family=PF_INET;
+ sin.sin_addr.s_addr=htonl(INADDR_ANY);
+ sin.sin_port=htons(0);
+ if (bind(s,(struct sockaddr*)&sin,sizeof(sin)))
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER24"),errno);
+  error_report_string(buf);
+  shutdown(s,2);
+  socketclose(s);
+  return FALSE;
+ }
+ */
+ /* Socket bound to local port, now conect to server */
+
+ /* First find server's address */
+ hourglass_on();
+ server=gethostbyname(host);
+ hourglass_off();
+ if (server==NULL)
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER25"),_inet_error.errmess);
+  error_report_string(buf);
+  shutdown(s,2);
+  socketclose(s);
+  return FALSE;
+ }
+
+/* DNW & KB - do a non blocking connect,
+ * you need to mark the socket as non blocking then do the connect.
+ * wimp poll while the error returned is ewouldblock
+ */
+
+ /* And connect to the NNTP port */
+ sin.sin_family=PF_INET;
+ memcpy((char*)&sin.sin_addr,server->h_addr,server->h_length);
+ sin.sin_port=htons(119);  /*NNTP port number */
+// hourglass_on();
+
+
+  /* Now mark socket as non-blocking */
+
+ if (socketioctl(s,FIONBIO,&on))
+ {
+  char buf[256];
+  sprintf(buf,token_get("ER27"),_inet_error.errmess);
+  error_report_string(buf);
+   shutdown(s,2);
+  socketclose(s);
+  return FALSE;
+ }
+
+
+ while (connect(s,(struct sockaddr*)&sin,sizeof(sin))==-1)
+ {
+  if (errno==EWOULDBLOCK || errno == EINPROGRESS  || errno == EALREADY)
+   {
+   wimp_do_poll(FALSE);
+   continue;
+   }
+  else if ( errno== EISCONN )
+   {
+   break;
+   }
+  else
+   {
+   char buf[256];
+   hourglass_off();
+   if (errno==EINVAL)
+   {
+    int er;
+    int len=sizeof(er);
+    char tbuf[5];
+    getsockopt(s,SOL_SOCKET,SO_ERROR,(char *)&er,&len);
+    sprintf(tbuf,"SE%i",er);
+    sprintf(buf,token_get("ER26"),token_get(tbuf),er);
+   }
+   else sprintf(buf,token_get("ER26"),_inet_error.errmess,errno);
+  error_report_string(buf);
+  shutdown(s,2);
+  socketclose(s);
+  return FALSE;
+  }
+ }
+
+ nntp_socket=s;
+ atexit(nntp_close);
+
+ nntp_watchdog=time(NULL);
+ connect_watchdog=time(NULL);
+ nntp_state=NNTP_ST_ACTIVE;
+ return TRUE;
+}
+
+int nntp_get_time(void)
+{
+ return (int)time(NULL);
+}
+
+
+
+int nntp_equal_subject(char *s,char *s1)
+{
+ /*First (s) is the one we know is ok */
+#if 0
+DEBUG((dbg,"Compare: %s",s));
+DEBUG((dbg,"With: %s",s1));
+DEBUG((dbg,"With= %s",nntp_strip_subject(s1)));
+DEBUG((dbg,"result = %i",strcmpci(s,nntp_strip_subject(s1))));
+#endif
+ return strcmpci(s,nntp_strip_subject(s1));
+}
+
+
+/*
+regular processing of NNTP connection on null events
+ */
+
+int nntp_process(void)
+{
+ time_t timer;
+ timer=time(NULL);
+ if ((nntp_state) && (timer-nntp_watchdog<1000))
+ {
+//DEBUG((dbg,"nntp state is %i",nntp_state));
+  nntp_process_next();
+  return TRUE;
+ } else
+ {
+  if (timer-nntp_watchdog>=1000)
+  {
+   log_report(LOG_INFO,(token_get("ER33")));
+  }
+  file_close(&nntp_out_file);
+  file_close(&nntp_in_file);
+  file_close(&nntp_group_fileh);
+  nntp_state=NNTP_ST_IDLE;
+  return FALSE;
+ }
+}
+

@@ -1,0 +1,1060 @@
+/* Message.c
+   Handle RFC 822 messages for Mercury
+   (c)1994 STNC Enterprises
+*/
+
+/*
+****************************************************************
+             Standard includes
+****************************************************************
+*/
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <stdio.h>
+
+/*
+****************************************************************
+             RISC OS includes
+****************************************************************
+*/
+#include "kernel.h"
+#include "swis.h"
+
+/*
+******************************************************************
+            Local Includes
+******************************************************************
+*/
+#include "file.h"
+#include "error.h"
+#include "message.h"
+#include "debug.h"
+#include "log.h"
+#include "token.h"
+#include "wimp.h"
+
+/*
+******************************************************************
+Local defines
+******************************************************************
+*/
+#define FALSE 0
+#define TRUE 1
+
+/* types of entries in 'to' field address list */
+#define TO_TYPE_NEWSGROUP 0  /* Newsgroups line in news article */
+#define TO_TYPE_TO        0  /* can't appear together with newsgroup */
+#define TO_TYPE_CC        1  /* CC field */
+#define TO_TYPE_RCPT      2  /* A specified distribution list */
+#define TO_TYPE_BCC       3  /* A BCC field */
+
+/*
+******************************************************************
+ Exported variables
+******************************************************************
+*/
+
+int message_flags;        /* Flags for current message */
+char mime_type[256];      /* Main type of mime message */
+char mime_subtype[256];   /* Subtype of mime message */
+
+/*
+******************************************************************
+ Local types
+******************************************************************
+*/
+
+typedef struct en         /* A text based entry in a list */
+{
+ char text[2048];          /* Text */
+ int type;                  /* Is it part of the To: field or any other field ? */
+ struct en *next;
+} entry;
+
+/*
+******************************************************************
+ Static variables
+******************************************************************
+*/
+
+static char tempbuf[10]="";     /* Null string to return from functions */
+static entry *from=NULL;        /* From field of current message */
+static entry *date=NULL;        /* Date field of current message */
+static entry *to=NULL;          /* To & CC fields of current message, split up to
+                                   single address entries */
+static entry *subject=NULL;     /* Subject field of current message */
+
+static int msg_fileptr=0;       /* Current offset into message file */
+static char message_file[256];  /* Name of current message file */
+
+static int hdr_lines;               /* Seen a hdr line in current message  ? */
+static int has_from;                /* Seen a from line in current message ? */
+static int has_to;                  /* Seen a to line in current message   ? */
+static int has_dl;                  /* Seen a RCPT TO: line */
+static entry **to_pointer = &to; /* Pointer to current address being processed */
+
+static char mime_args[20][2][1024];
+
+int poll_report=0;
+/*
+******************************************************************
+ Static functions
+******************************************************************
+*/
+
+/* Free memory allocated for from field */
+static void message_free_from(void)
+{
+ if (from) free(from);
+ from=NULL;
+}
+
+/* Free memory allocated for date field */
+static void message_free_date(void)
+{
+ if (date) free(date);
+ date=NULL;
+}
+
+/* Free memory allocated for subject field */
+static void message_free_subject(void)
+{
+ if (subject) free(subject);
+ subject=NULL;
+}
+
+/* Free list of addresses */
+static void message_free_to(entry *t)
+{
+ if (t==NULL) return;
+ message_free_to(t->next);
+ free(t);
+ to=NULL;
+ to_pointer=&to;
+}
+
+/*
+  Skip to next message in file
+*/
+static int message_skip(int f)
+{
+ char buf[4096];
+ while ( file_get_line(f,buf,FALSE) &&
+         ((buf[0]!='.') || (buf[1]!=0))
+       );
+ return 0;
+}
+
+
+/*
+ process_to(char *t,int cc)
+ Process a TO: or CC: hdr line.
+ Split to individual addresses and add to list.
+
+ Args:
+  t  - original line.
+  type - is this a to, cc, or any other field ?
+
+*/
+static void process_to(char *t,int type)
+{
+ int bra=0;
+ int quote=0;
+ entry *e;
+ int i;
+
+#if SMTP_DEBUG
+ DEBUG((dbg,"Processing to field\n"));
+#endif
+
+ while (isspace(*t)) t++;              /* Skip spaces */
+
+ if (*t<32) return;                    /* At end ? */
+
+ for (i=0;i<strlen(t)-1;i++)           /* Search for ',' not in comments or quotes */
+ {
+  if ((t[i]=='(') && (!quote)) bra++;  /* Unquoted bra */
+  if ((t[i]==')') && (!quote)) bra--;  /* Unquoted ket */
+  if (t[i]=='"') quote=!quote;         /* quotes */
+  if ((t[i]==',') && (!quote) && (bra==0)) break;
+ }
+
+ /* Allocate memory for field */
+ e=(entry *)malloc(sizeof(entry));
+
+ if (e)
+ {
+  entry *en;
+  strncpy(e->text,t,i);
+  e->text[i]=0;
+  e->type=type;
+  e->next=NULL;
+
+  /* Attach at end of list */
+
+  if (to==NULL) to=e;
+  else
+  {
+   en=to;
+   while (en->next!=NULL)
+   {
+    en=en->next;
+   }
+   en->next=e;
+   e->next=NULL;
+  }
+  if (i<strlen(t)-1) process_to(t+i+1,type);
+#if SMTP_DEBUG
+  DEBUG((dbg,"pt_To: %s\n",e->text));
+#endif
+  has_to=TRUE;
+  if (type==TO_TYPE_RCPT) has_dl=TRUE;
+ } else
+ {
+  error_report_string(token_get("ER15"));   /* No memory ! */
+  return;
+ }
+}
+
+/*
+ process_from(char *t)
+ Copy from field from message to local storage.
+
+ Args:
+   t - line in message.
+*/
+static void process_from(char *t)
+{
+ int buf;
+
+ while (isspace(*t)) t++;              /* Skip message */
+
+ if (from==NULL)                       /* Allocate memory */
+ {
+  from=(entry *)malloc(sizeof(entry));
+  if (from)
+  {
+   strcpy(from->text,t);
+   buf=strlen(t);
+   from->text[buf-1]=0;
+   has_from=TRUE;
+#if SMTP_DEBUG
+   DEBUG((dbg,"pf_From: %s\n",from->text));
+#endif
+  }
+  else error_report_string(token_get("ER15"));
+ } else
+ {
+  error_report_string(token_get("ER16"));       /* Duplicate from field ! */
+ }
+}
+
+/*
+ process_date(char *t)
+ Copy Date: field from message to local storage.
+
+ Args:
+   t - line in message.
+*/
+
+static void process_date(char *t)
+{
+ int buf=1;
+ message_free_date();
+
+ while (isspace(*t)) t++;
+ date=(entry *)malloc(sizeof(entry));
+
+ if (date)
+ {
+  strcpy(date->text,t);
+  buf=strlen(t);
+  date->text[buf-1]=0;
+#if SMTP_DEBUG
+   DEBUG((dbg,"pd_Date: %s\n",date->text));
+#endif
+ }
+ else error_report_string(token_get("ER15"));
+}
+
+
+/*
+ process_subject(char *t)
+ Copy Subject: field from message to local storage.
+
+ Args:
+   t - line in message.
+*/
+static void process_subject(char *t)
+{
+ int buf;
+ while (isspace(*t)) t++;
+ if (subject==NULL)
+ {
+  subject=(entry *)malloc(sizeof(entry));
+  if (subject)
+  {
+   strncpy(subject->text,t,255);
+   buf=strlen(subject->text);
+   subject->text[buf-1]=0;
+#if SMTP_DEBUG
+   DEBUG((dbg,"ps_Subj: %s\n",subject->text));
+#endif
+  }
+  else error_report_string(token_get("ER15"));
+ } else
+ {
+  error_report_string(token_get("ER17"));
+ }
+}
+
+/*
+ process_hdr(in,out,inline)
+ Process the message header lines and write them to output file.
+
+ in     - input file.
+ out    - output file.
+ inline - text of current (possibly folded line)
+
+*/
+static int process_hdr(int in,int out,char *inline)
+{
+ char unfolded[4096];
+ char command[256];
+ int ptr=0,pos;
+ char *c;
+
+ unfolded[0]=0;
+ pos=0;
+
+ do   /* Unfold lines into single line */
+ {
+  if ((!strcmpcin("RCPT TO:",inline,8)) && (file_write_line(out,inline,TRUE)==0))
+    return ERR_EOF;
+  strcpy(unfolded+ptr,inline);
+  ptr+=strlen(inline)-1;
+  if (file_get_line(in,inline,FALSE)==0)
+    return ERR_EOF;
+#if 0
+error_display(inline);
+{
+ char buf[256];
+ sprintf(buf,"First char = %d",inline[0]);
+ error_display(buf);
+}
+#endif
+
+ } while ((isspace(inline[0]) || (inline[0]==9)) && (inline[1]!=0) && (inline[0]!=0));
+
+ /*error_display("Unfolded");*/
+for (c=unfolded;*c;c++)
+{
+ if (*c==9) *c=' ';
+}
+ /*error_display(unfolded);*/
+ /* Now have unfolded line in unfolded and all written to outfile */
+
+  if (hdr_get_command(unfolded,command,&pos)==0) return 0; /* Not a command line */
+
+  hdr_lines++; /* It is, so count it */
+
+#if SMTP_DEBUG
+  DEBUG((dbg,"ph_Command is %s\n",command));
+#endif
+
+  /* Check for commands we want to know about */
+
+  if (strcmpci(command,"From")) process_from(unfolded+pos);
+  else if (strcmpci(command,"Date")) process_date(unfolded+pos);
+  else if (strcmpci(command,"Newsgroups")) process_to(unfolded+pos,TO_TYPE_NEWSGROUP);
+  else if (strcmpci(command,"RCPT To")) process_to(unfolded+pos,TO_TYPE_RCPT);
+  else if (strcmpci(command,"To")) process_to(unfolded+pos,TO_TYPE_TO);
+  else if (strcmpci(command,"CC")) process_to(unfolded+pos,TO_TYPE_CC);
+  else if (strcmpci(command,"Subject")) process_subject(unfolded+pos);
+  else if (strcmpci(command,"Content-Type")) process_mime(unfolded+pos,TRUE,TRUE);
+  else if (strcmpci(command,"Return-Receipt-To")) message_flags |= MESSAGE_FLAG_ACK;
+  else if (strcmpci(command,"Mime-Version")) message_flags |= MESSAGE_FLAG_MIME;
+  if (inline[0]) return process_hdr(in,out,inline);
+  else return 0;
+}
+
+
+/*
+******************************************************************
+ Exported utility functions
+******************************************************************
+*/
+
+
+/*
+ strcmpci(s,s1)
+ Compare two strings ignoring case
+
+ Args:
+   s  - string 1
+   s1 - string 2
+
+ Returns:
+
+   TRUE if EQUAL.
+*/
+int strcmpci(char *s,char *s1)
+{
+ if (*s==0) return FALSE;
+ while (tolower(*s++)==tolower(*s1++))
+  if ((*s<32) && (*s1<32)) return TRUE;
+ return FALSE;
+}
+
+
+/*
+ strcmpcin(s,s1,n)
+ Compare two strings ignoring case
+ Stop and return EQUAL if compared n chars.
+
+ Args:
+   s  - string 1
+   s1 - string 2
+   n  - number of characters to compare
+
+ Returns:
+
+   TRUE if EQUAL.
+*/
+
+int strcmpcin(char *s,char *s1,int n)
+{
+ if (*s==0) return FALSE;
+
+ while (tolower(*s++)==tolower(*s1++))
+ {
+
+  if ((--n)<=0)   /* That's all we wanted */
+  {
+   return TRUE;
+  }
+
+  if ((*s==0) && (*s1==0)) return TRUE;
+ }
+ return FALSE;
+}
+
+/*
+******************************************************************
+ Exported functions
+******************************************************************
+*/
+
+
+/*
+ char *message_get_from(void)
+ Return From field of current message
+
+ Args:
+  None.
+
+ Returns:
+  From field or pointer to empty string if none.
+*/
+char *message_get_from(void)
+{
+ if (from) return from->text; else return tempbuf;
+}
+
+/*
+ char *message_get_date(void)
+ Return Date field of current message
+
+ Args:
+  None.
+
+ Returns:
+  Date field or pointer to empty string if none.
+*/
+char *message_get_date(void)
+{
+ if (date) return date->text; else return tempbuf;
+}
+
+/*
+ char *message_get_subject(void)
+ Return Subject field of current message
+
+ Args:
+  None.
+
+ Returns:
+  Subject field or pointer to empty string if none.
+*/
+char *message_get_subject(void)
+{
+ if (subject) return subject->text;
+ else return tempbuf;
+}
+
+/*
+ message_init_file(name)
+ Start using a new file.
+
+ Args:
+  name - Path of file to use.
+
+ Returns:
+  Void.
+*/
+void message_init_file(char *name)
+{
+ strcpy(message_file,name);           /* Remember the name */
+ msg_fileptr=0;                       /* Set offset into file to 0 */
+}
+
+
+
+
+/*
+ message_get_all_to(buf,lines)
+ Return To: field re-combined into one string.
+
+ Args:
+   buf   - where to put the line.
+   lines - How many 8- char lines are required to display this.
+
+ Returns:
+   Data in args.
+*/
+void message_get_all_to(char *buf,int *lines)
+{
+ entry *t=to;
+ char line[100];
+ int first=TRUE;
+
+ *lines=1;                /* At least one line */
+ buf[0]=0;
+ line[0]=0;
+
+ while (t)                /* While there are entries */
+ {
+  if (t->type==TO_TYPE_TO)           /* It's from the To: field not the CC: field */
+  {
+   if ((strlen(line)+strlen(t->text)<70))  /* Max line is 70 chars */
+   {
+    if (!first) strcat(line,",");          /* Add , and address */
+    strcat(line,t->text);
+    first=FALSE;
+   } else                                  /* Add new line if required */
+   {
+    strcat(buf,line);
+    strcat(buf,"\n");
+    strcpy(line,t->text);
+//    first=TRUE;
+    *lines=(*lines)+1;
+   }
+  }
+  t=t->next;
+ }
+ strcat(buf,line);                       /* Add terminator NL */
+ strcat(buf,"\n");
+}
+
+/*
+ message_get_all_cc(buf,lines)
+ Return CC: field re-combined into one string.
+
+ Args:
+   buf   - where to put the line.
+   lines - How many 80 char lines are required to display this.
+
+ Returns:
+   Data in args.
+*/
+
+void message_get_all_cc(char *buf,int *lines)
+{
+ entry *t=to;
+ char line[100];
+ int first=TRUE;
+
+ *lines=1;
+ buf[0]=0;
+ line[0]=0;
+ while (t)
+ {
+  if (t->type==TO_TYPE_CC)       /* Is from CC field, not TO: field */
+  {
+   if ((strlen(line)+strlen(t->text)<70))           /* Up to 70 chars per line */
+   {
+    if (!first) strcat(line,",");
+    strcat(line,t->text);
+    first=FALSE;
+   } else
+   {
+    strcat(buf,line);
+    strcat(buf,"\n");
+    strcpy(line,t->text);
+//    first=TRUE;
+    *lines=(*lines)+1;
+   }
+  }
+  t=t->next;
+ }
+ strcat(buf,line);
+ strcat(buf,"\n");
+}
+
+/*
+ message_reset_to()
+ Re start getting addresses from first entry
+*/
+void message_reset_to()
+{
+ to_pointer=&to;
+}
+
+/*
+  message_get_to(char **c,int *cc)
+  Get next address in list indicating if it came
+  from TO: or CC: fields.
+
+  Args:
+   *c  - where to put the address.
+   *cc - non zero if it came from cc field.
+
+  Returns:
+   values in args.
+*/
+
+int message_get_to(char **c,int *type)
+{
+ while (*to_pointer)
+ {
+  *c=(*to_pointer)->text;
+  *type=(*to_pointer)->type;
+
+  to_pointer = &((*to_pointer)->next);
+
+  if ( ((*type==TO_TYPE_RCPT) && (has_dl)) ||
+       ((*type!=TO_TYPE_RCPT) && (!has_dl))
+     )
+     return TRUE;
+ }
+ return FALSE;
+}
+
+
+/*
+ message_close_file()
+ Close current file, ready for new one.
+
+ Does nothing, as file is kept closed between calls
+*/
+void message_close_file(void)
+{
+ return;
+}
+
+/*
+ hdr_get_command(char *s,char *command,int *pos)
+ Splits a header line into command and arguments.
+ Command is part of line before first ':'
+
+ Args:
+    s       - original string.
+    command - where to put command string
+    pos     - filled in with offset to first char after ':'
+
+ Returns:
+     offset to ':' - if a hdr line.
+     Args filled in.
+*/
+int hdr_get_command(char *s,char *command,int *pos)
+{
+ int i;
+
+ for (i=0;i<strlen(s);i++)   /* Search for first ':' */
+ if (s[i]==':')
+ {
+  strncpy(command,s,i);
+  command[i]=0;
+  *pos=i+1;
+  if (i!=0) return i;
+ }
+ return 0;
+}
+
+/*
+ message_get_flags
+ Return curent message flags
+*/
+int message_get_flags(void)
+{
+ return message_flags;
+}
+
+/*
+ mime_get_arg(char *arg);
+ Return value associated with give MIME argument
+
+ Args:
+    arg - MIME argument name.
+ Returns
+    value string or NULL if arg not found in message.
+*/
+char *mime_get_arg(char *arg)
+{
+ int i;
+
+ for (i=0;i<=10;i++)  /* Search in list of known arguments */
+ {
+  if (strcmpci(arg,mime_args[i][0])) return mime_args[i][1];
+ }
+ return NULL;
+}
+
+/*
+ process_mime(char *t,int clear, int replace)
+ Process the contents-type hdr in a mime message
+
+ Args:
+   t       -  original line in message.
+  clear    -  clear any previous entries.
+  replace  -  replace any existing entries.
+
+*/
+void process_mime(char *t,int clear,int replace)
+{
+ char *c;
+ int i;
+ char local_type[1024];
+
+DEBUG((dbg,"Process mime %s",t));
+
+for (i=0;i<10;i++)
+{
+ if (mime_args[i][0][0])
+ {
+DEBUG((dbg,"Arg[%i] %s = %s",i,mime_args[i][0],mime_args[i][1]));
+ }
+}
+
+ if (clear)
+ {
+  for (i=0 ;i<10;i++)           /* Copy any args to args array */
+  {
+   mime_args[i][0][0]=0;
+   mime_args[i][1][0]=0;
+  }
+ }
+
+
+ while (isspace(*t)) t++;      /* Skip white space */
+ c=local_type;
+ while ( *t && *t!='/') *c++=*t++;    /* Copy first part to main mime type */
+ if (*t) t++;
+ *c=0;
+ strcpy(mime_type,local_type);
+
+
+ c=local_type;               /* And second part to mime sub-type */
+ while (*t && *t!=';') *c++=*t++;
+ if (*t) t++;
+ *c=0;
+ strcpy(mime_subtype,local_type);
+
+ i=0;
+ while (i<10 && mime_args[i][0][0]) i++;  /* Next empty slot */
+ for (;i<10;i++)           /* Copy any args to args array */
+ {
+  int place=i;  /* Default is next empty space */
+
+  c=local_type;
+  while (isspace(*t)) t++;
+  while ((*t>31) && (*t!='=') && (*t!=';')) *c++=*t++;
+  *c=0;
+DEBUG((dbg,"Arg is %s",local_type));
+
+  if (replace)
+  {
+   int j;
+   for (j=0;j<10;j++)
+   {
+    if (strcmpci(mime_args[j][0],local_type))
+    {
+     DEBUG((dbg,"Replacing %s.",local_type));
+     place=j;
+     i--;
+     break;
+    }
+   }
+  }
+
+  strcpy(mime_args[place][0],local_type);
+  mime_args[place][1][0]=0;
+
+  if (*t<32) break;
+  if (*t==';')
+  {
+   t++;
+   if (*t<32) break;
+   continue;
+  }
+  t++;
+  if (*t<32) break;
+  if (*t=='"') t++;
+  if (*t<32) break;
+
+  c=local_type;
+  while ((*t>31) && (*t!=';') && (*t!='"')) *c++=*t++;
+  *c=0;
+DEBUG((dbg,"Value is %s",local_type));
+  if (replace || mime_args[place][1][0]==0) strcpy(mime_args[place][1],local_type);
+  if (*t=='"') t++;
+  if (*t<32) break;
+  t++;
+ }
+
+for (i=0;i<10;i++)
+{
+ if (mime_args[i][0][0])
+ {
+DEBUG((dbg,"Arg[%i] %s = %s",i,mime_args[i][0],mime_args[i][1]));
+ }
+}
+}
+
+
+/*
+ message_tuncate_file
+ Remove anything before current position in file
+ Used to truncate file after processing of current message
+*/
+void message_truncate_file(void)
+{
+ int file_len;       /* current length */
+ int f,f1;           /* in and out files */
+ char tmp_name[256]; /* name for temp file */
+ char buf[1024*5+3]; /* Copy in 5K chunks */
+ int copy_end=FALSE; /* At end of copy ? */
+ _kernel_swi_regs r;
+
+ if (file_len=file_get_length(message_file),file_len==0) return; /* No messages */
+
+ if (msg_fileptr>=file_len) /* Reached end, so truncate file*/
+ {
+  int f=file_open_create(message_file,ACCESS_RW);
+  file_close(&f);
+  return; /* No more messages */
+ }
+
+ f=file_open(message_file,TRUE);   /* Open input file */
+ if (f==0) return;
+
+ sprintf(tmp_name,"%sZ",message_file);     /* Create and open output file */
+ f1=file_open_create(tmp_name,ACCESS_RW);
+
+ if (f1==0)
+ {
+  file_close(&f);
+  return;
+ }
+
+  r.r[4]=msg_fileptr;                 /* Set pointer to where we want to start */
+  file_set_ptr(f,msg_fileptr);
+  DEBUG((dbg,"Truncate %i",msg_fileptr));
+  do
+  {
+   r.r[0]=4;
+   r.r[1]=f;
+   r.r[2]=(int)buf;
+   r.r[3]=1024*5;
+   _kernel_swi(OS_GBPB,&r,&r);
+   DEBUG((dbg,"Truncate r3 %i",r.r[3]));
+
+   if (r.r[3]!=0)              /* Must be at end if couldn't fill buffer */
+   {
+    copy_end=TRUE;
+   }
+   file_set_ptr(f,r.r[4]);
+
+   /* Now write the data to output file */
+   r.r[0]=2;
+   r.r[1]=f1;
+   r.r[2]=(int)buf;
+   r.r[3]=(1024*5)-r.r[3];
+   _kernel_swi(OS_GBPB,&r,&r);
+  } while (!copy_end);
+
+  file_close(&f);                         /* Close files */
+  file_close(&f1);
+  file_delete(message_file);              /* Delete original file */
+  file_rename(tmp_name,message_file);     /* Rename new to old name */
+
+  msg_fileptr=0;                          /* We are now at start of new file */
+}
+
+/*
+   copy next message from infile to "Message"
+   note any important info.
+*/
+
+int message_load_next(void)
+{
+ int in,out,err,file_len;
+ char inline[2048];
+
+
+skip:
+ message_flags=0;             /* It's a brave new message... */
+ message_free_from();
+ message_free_date();
+ message_free_subject();
+ message_free_to(to);
+
+
+ if (file_len=file_get_length(message_file),file_len==0) return 0; /* No more messages */
+
+#if DEBUG_ON
+ DEBUG((dbg,"msg_load: ptr is %d size is %d\n",msg_fileptr,file_len));
+#endif
+
+ if (msg_fileptr>=file_len) /* Reached end, so truncate file to 0 length*/
+ {
+  int f=file_open_create(message_file,ACCESS_RW);
+  file_close(&f);
+  return 0; /* No more messages */
+ }
+
+ if (msg_fileptr>=file_get_length(message_file))
+   return 0; /* We're past the end of the file? */
+
+ in=file_open(message_file,TRUE);   /* Errors reported there */
+ if (in==0) return 0;
+
+
+ out=file_open_create("<MailServ$Dir>.Message",ACCESS_RW); /* Create output file */
+ if (out==0)
+ {
+  file_close(&in);
+  return FALSE;
+ }
+
+ file_set_ptr(in,msg_fileptr); /* Set file pointer to where we left off */
+
+ hdr_lines=0;         /* No hdr lines so far */
+
+ message_flags=0;     /* Clear flags */
+
+ file_get_line(in,inline,FALSE);   /* Get first line */
+ has_dl=FALSE;
+ err=process_hdr(in,out,inline);   /* Process hdr lines */
+ if (err)
+ {
+  error_report_string(token_get("ER18"));
+  message_skip(in);
+  msg_fileptr=file_get_pos(in);
+  file_close(&in);
+  file_close(&out);
+  return FALSE;
+ }
+
+ if (hdr_lines==0) /* No hdr lines */
+ {
+  message_skip(in);
+  msg_fileptr=file_get_pos(in);
+  file_close(&in);
+  file_close(&out);
+  goto skip;
+ }
+
+ if (has_from==0) /* No from line */
+ {
+  error_report_string(token_get("ER20"));
+  message_skip(in);
+  msg_fileptr=file_get_pos(in);
+  file_close(&in);
+  file_close(&out);
+  goto skip;
+ }
+
+ if (has_to==0) /* No to line */
+ {
+  error_report_string(token_get("ER21"));
+  message_skip(in);
+  msg_fileptr=file_get_pos(in);
+  file_close(&in);
+  file_close(&out);
+  goto skip;
+ }
+
+ if ((inline[0]))
+ {
+  error_report_string(token_get("ER21"));  /* No NL between hdr & body */
+ } /*... but continue anyway */
+
+  /* Put seperator line in ... */
+  file_write_line(out,"\n",FALSE);
+
+ /* Got from and to fields, now get the text */
+
+#if 0      /* Used to copy line by line */
+
+ do
+ {
+  if (file_get_line(in,inline,FALSE)==0) break;
+ } while (((inline[1]!=0) || (inline[0]!='.')) && file_write_line(out,inline,TRUE));
+
+#else  /* Do it the fast way ... */
+
+ {
+  char buf[1024*5+3]; /* Copy in 5K chunks */
+  char *c;
+  int copy_end=FALSE;
+  int old_pos;
+  int p;
+
+  _kernel_swi_regs r;
+
+  old_pos=r.r[4]=file_get_pos(in);
+  do
+  {
+   wimp_do_poll(FALSE);
+   r.r[0]=3;
+   r.r[1]=in;
+   r.r[2]=(int)buf;
+   r.r[3]=1024*5;
+   _kernel_swi(OS_GBPB,&r,&r);
+   r.r[4]=old_pos+(1024*5)-r.r[3];
+   /* Now check for <LF><.><LF> */
+   for (c=buf;c<(buf+(1024*5)-r.r[3]);c++)
+     if ((*c=='\n') && (*(c+1)=='.') && (*(c+2)=='\n'))
+     {
+      r.r[3]=(1024*5)-(c-buf)-3;
+      r.r[4]=old_pos+(c-buf)+3;
+     }
+   if (r.r[3]!=0)
+   {
+    copy_end=TRUE;
+   }
+   file_set_ptr(in,r.r[4]);
+   old_pos=r.r[4];
+   /* Now write the data to output file */
+   r.r[0]=2;
+   r.r[1]=out;
+   r.r[2]=(int)buf;
+   r.r[3]=(1024*5)-r.r[3];
+p=r.r[4];
+   _kernel_swi(OS_GBPB,&r,&r);
+r.r[4]=p;
+ } while (!copy_end);
+}
+
+#endif /* Fast data copy */
+
+ msg_fileptr=file_get_pos(in); /* Set pointer for next time */
+
+
+ file_close(&in);
+ file_close(&out);
+ return TRUE;
+}
+

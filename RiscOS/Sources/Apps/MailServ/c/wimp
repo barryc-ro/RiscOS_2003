@@ -1,0 +1,3505 @@
+/*
+  Wimp.c
+  Handle wimp events for Merury server
+  (c)1994 STNC Enterprises
+*/
+
+#define Wimp_GetMenuState 0x400f4
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <time.h>
+#include <ctype.h>
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "token.h"
+#include "error.h"
+#include "config.h"
+#include "wimp.h"
+#include "database.h"
+#include "users.h"
+#include "log.h"
+#include "scan.h"
+#include "file.h"
+#include "debug.h"
+#include "message.h"
+#include "smtp.h"
+#include "nntp.h"
+#include "script.h"
+#include "mail.h"
+#include "pop3.h"
+#include "api.h"
+#include "nglist.h"
+#include "userlist.h"
+#include "finger.h"
+#include "version.h"
+
+#include "driver.h" /* DNW added to include support for the block drivers  */
+
+extern char po_path[];
+extern char mail_domain[];
+
+extern char smtp_server[];
+extern char pop_server[];
+
+extern char news_server[];
+extern char news_org[];
+extern int script_file;
+
+extern char mail_in_command[];
+extern char mail_out_command[];
+extern char connect_node[];
+extern char connect_password[];
+
+extern int connect_idle_timeout;
+extern int connect_url_access;
+
+extern int mail_protocol;
+
+extern int url_limit;
+
+extern int mail_in_state;
+int nntp_retries;
+
+#define FALSE 0
+#define TRUE 1
+
+/* Start a wimp task, and put an icon on the icon bar */
+
+#define MAX_INDIRECT 10000
+#define MAX_TIMES 200
+
+time_t connect_watchdog=0;
+
+static void wimp_location_menu_selection(int i);
+static void open_menu(int menu,int x,int y);
+extern int script_state;
+
+static int connect_state=0;
+int script_active=0;
+
+static int smtp_on=0;
+int nntp_state=0;
+int smtp_state=0;
+extern void modem_disconnect(void);
+int do_nntp=1;
+
+/* DNW - this variable has the job of remembering if the last connection was a web
+ * initiated one or not. If it wasn't then it is = -4 else it is the value of nntp before
+ */
+int remember_that_it_was_web_initiated = 1; /* must be the same as do_nntp  */
+
+
+static int task_id;
+static char indirect_space[MAX_INDIRECT];
+static char save_file_name[256];
+static char *indirect_ptr=indirect_space;
+static int info_handle;
+static int finger_handle;
+
+static time_t last_expire=0;
+static time_t next_scan=0;
+static time_t times[MAX_TIMES][2];
+static times_ptr=0;
+static int record_disconnect=FALSE;
+
+
+ int modem_handle;
+ int mail_handle;
+ int news_handle;
+ int connection_handle;
+ int po_handle;
+ int admin_handle;
+ int localgroup_handle;
+
+ int groups_handle;
+ int users_handle;
+ int newsgroup_handle;
+ int censorship_handle;
+ int url_censorship_handle;
+ int expiry_handle;
+ int url_expiry_handle;
+ int dl_handle;
+ int log_handle;
+ int nglist_handle;
+ int userlist_handle;
+ int active_handle;
+ int save_handle;
+
+ int redraw_log_next_null=FALSE;
+
+extern group groups;
+
+static int icon_handle;
+static int exists = 0;
+
+static char *mainmenu;
+static char *menuptr;
+static char *modem_menu;
+static char *speed_menu;
+static char *provider_menu;
+static char *location_menu;
+static char *dl_menu;
+static char *list_menu;
+static char *groups_menu;
+static char groups_menu_data[20*3000];
+static char modem_menudata[24*77+50];
+static char provider_menudata[24*77+50];
+static char dl_menudata[24*77+50];
+static char list_menudata[24*77+50];
+static char location_menudata[24*77+50];
+static char speed_menu_data[24*10];
+static char newsgroups_data[1000][30];
+static char newsgroup_menu_data[1000*24];
+static char *newsgroup_menu=newsgroup_menu_data;
+
+static int mode_xeig;
+static int mode_yeig;
+static int mode_width;
+static int mode_height;
+
+#define MENU_MAIN      0
+#define MENU_MODEMS    1
+#define MENU_SPEED     2
+#define MENU_PROVIDER  3
+#define MENU_LOCATION  4
+#define MENU_GROUPS    5
+#define MENU_GROUPS_1  6
+#define MENU_GROUPS_2  7
+#define MENU_USERS     8
+#define MENU_NEWSGROUPS 9
+#define MENU_GROUPS_3  10
+#define MENU_GROUPS_4  11
+#define MENU_DLs       12
+#define MENU_LIST      13
+#define MENU_NGLIST    14
+#define MENU_NGLIST1   15
+#define MENU_ADDRESSES 16
+#define MENU_GROUPS_5  17
+#define MENU_URLS      18
+
+static int current_menu;
+
+static char menudata[1024];
+
+static int *config_windows[]={
+      &connection_handle,
+      &modem_handle,
+      &po_handle,
+      &mail_handle,
+      &news_handle,
+      &admin_handle
+      };
+
+static int *admin_windows[]={
+      &groups_handle,
+//      &users_handle,
+      &userlist_handle,
+      &dl_handle,
+      &censorship_handle,
+//      &newsgroup_handle,
+      &nglist_handle,
+      &expiry_handle
+      };
+
+static int *censor_windows[]={
+      &censorship_handle,
+      &url_censorship_handle
+      };
+
+static int *expiry_windows[]={
+//      &expiry_handle,
+      &active_handle,
+      &url_expiry_handle
+      };
+
+
+/* return 1 if connected 0 if not  */
+
+int check_connected(void)
+{
+
+#ifdef OLD_SERIAL
+ _kernel_swi_regs r;
+ r.r[0]=0;
+ r.r[1]=0;
+ r.r[2]=-1;  /* Just read */
+ _kernel_swi(OS_SerialOp,&r,&r);
+ return ((r.r[1] & (1<<18))==0);
+#else
+int check;
+
+if (connection_type == DIRECT)
+ return 1;
+
+check = driver_modemcontrol();
+return (check & 1<<3 );
+#endif
+}
+
+
+static void data_load_ack(int *buf)
+{
+ _kernel_swi_regs r;
+ buf[0]=256;
+ buf[3]=buf[2];
+ buf[4]=4;
+ buf[9]=-1;
+ r.r[0]=18;
+ r.r[1]=(int)buf;
+ r.r[2]=buf[1];
+ _kernel_swi(Wimp_SendMessage,&r,&r);
+}
+
+
+static void datasave_ack(int *buf)
+{
+ _kernel_swi_regs r;
+ buf[0]=256;
+ buf[3]=buf[2];
+ buf[4]=2;
+ buf[9]=-1;
+ sprintf((char*)(buf+11),"<Wimp$Scrap>");
+ r.r[0]=18;
+ r.r[1]=(int)buf;
+ r.r[2]=buf[1];
+ _kernel_swi(Wimp_SendMessage,&r,&r);
+}
+
+
+void hourglass_on(void)
+{
+  _kernel_swi_regs r;
+ _kernel_swi(Hourglass_On,&r,&r);
+}
+
+void hourglass_off(void)
+{
+
+ _kernel_swi_regs r;
+_kernel_swi(Hourglass_Off,&r,&r);
+}
+
+void hourglass_percent(int i)
+{
+
+
+ _kernel_swi_regs r;
+ r.r[0]=i;
+ _kernel_swi(Hourglass_Percentage,&r,&r);
+}
+
+extern int nglist_groups_width;
+extern int nglist_groups_height;
+extern char sprite_area[];
+
+static void wimp_get_mode_info(void)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ int mode;
+
+ r.r[0]=-1;
+ r.r[1]=4;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ mode_xeig=r.r[2];
+ r.r[0]=-1;
+ r.r[1]=5;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ mode_yeig=r.r[2];
+ r.r[0]=-1;
+ r.r[1]=11;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ mode_width=(r.r[2]+1)<<mode_xeig;
+ r.r[0]=-1;
+ r.r[1]=12;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ mode_height=(r.r[2]+1)<<mode_yeig;
+
+ r.r[0]=0x128;
+ r.r[1]=(int)sprite_area;
+ r.r[2]=(int)"groups";
+ e=_kernel_swi(OS_SpriteOp,&r,&r);
+ if (e) error_fatal(e->errmess);
+
+ nglist_groups_width=r.r[3];
+ nglist_groups_height=r.r[4];
+ mode=r.r[6];
+
+ r.r[0]=mode;
+ r.r[1]=4;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ nglist_groups_width<<=r.r[2];
+ r.r[0]=mode;
+ r.r[1]=5;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ nglist_groups_height<<=r.r[2];
+ nglist_groups_height+=8;
+}
+
+static int load_template(char *name)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+
+ char temp_space[4096];
+ r.r[1]=(int)temp_space;
+ r.r[2]=(int)(indirect_ptr);
+ r.r[3]=(int)(indirect_space+MAX_INDIRECT);
+ r.r[4]=-1;
+ r.r[5]=(int)name;
+ r.r[6]=0;
+ e=_kernel_swi(Wimp_LoadTemplate,&r,&r);
+ if (e==0)
+ {
+  indirect_ptr=(char *)r.r[2];
+  r.r[1]=(int)temp_space;
+  e=_kernel_swi(Wimp_CreateWindow,&r,&r);
+ }
+ if (e)error_fatal_string2(token_get("F02"),name,e->errmess);
+ return r.r[0];
+}
+
+static void load_error(char *buf,int line)
+{
+ char errbuf[256];
+ sprintf(errbuf,buf,line);
+ error_display(errbuf);
+}
+
+static int get_next_arg(char **source,char *dest,int len)
+{
+ char *s=*source;
+ char *d=dest;
+ *d=0;
+ while (isspace(*s)) s++;
+ if (*s==0) return 0;
+ if (*s=='"') s++;
+ if (*s==0) return 0;
+ while (*s && (*s!=',') && (*s!='"') && (*s!=' '))
+ {
+  *d++=*s++; /* copy text */
+  if (len>0) len--;
+  if (len==0) break;
+ }
+ *d=0;
+ if (*s=='"') s++;
+ if (*s==',') s++;
+ *source=s;
+ return 1;
+}
+
+
+
+static void load_users(char *fname)
+{
+ int f;
+ int line=1;
+ int size;
+ char buf[256],name[256],pass[256],group[256],action[256],www[256];
+ char lock[256], syst[256];
+ size=file_get_length(fname);
+ f=file_open(fname,TRUE);
+ if (!f)
+ {
+  error_display(token_get("E48"));
+  return;
+ }
+ hourglass_on();
+ while (file_get_line(f,buf,FALSE))  /* Get each line */
+ {
+  char *b=buf;
+  hourglass_percent(file_get_pos(f)*100/size);
+
+//error_display(buf);
+
+  if ((get_next_arg(&b,action , 1)==0) ||
+      (get_next_arg(&b,name   ,-1)==0) ||
+      (get_next_arg(&b,pass   ,-1)==0) ||
+      (get_next_arg(&b,group  ,-1)==0) ||
+      (get_next_arg(&b,www    ,-1)==0) ||
+      (get_next_arg(&b,lock   ,-1)==0) ||
+      (get_next_arg(&b,syst   ,-1)==0)
+     ) load_error(token_get("E50"),line);
+  else
+  {
+   while (isspace(*b)) b++;
+   if (*b=='"') b++;
+   if (*(b+strlen(b)-1)=='"') *(b+strlen(b)-1)=0;
+/*
+error_display(action);
+error_display(name);
+error_display(pass);
+error_display(group);
+error_display(b);
+*/
+   if (action[0]=='+')
+   {
+    char buf[256],file[256];
+    sprintf(buf,"%s.Mail.Data",po_path);
+    new_user_file_name(buf,file);
+    strcpy(file,file+strlen(buf)+1);
+    if (user_add(name,pass,group,b,file,strcmpci(www,"Yes"),
+           strcmpci(lock,"Yes"),strcmpci(syst,"Yes"),NULL))
+    {
+     int f3,f1,f2;
+     sprintf(buf,"%s.Mail.Index.%s",po_path,file);
+     f3=file_open_create(buf,ACCESS_DIR);
+     sprintf(buf,"%s.Mail.Data.%s",po_path,file);
+     f1=file_open_create(buf,ACCESS_DIR);
+     sprintf(buf,"%s.News.Users.%s",po_path,file);
+     f2=file_open_create(buf,ACCESS_DIR);
+     sprintf(buf,"%s.Web.%s",po_path,file);
+     file_create_dir(buf);
+     if ((f3==0) || (f1==0) || (f2==0) ||
+         (file_close(&f2),create_newsgroup_file(group,file)==0)
+        )
+     {
+      char buf[256];
+      sprintf(buf,token_get("E57"),name);
+      error_display(buf);
+ //     user_delete(user);
+     file_close(&f1);
+     file_close(&f2);
+     file_close(&f3);
+      hourglass_off();
+      return;
+     }
+     file_close(&f1);
+     file_close(&f2);
+     file_close(&f3);
+    }
+   }
+   else if (action[0]=='-')
+   {
+    user_delete(name,TRUE,0);
+   }
+   else load_error(token_get("E49"),line);
+  }
+  line++;
+ }
+ file_close(&f);
+ hourglass_off();
+ userlist_load();
+}
+
+
+static void load_groups_text(char *fname)
+{
+ int f;
+ int line=1;
+ char buf[256],name[256],parent[256],action[256];
+ f=file_open(fname,TRUE);
+ if (!f)
+ {
+  error_display(token_get("E53"));
+  return;
+ }
+ hourglass_on();
+ while (file_get_line(f,buf,FALSE))  /* Get each line */
+ {
+  char *b=buf;
+/*
+error_display(buf);
+*/
+  if ((get_next_arg(&b,action , 1)==0) ||
+      (get_next_arg(&b,name   ,-1)==0) ||
+      (get_next_arg(&b,parent   ,-1)==0)
+     ) load_error(token_get("E54"),line);
+  else
+  {
+   if (action[0]=='+')
+   {
+    Object *current_parent=find_group(parent);
+    if (current_parent)  add_group(parent,name,0);
+   }
+   else if (action[0]=='-')
+   {
+     Object *g=find_group(name);
+     if (g==NULL) error_display(token_get("E04"));
+     else
+     {
+      if (database_find_by_attribute("group","parent",name,strcmpci))
+      {
+       error_display(token_get("E05"));
+       return;
+      }
+      if (!users_group_empty(name))
+      {
+       error_display(token_get("E62"));
+       return;
+      }
+      database_remove(g);
+     }
+   }
+   else load_error(token_get("E54"),line);
+  }
+  line++;
+ }
+ file_close(&f);
+ hourglass_off();
+}
+
+
+static int  report_type=0;
+static int  report_indent=0;
+static FILE *report_file;
+
+static void report_user(Object *o)
+{
+ int nsize=0;
+ int msize=0;
+ int i;
+ char buf[256];
+ AttributeValue *v;
+
+ v=database_get_attribute(o,"File",TRUE);
+ if (v)
+ {
+  sprintf(buf,"%s.Mail.Data.%s",po_path,v->value);
+  msize=file_get_length(buf);
+  sprintf(buf,"%s.News.Users.%s",po_path,v->value);
+  nsize=file_get_length(buf);
+ }
+
+ v=database_get_attribute(o,"Name",TRUE);
+ for (i=0;i<report_indent;i++) fprintf(report_file," ");
+ fprintf(report_file,"%-20s %-20s %10i %10s%10i",o->name,v->value,msize,"",nsize);
+ fprintf(report_file,"\n");
+
+}
+
+static void report_users(char *group,FILE *f,int indent)
+{
+ report_indent=indent;
+ report_file=f;
+ database_find_all_by_attribute("user","group",group,strcmpci,report_user);
+}
+
+static void report_group(Object *o)
+{
+ int i;
+ fprintf(report_file,"\n");
+ for (i=0;i<report_indent;i++) fprintf(report_file," ");
+ fprintf(report_file,token_get("R002"),o->name);
+ fprintf(report_file,"\n");
+ for (i=0;i<report_indent;i++) fprintf(report_file," ");
+ fprintf(report_file,"%-20s %-20s %-20s %-20s",
+         token_get("R004"),token_get("R005"),token_get("R006"),token_get("R007"));
+ fprintf(report_file,"\n");
+ fprintf(report_file,"\n");
+ report_users(o->name,report_file,report_indent);
+
+ fprintf(report_file,"\n");
+ for (i=0;i<report_indent;i++) fprintf(report_file," ");
+ fprintf(report_file,token_get("R003"),o->name);
+ report_indent+=3;
+ if (strcmpci(o->name,"all")==0)
+   database_find_all_by_attribute("group","parent",o->name,strcmpci,report_group);
+ report_indent-=3;
+ fprintf(report_file,"\n");
+
+}
+
+static int report_groups(int indent,FILE *f)
+{
+ report_indent=indent;
+ report_file=f;
+ database_find_all_by_attribute("group","parent","all",strcmpci,report_group);
+ return 1;
+}
+
+
+static void report_group_c(Object *o)
+{
+ int i;
+ AttributeValue *v;
+
+ fprintf(report_file,"\n");
+ for (i=0;i<report_indent;i++) fprintf(report_file," ");
+ fprintf(report_file,"Group: %s\n",o->name);
+
+ v=database_get_attribute(o,"DisallowedAddress",FALSE);
+ if (v)
+ {
+  for (i=0;i<report_indent;i++) fprintf(report_file," ");
+  fprintf(report_file,"Disallowed addresses:\n\n");
+  while (v)
+  {
+   for (i=0;i<report_indent;i++) fprintf(report_file," ");
+   fprintf(report_file,v->value);
+   fprintf(report_file,"\n");
+   v=v->next;
+  }
+ }
+
+ v=database_get_attribute(o,"AllowedAddress",FALSE);
+ if (v)
+ {
+  for (i=0;i<report_indent;i++) fprintf(report_file," ");
+  fprintf(report_file,"Allowed addresses:\n\n");
+  while (v)
+  {
+   for (i=0;i<report_indent;i++) fprintf(report_file," ");
+   fprintf(report_file,v->value);
+   fprintf(report_file,"\n");
+   v=v->next;
+  }
+ }
+
+ fprintf(report_file,"\n");
+ for (i=0;i<report_indent;i++) fprintf(report_file," ");
+ fprintf(report_file,token_get("R003"),o->name);
+ fprintf(report_file,"\n");
+
+ if (strcmpci(o->name,"all")==0)
+    database_find_all_by_attribute("group","parent",o->name,strcmpci,report_group_c);
+
+ fprintf(report_file,"\n");
+
+
+}
+
+static int report_groups_c(int indent,FILE *f)
+{
+ report_indent=indent;
+ report_file=f;
+
+ database_find_all_by_attribute("group","parent","all",strcmpci,report_group_c);
+ return 1;
+}
+
+
+static int report_times(FILE *f)
+{
+ int i;
+ fprintf(f,"\n\n");
+ fprintf(f,token_get("R200"));
+ fprintf(f,"\n\n");
+
+ for (i=0;i<times_ptr;i++)
+ {
+  char buf[256];
+  char buf1[256];
+  strftime(buf,sizeof(buf)," %d-%m-%y %H:%M:%S",localtime(&times[i][0]));
+  switch (times[i][1])
+  {
+   case 0:
+          strcpy(buf1,token_get("R202"));      /* Still connected */
+          break;
+   case 1:
+          strcpy(buf1,token_get("R203"));      /* Aborted */
+          break;
+   default:
+       strftime(buf1,sizeof(buf1)," %d-%m-%y %H:%M:%S",localtime(&times[i][1]));
+       break;
+  }
+  fprintf(f,token_get("R201"),buf,buf1);
+  fprintf(f,"\n");
+ }
+
+ return 1;
+}
+
+static int report_active(FILE *f)
+{
+ int f1,n;
+ char buf[256];
+ fprintf(f,"\n\n");
+ fprintf(f,token_get("R100"));
+ fprintf(f,"\n%-40s %-20s\n\n",token_get("R101"),token_get("R102"));
+ f1=file_open("<MailServ$Dir>.Active",FALSE);
+ if (f1==0) return 0;
+ while (file_get_line(f1,buf,FALSE))
+ {
+  char ng[256];
+  char fn[256];
+  sscanf(buf,"%i %i %i %s %s",&n,&n,&n,ng,fn);
+  sprintf(buf,"%s.News.Data.%s",po_path,fn);
+  n=file_get_length(buf);
+  fprintf(f,"%-40s %8i\n",ng,n);
+ }
+ file_close(&f1);
+ return 1;
+}
+
+
+static int do_report(char *name)
+{
+ FILE *f;
+ int r=0;
+ _kernel_swi_regs re;
+ re.r[0]=-1;
+ re.r[1]=-1;
+ _kernel_swi(Wimp_CreateMenu,&re,&re);
+//DEBUG((dbg,"Report type is %i %s",report_type,name));
+
+ f=fopen(name,"wb");
+ if (f==0)
+ {
+  error_display(token_get("E52"));
+  return 0;
+ }
+ switch (report_type)
+ {
+  case 2:
+       r=report_groups(0,f);
+       break;
+  case 1:
+       r=report_times(f);
+       break;
+  case 3:
+       r=report_groups_c(0,f);
+       break;
+  case 0:
+       r=report_active(f);
+       break;
+  default:
+       fclose(f);
+       error_display(token_get("E52"));
+       return 0;
+ }
+ fclose(f);
+ file_set_type(name,0xfff);
+ return r;
+}
+
+
+static void which_report(void)
+{
+ _kernel_swi_regs r;
+ int intbuf[64];
+ r.r[0]=0;
+ r.r[1]=(int)intbuf;
+ _kernel_swi(Wimp_GetMenuState,&r,&r);
+ report_type=intbuf[1];
+}
+
+
+static void do_help(int w,int i,int task,int ref)
+{
+ char token[10]="UU";
+ int buf[64];
+ _kernel_swi_regs r;
+ i++;
+ if (w<0) sprintf(token,"HIB00");
+ else if (w==expiry_handle) sprintf(token,"HEX%i",i);
+ else if (w==url_expiry_handle) sprintf(token,"HUEX%i",i);
+ else if (w==info_handle) sprintf(token,"HIN%i",i);
+ else if (w==dl_handle) sprintf(token,"HDL%i",i);
+ else if (w==localgroup_handle) sprintf(token,"HLG%i",i);
+ else if (w==news_handle) sprintf(token,"HNE%i",i);
+ else if (w==modem_handle) sprintf(token,"HMO%i",i);
+ else if (w==log_handle) sprintf(token,"HLO%i",i);
+ else if (w==mail_handle) sprintf(token,"HMA%i",i);
+ else if (w==groups_handle) sprintf(token,"HGR%i",i);
+ else if (w==users_handle) sprintf(token,"HUS%i",i);
+ else if (w==newsgroup_handle) sprintf(token,"HNG%i",i);
+ else if (w==censorship_handle) sprintf(token,"HAD%i",i);
+ else if (w==url_censorship_handle) sprintf(token,"HUAD%i",i);
+ else if (w==save_handle) sprintf(token,"HSA%i",i);
+ else if (w==connection_handle) sprintf(token,"HIP%i",i);
+ else if (w==nglist_handle) sprintf(token,"HNGL%i",i);
+ else if (w==po_handle) sprintf(token,"HPO%i",i);
+ else if (w==admin_handle) sprintf(token,"HADM%i",i);
+ r.r[0]=17;
+ r.r[1]=(int)buf;
+ r.r[2]=task;
+ buf[0]=(strlen(token_get(token))+24) & (~3);
+ buf[3]=ref;
+ buf[4]=0x503;
+ strcpy((char *)(buf+5),token_get(token));
+ _kernel_swi(Wimp_SendMessage,&r,&r);
+}
+
+static void wimp_message_send_reply(int *buf,int task,int ref)
+{
+ _kernel_swi_regs r;
+
+ r.r[0]=17;
+ r.r[1]=(int)buf;
+ r.r[2]=task;
+ buf[0]=256;
+ buf[3]=ref;
+ _kernel_swi(Wimp_SendMessage,&r,&r);
+}
+
+static void wimp_do_message(int reason,char *buf)
+{
+ int *ibuf=(int *)buf;
+ switch (reason)
+ {
+  case 0x400c1:
+       wimp_get_mode_info();
+       break;
+   case Message_InterTalk:
+       {
+        MessageInterTalk *m;
+        m=(MessageInterTalk *)(buf+20);
+        switch (m->reason)
+        {
+         case InterTalk_Reason_GetURLExpire:
+              m->data.url_expire.days=get_expire(TRUE,m->data.url_expire.url);
+              wimp_message_send_reply(ibuf,ibuf[1],ibuf[2]);
+              break;
+         case InterTalk_Reason_GetURLCache:
+              m->data.url_cache.size=url_limit;
+              strcpy(m->data.url_cache.location,po_path);
+              wimp_message_send_reply(ibuf,ibuf[1],ibuf[2]);
+              break;
+ case InterTalk_Reason_Timers:
+
+#ifdef DAVID_DEBUG
+   log_report(LOG_DEBUG, "httpd checking the Timers");
+#endif
+
+  m->data.timers.timeout = connect_idle_timeout*60;
+  m->flags &= ~InterTalk_Flag_Connected; /* assume we're not connected  */
+  if (connect_url_access) /* ie flag on connection is set  */
+   {
+   if (connection_type == DIRECT) /* if it's a direct connection  */
+    {
+    m->flags |= InterTalk_Flag_Connected;   /* then we're connected  */
+    }
+   else
+    {
+    if (check_connected())   /* or it's a serial based one & we're connected  */
+     m->flags |= InterTalk_Flag_Connected;
+    }
+   }
+  if (m->flags & InterTalk_Flag_Connected ) /* if we are connected  */
+   {
+   m->data.timers.remaining = m->data.timers.timeout - (time(NULL)-connect_watchdog);
+   if (m->flags & InterTalk_Flag_ResetTimer) /* if need to reset the timers then  */
+    connect_watchdog=time(NULL);
+   }
+  else
+   {
+   m->flags &= ~InterTalk_Flag_Connected;
+   m->data.timers.remaining = m->data.timers.timeout;
+   }
+
+
+#ifdef DAVID_DEBUG
+   log_report(LOG_DEBUG, "Sending the wimp message");
+#endif
+
+
+  wimp_message_send_reply(ibuf,ibuf[1],ibuf[2]);
+
+#ifdef DAVID_DEBUG
+   log_report(LOG_DEBUG, "Sent the wimp message");
+#endif
+
+
+ break;
+         case InterTalk_Reason_Connect:
+/* assumptions 1) we're not allowed to connect, 2) we're not dialling, 3) the dialup hasn't failed  */
+  m->flags &= ~InterTalk_Flag_Allowed;
+  m->flags &= ~InterTalk_Flag_Dial_Failed;
+  m->flags &= ~InterTalk_Flag_Dialling;
+
+  if (connection_type == DIRECT )
+   {
+   if ( connect_url_access ) /* Yes  */
+    m->flags |= InterTalk_Flag_Allowed;  /* we're allowed to make the connection  */
+   }
+  else    /* Not a direct connection. */
+   {
+   if (connect_url_access || check_connected() )
+    /* either we're allowed to make a connection OR we have a connection already  */
+    {
+    if ( !script_active && check_connected() )
+     { /* we're in  */
+     m->flags |= InterTalk_Flag_Allowed;  /* we're allowed to make the connection  */
+     }
+    else
+     {
+     m->flags |= InterTalk_Flag_Dialling; /* we're dialling unless  */
+     m->flags |= InterTalk_Flag_Allowed;  /* we're allowed to make the connection  */
+     if (!check_connected() && (connect_state==0) )
+      {
+      do_connect( -4 ); /* DNW changed so that a www initiated connect doesn't make
+       a news connect but also so that it doesn't remmber what type of
+       connection it made so that on next connect it goes back to the
+       desired connection type ??? :-) */
+      }
+
+     if (script_active == SCRIPT_ABORT || script_active == SCRIPT_ABORT_FATAL)
+      {
+      m->flags |= InterTalk_Flag_Dial_Failed; /* the dial up failed  */
+      }
+     }
+    }
+   }
+
+  wimp_message_send_reply(ibuf,ibuf[1],ibuf[2]);
+
+              break;
+         case InterTalk_Reason_CheckURLAccess:
+              {
+               Object *o=database_find("user",m->data.check_url.user);
+               AttributeValue *v;
+               m->flags &= ~InterTalk_Flag_Allowed;
+               if (o)
+               {
+                v=database_get_attribute(o,"group",FALSE);
+                if (v && check_allowed_address(TRUE,m->data.check_url.url,v->value))
+                     m->flags |= InterTalk_Flag_Allowed;
+               }
+              }
+              wimp_message_send_reply(ibuf,ibuf[1],ibuf[2]);
+              break;
+         case InterTalk_Reason_GetUserFile:
+              {
+               Object *o=database_find("user",m->data.check_url.user);
+               AttributeValue *v;
+               m->flags &= ~InterTalk_Flag_UserValid;
+               if (o)
+               {
+                v=database_get_attribute(o,"file",FALSE);
+                if (v)
+                {
+                 strcpy(m->data.file.file,v->value);
+                 m->flags |= InterTalk_Flag_UserValid;
+                }
+               }
+              }
+              wimp_message_send_reply(ibuf,ibuf[1],ibuf[2]);
+              break;
+        }
+       }
+       break;
+  case 0x502:
+       /* Help request */
+       do_help(ibuf[8],ibuf[9],ibuf[1],ibuf[2]);
+       return;
+  case 0x400c9: /* Menus deleted */
+         break;
+  case 0:   /* Exit message */
+   if (connection_type != DIRECT)   /* DNW  */
+  modem_disconnect();
+       file_close(&script_file);
+       script_state=0;
+       database_save("<MailServ$Dir>.Database");
+       exit(0);
+       break;
+  case 0x1:  /* Data save */
+       {
+        if ((ibuf[5]==users_handle) && (ibuf[10]==0xfff)) /* A user list */
+        {
+         datasave_ack(ibuf);
+        }
+        if ((ibuf[5]==groups_handle) && (ibuf[10]==0xfff)) /* A group list */
+        {
+         datasave_ack(ibuf);
+        }
+        if ((ibuf[5]==dl_handle) && (ibuf[10]==0xfff))  /* A dl ? */
+        {
+         datasave_ack(ibuf);
+        }
+       }
+       break;
+  case 0x2:  /* data save ack */
+       if (do_report((char*)(ibuf+11)))
+       {
+        _kernel_swi_regs r;
+        ibuf[3]=ibuf[2];
+        ibuf[4]=3;
+        r.r[0]=17;
+        r.r[1]=(int)ibuf;
+        r.r[2]=ibuf[1];
+        _kernel_swi(Wimp_SendMessage,&r,&r);
+        wimp_close_window(save_handle);
+       }
+       break;
+   case 0x3:  /* data load message */
+       {
+        if ((ibuf[5]==po_handle) && (ibuf[10]>0xfff) && (ibuf[6]==3))
+        {
+         set_icon_text(po_handle,ibuf[6],(char*)(ibuf+11));
+        }
+        if ((ibuf[5]==po_handle) && (ibuf[10]>0xfff) && (ibuf[6]==2))
+          set_icon_text(po_handle,ibuf[6],(char*)(ibuf+11));
+
+        if ((ibuf[5]==users_handle) && (ibuf[10]==0xfff))
+        {
+         load_users(buf+44);
+         data_load_ack(ibuf);
+        }
+        if ((ibuf[5]==groups_handle) && (ibuf[10]==0xfff))
+        {
+         load_groups_text(buf+44);
+         data_load_ack(ibuf);
+        }
+        if ((ibuf[5]==dl_handle) && (ibuf[10]==0xfff))
+        {
+         char list[256];
+         char b[256];
+         char fn[256];
+         int f;
+         get_icon_text(dl_handle,3,list);
+         if (list[0]==0)
+         {
+          error_display(token_get("E43"));
+          return;
+         }
+         if (find_dl(list,fn))  /* list already exists */
+         {
+          file_delete(fn);
+          f=file_open_create(fn,ACCESS_RW);
+         } else
+         {
+          new_file_name("<MailServ$Dir>.Dlists",b);
+          f=file_open_create(b,ACCESS_RW);
+         }
+         if (f==0)
+         {
+          error_display(token_get("E47"));
+          return;
+         }
+         else
+         {
+          int f1=file_open(buf+44,TRUE);
+          b[0]='#';
+          strcpy(b+1,list);
+          file_write_line(f,b,TRUE);
+          while (file_get_line(f1,b,FALSE))
+            file_write_line(f,b,TRUE);
+          file_close(&f);
+          file_close(&f1);
+         }
+         data_load_ack(ibuf);
+        }
+       }
+       break;
+
+
+  case 0x400c0:   /* Menu warning */
+       break;
+ }
+}
+
+
+/*
+ **************************************************
+ * Rutines used to build the menu                 *
+ **************************************************
+*/
+
+static char *menhdr;
+
+static char *menuhdr(char *title)
+{
+ menhdr=menuptr;
+ strcpy(menuptr,title);
+ menuptr[12]=7;
+ menuptr[13]=2;
+ menuptr[14]=7;
+ menuptr[15]=0;
+ *(int *)(menuptr+16)=16*((int)strlen(title)-3)+12;
+ *(int *)(menuptr+20)=44;
+ *(int *)(menuptr+24)=0;
+ menuptr+=28;
+ return menhdr;
+}
+
+
+/* having to correct this to handle names > 12 chars in length
+ * pity it wasn't written in the first place with the
+ toolbox - ah well DNW  */
+
+static void menuitem_copy(char *item)
+{
+ int w;
+
+ if (strlen(item) <=12)
+  {
+ *(int *)menuptr=0;
+ *(int *)(menuptr+4)=-1;
+ *(int *)(menuptr+8)=0x07000021;
+ strncpy((char *)(menuptr+12),item,12);
+ menuptr+=24;
+ w = 16*strlen(item)+12;
+ if (w>(*(int *)(menhdr+16))) *(int *)(menhdr+16)=w;
+ }
+else
+ {
+  char *it=malloc(strlen(item)+1);
+  if (it)
+  {
+   strcpy(it,item);
+   *(int *)menuptr=0;
+   *(int *)(menuptr+4)=-1;
+   *(int *)(menuptr+8)=0x07000121;
+   *(int *)(menuptr+12)=(int)it;
+   *(int *)(menuptr+16)=0;
+   *(int *)(menuptr+20)=strlen(it)+1;
+   menuptr+=24;
+   w = 16*strlen(item)+12;
+   if (w>(*(int *)(menhdr+16))) *(int *)(menhdr+16)=w;
+  }
+ }
+}
+
+void menuitem(char *item)
+{
+ int w;
+ *(int *)menuptr=0;
+ *(int *)(menuptr+4)=-1;
+ *(int *)(menuptr+8)=0x07000021;
+ *(int *)(menuptr+8)+=0x100;
+ *(int *)(menuptr+12)= (int)item;
+ *(int *)(menuptr+16)= -1;
+ *(int *)(menuptr+20)= strlen(item)+1;
+ menuptr+=24;
+ w = 16*strlen(item)+12;
+ if (w>(*(int *)(menhdr+16))) *(int *)(menhdr+16)=w;
+}
+
+static void menuend(void)
+{
+ *(int *)(menuptr-24) += 0x80;
+}
+
+static void menu_line(void)
+{
+ *(int *)(menuptr-24) |= 0x2;
+}
+
+static void submenu(char *parent,int item,int child)
+{
+ *(int *)(parent+(28+24*item+4))=child;
+}
+
+#if 0
+static void menu_subwarning(char *parent,int item)
+{
+ *(int *)(parent+(28+24*item+4))=1;
+ *(int *)(parent+(28+24*item+0))|=(1<<3);
+}
+#endif
+
+static void greyitem(char *parent,int item)
+{
+ *(int *)(parent+(28+24*item+8))|=(1<<22);
+}
+
+static void ungreyitem(char *parent,int item)
+{
+ *(int *)(parent+(28+24*item+8))&=~(1<<22);
+}
+
+static void add_group_item(Object *o)
+{
+ menuitem(o->name);
+}
+
+/* Crete a menu of all subgroups in a given group */
+static int wimp_create_group_menu(char *name,int add_all)
+{
+
+ *(int *)(groups_menu_data+36) = 0;
+ menuptr=groups_menu_data;
+ groups_menu=menuhdr(token_get("GRP"));
+#if 0
+ if (add_all)
+ {
+  menuitem(token_get("All"));
+ }
+#endif
+ database_find_all_by_attribute("group","parent",name,subgroup,add_group_item);
+ menuend();
+
+ return *(int *)(groups_menu_data+36) != 0;;
+}
+
+/* Crete a menu of all allowed / disallowed addresses in a given group */
+static int wimp_create_address_menu(int url,char *gr)
+{
+ Object *g=find_group(gr);
+ AttributeValue *v,*v1;
+ int line;
+
+ if (g==NULL) return 0;
+ v=database_get_attribute(g,url?"AllowedURL":"AllowedAddress",FALSE);
+ v1=database_get_attribute(g,url?"DisallowedURL":"DisallowedAddress",FALSE);
+
+
+
+ if (v==NULL && v1 ==NULL ) return 0;
+ line=v && v1;
+
+ menuptr=groups_menu_data;
+ groups_menu=menuhdr(url?token_get("URLS"):token_get("ADDR"));
+
+ while (v)
+ {
+  menuitem(v->value);
+  v=v->next;
+ }
+
+ if (line) menu_line();
+
+ while (v1)
+ {
+  menuitem(v1->value);
+  v1=v1->next;
+ }
+
+ menuend();
+ return TRUE;
+}
+
+static char location_data[1024];
+
+/*  old wimp_create_location_menu
+
+void wimp_create_location_menu(char *dir,int force)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf1[256];
+ char curr[256];
+ int f;
+ int ok=0,i=0;
+ char *buf=location_data;
+
+
+ get_icon_text(connection_handle,6,curr);
+
+ menuptr=location_menudata;
+ location_menu=menuhdr(token_get("LMT"));
+ // Enumerate locations directory
+ r.r[0]=9;
+ r.r[1]=(int)dir;
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=0;
+ r.r[5]=sizeof(location_data);
+ r.r[6]=(int)"L*";
+ do
+ {
+  r.r[3]=1;
+  e=_kernel_swi(OS_GBPB,&r,&r);
+
+  if (e)
+  {
+   error_report_string(e->errmess);
+   break;
+  }
+
+  if (r.r[3]==0) continue;  // Not one we're interested in ( i.e. not "L*" )
+
+  // Open file and get name of provider
+  sprintf(buf1,"%s.%s",dir,buf);
+  f=file_open(buf1,TRUE);
+  if (f && file_get_line(f,buf,FALSE) && (buf[0]=='#'))
+  {
+   i++;
+   if (strcmpci(buf+1,curr)) ok=i;
+//DEBUG((dbg,"%s %s %i %i",buf+1,curr,strcmpci(buf+1,curr),ok));
+   menuitem(buf+1);
+   buf+=strlen(buf)+1;
+   r.r[2]=(int)buf;
+  }
+  file_close(&f);
+ }
+ while (r.r[4]!=-1);
+ menuend();
+ if (force) wimp_location_menu_selection(ok?(ok-1):0);
+}
+*/
+
+
+void wimp_create_location_menu(char *provider,int force)
+{
+  char *buf=location_data;
+  int f;
+
+  menuptr=location_menudata;
+  location_menu=menuhdr(token_get("LMT"));
+
+  f=file_open("<MailServ$Dir>.provlist",TRUE);
+
+  if (f)
+  {
+    while (file_get_line(f,buf,FALSE))
+    {
+      if (!strcmp(buf,provider))
+      {
+        while (file_get_line(f,buf,FALSE))
+      	{
+      	  if (buf[0]=='-' && buf[1]=='L')   /* ie have line starting "-L" */
+      	  {
+            file_get_line(f,buf,FALSE);
+            menuitem(buf+2);
+            buf+=strlen(buf)+1;
+          }
+          /*  //else have we reached the end of this provider */
+          else if (strcmpci(buf,"-XCommon"))
+          {
+            menuend();
+            file_close(&f);
+            if (force)
+      	      wimp_location_menu_selection(0);
+      	    return;
+          }
+      	}
+      }
+    }
+    file_close(&f);
+    error_display("Provider not found");
+  }
+  else
+    error_display("Provlist file not found");
+}
+
+static char list_data[4096];
+
+int wimp_create_list_members_menu(char *file)
+{
+ int f;
+ int i=0;
+ char *buf=list_data;
+
+//error_display(file);
+
+ menuptr=list_menudata;
+ list_menu=menuhdr(token_get("LiMT"));
+ /* Read in list file */
+
+ f=file_open(file,TRUE);
+ if (f==0) return 0;
+
+ while (file_get_line(f,buf,FALSE))
+ {
+  if (buf[0]!='#')
+  {
+   i++;
+   menuitem(buf);
+   buf+=strlen(buf)+1;
+  }
+ }
+ file_close(&f);
+ menuend();
+ return i;
+}
+
+
+
+
+static void wimp_speed_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ int intbuf[64];
+ intbuf[0]=i;
+ intbuf[1]=-1;
+ r.r[1]=(int)speed_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(modem_handle,10,buf);
+}
+
+static void wimp_groups_menu_selection(int n,int w,int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ int intbuf[64];
+ intbuf[0]=n;
+ intbuf[1]=-1;
+ r.r[1]=(int)groups_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(w,i,buf);
+}
+
+
+/* old wimp_provider_menu_selection
+   looks in providers directory
+
+static void wimp_provider_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char buf1[256];
+ int intbuf[64];
+ intbuf[0]=i;
+ intbuf[1]=-1;
+
+ //first set name from provider list
+ r.r[1]=(int)provider_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(connection_handle,1,buf);
+
+//find first provider & create location menu from this
+ r.r[0]=9;
+ r.r[1]=(int)"<MailServ$Dir>.Providers";
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=i;
+ r.r[5]=sizeof(buf);
+ r.r[6]=(int)"*";
+ e=_kernel_swi(OS_GBPB,&r,&r);
+ if (e || (r.r[3]==0)) return;
+ set_icon_text(connection_handle,50,buf);
+ sprintf(buf1,"%s.%s","<MailServ$Dir>.Providers",buf);
+ wimp_create_location_menu(buf1,TRUE);
+ sprintf(buf,"%s.XCommon",buf1);
+ config_load(buf,FALSE);
+}
+*/
+
+//new wimp_provder_menu_selection
+//uses provlist
+
+static void wimp_provider_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char buf1[256];
+ char provider[256];
+ int intbuf[64];
+ int f,ok;
+ intbuf[0]=i;
+ intbuf[1]=-1;
+
+ //first set name from provider list
+ r.r[1]=(int)provider_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(connection_handle,1,buf);
+ set_icon_text(connection_handle,25,"Auto");
+
+//find first provider & create location menu from this
+ f = file_open("<MailServ$Dir>.provlist",TRUE);
+ if (f)
+ {
+   do
+     ok = file_get_line(f,provider,FALSE);
+   while (ok && strcmp(provider,buf));
+
+   if (ok)
+   {
+     do				/* got provider now get xcommon */
+       ok = file_get_line(f,buf1,FALSE);
+     while (ok && strcmpci(buf1,"-XCommon"));
+
+     if (ok)
+       config_load_text(f);
+     else
+       error_display("XCommon not found");
+   }
+   else
+     error_display("Provider not found");
+
+   file_close(&f);
+ }
+ else
+ {
+   error_display("Provlist file not found");
+   return;
+ }
+ set_icon_text(connection_handle,50,provider);
+ wimp_create_location_menu(provider,TRUE);
+}
+
+static void wimp_dl_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char buf1[256];
+ int intbuf[64];
+ intbuf[0]=i;
+ intbuf[1]=-1;
+ r.r[1]=(int)dl_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(dl_handle,3,buf);
+
+ r.r[0]=9;
+ r.r[1]=(int)"<MailServ$Dir>.DLists";
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=i;
+ r.r[5]=sizeof(buf);
+ r.r[6]=(int)"*";
+ e=_kernel_swi(OS_GBPB,&r,&r);
+ if (e || (r.r[3]==0)) return;
+ sprintf(buf1,"%s.%s","<MailServ$Dir>.DLists",buf);
+ wimp_create_list_members_menu(buf1);
+}
+
+static void wimp_list_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ int intbuf[64];
+ intbuf[0]=i;
+ intbuf[1]=-1;
+ r.r[1]=(int)list_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(dl_handle,2,buf);
+}
+
+
+static void wimp_modem_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char buf1[256];
+ int intbuf[64];
+ intbuf[0]=i;
+ intbuf[1]=-1;
+ r.r[1]=(int)modem_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ set_icon_text(modem_handle,1,buf);
+ if (i>=0)
+ {
+  r.r[0]=9;
+  r.r[1]=(int)"<MailServ$Dir>.Modems";
+  r.r[2]=(int)buf;
+  r.r[3]=1;
+  r.r[4]=i;
+  r.r[5]=sizeof(buf);
+  r.r[6]=(int)"*";
+  e=_kernel_swi(OS_GBPB,&r,&r);
+  if (e || (r.r[3]==0)) return;
+  sprintf(buf1,"%s.%s","<MailServ$Dir>.Modems",buf);
+  config_load(buf1,FALSE);
+ }
+}
+
+
+/*old wimp_location_menu_selection
+static void wimp_location_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char buf1[256];
+ char buf2[256];
+ int intbuf[64];
+ intbuf[0]=i;
+ intbuf[1]=-1;
+ r.r[1]=(int)location_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+
+ //get location from menu
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);       //ok
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ //set location text
+ set_icon_text(connection_handle,6,buf);
+
+ //get name of provider
+ get_icon_text(connection_handle,50,buf);
+ sprintf(buf1,"%s.%s","<MailServ$Dir>.Providers",buf);
+
+ //find location info
+ r.r[0]=9;
+ r.r[1]=(int)buf1;
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=i;               //index
+ r.r[5]=sizeof(buf);
+ r.r[6]=(int)"*";
+ e=_kernel_swi(OS_GBPB,&r,&r);
+ if (e || (r.r[3]==0)) return;
+ sprintf(buf2,"%s.%s",buf1,buf);
+ error_display(buf2);
+ config_load(buf2,FALSE);
+}
+*/
+
+//find location info
+//i is an index number used to find relevent location
+
+static void wimp_location_menu_selection(int i)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char provider[256];
+ char location[256];
+ int intbuf[64],f,ok;
+
+ intbuf[0]=i;
+ intbuf[1]=-1;
+ r.r[1]=(int)location_menu;
+ r.r[2]=(int)intbuf;
+ r.r[3]=(int)buf;
+
+ //get location from menu
+ e=_kernel_swi(Wimp_DecodeMenu,&r,&r);
+ if (e)
+ {
+  error_report_string(e->errmess);
+  return;
+ }
+ //set location text
+ set_icon_text(connection_handle,6,buf);
+
+ //get name of provider
+ get_icon_text(connection_handle,50,provider);
+ // sprintf(buf1,"%s.%s","<MailServ$Dir>.Providers",buf);
+
+ //find location info
+
+  f=file_open("<MailServ$Dir>.provlist",TRUE);
+
+  if (f)
+  {
+    do					/* find provider */
+      ok = file_get_line(f,buf,FALSE);
+    while (ok && strcmp(provider,buf));
+
+    if (ok)				/* got provider now find location data */
+    {
+      if (++i<10)
+        sprintf(location,"-L0%d",i);
+      else
+        sprintf(location,"-L%d",i);
+
+      do
+        ok = file_get_line(f,buf,FALSE);
+      while (ok && strcmp(location,buf));
+
+      if (ok)
+        config_load_text(f);
+      else
+        error_display("Location data not found");
+    }
+    else
+      error_display("Provider not found");
+
+    file_close(&f);
+  }
+  else
+    error_display("Provlist file not found");
+}
+
+static void wimp_create_modem_menu(void)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf[256];
+ char buf1[256];
+ int f;
+
+ menuptr=modem_menudata;
+ modem_menu=menuhdr(token_get("MMT"));
+/*  menuitem(token_get("MM01")); removed to remove the unknown modem - as it was broken */
+ /* Enumerate modems directory */
+ r.r[0]=9;
+ r.r[1]=(int)"<MailServ$Dir>.Modems";
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=0;
+ r.r[5]=sizeof(buf);
+ r.r[6]=(int)"*";
+ do
+ {
+  e=_kernel_swi(OS_GBPB,&r,&r);
+  if (e || (r.r[3]==0)) break;
+  /* Open file and get name of modem */
+  sprintf(buf1,"%s.%s","<MailServ$Dir>.Modems",buf);
+//error_display(buf1);
+  f=file_open(buf1,TRUE);
+  if (f && file_get_line(f,buf,FALSE) && (buf[0]=='#'))
+  {
+   menuitem_copy(buf+1);
+  }
+  file_close(&f);
+ }
+ while (r.r[3]>0);
+ menuend();
+}
+
+
+static char providers_data[1024];
+
+/*  The old 'create provider menu'
+    expects to see all the ISP info in sub directorys under providers
+
+static void wimp_create_provider_menu(void)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf1[256];
+ int f;
+ char *buf=providers_data;
+
+ menuptr=provider_menudata;
+ provider_menu=menuhdr(token_get("PMT"));
+ // Enumerate providers directory
+ r.r[0]=9;
+ r.r[1]=(int)"<MailServ$Dir>.Providers";
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=0;
+ r.r[5]=sizeof(providers_data);
+ r.r[6]=(int)"*";
+ do
+ {
+  e=_kernel_swi(OS_GBPB,&r,&r);
+  if (e || (r.r[3]==0)) break;
+  // Open file and get name of provider
+  sprintf(buf1,"%s.%s.Script","<MailServ$Dir>.Providers",buf);
+  f=file_open(buf1,TRUE);
+  if (f && file_get_line(f,buf,FALSE) && (buf[0]=='#'))
+  {
+   menuitem(buf+1);
+   buf+=strlen(buf)+1;
+   r.r[2]=(int)buf;
+  }
+  file_close(&f);
+ }
+ while (r.r[3]>0);
+ menuend();
+}
+
+*/
+
+//New create provider menu
+//expects to find ISP info in 'provlist'
+//saves disk space by saving all info in one file instead of many directorys
+//ne 22/7/97
+
+static void wimp_create_provider_menu(void)
+{
+  int f;
+  char *buf=providers_data;
+
+  menuptr=provider_menudata;
+  provider_menu=menuhdr(token_get("PMT"));
+
+  f=file_open("<MailServ$Dir>.provlist",TRUE);
+
+  if (f)
+  {
+    while (file_get_line(f,buf,FALSE))
+      if (((buf[0] > 64) && (buf[0] <91))  || ((buf[0] > 96) && (buf[0] < 123))) //a-Z
+      {
+        menuitem(buf);
+        buf+=strlen(buf)+1;
+      }
+    file_close(&f);
+  }
+  else
+    error_display("provlist file not found");
+
+  menuend();
+}
+
+
+
+static char dl_data[1024];
+
+static int wimp_create_dl_menu(void)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ char buf1[256];
+ int f,i=0;
+ char *buf=dl_data;
+
+//error_display("create dl menu");
+
+ menuptr=dl_menudata;
+ dl_menu=menuhdr(token_get("DMT"));
+ /* Enumerate distribution lists directory */
+ r.r[0]=9;
+ r.r[1]=(int)"<MailServ$Dir>.DLists";
+ r.r[2]=(int)buf;
+ r.r[3]=1;
+ r.r[4]=0;
+ r.r[5]=sizeof(dl_data);
+ r.r[6]=(int)"*";
+ do
+ {
+  e=_kernel_swi(OS_GBPB,&r,&r);
+  if (e || (r.r[3]==0)) break;
+  /* Open file and get name of list */
+  sprintf(buf1,"%s.%s","<MailServ$Dir>.Dlists",buf);
+//error_display(buf1);
+  f=file_open(buf1,TRUE);
+  if (f && file_get_line(f,buf,FALSE) && (buf[0]=='#'))
+  {
+   menuitem(buf+1);
+   buf+=strlen(buf)+1;
+   r.r[2]=(int)buf;
+   i++;
+  }
+  file_close(&f);
+ }
+ while (r.r[3]>0);
+ menuend();
+ return i;
+}
+
+
+
+/* static DNW */ void wimp_create_speed_menu()
+{
+#ifdef OLD_SERIAL
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+
+ menuptr=speed_menu_data;
+ speed_menu=menuhdr(token_get("TSP"));
+
+ menuitem(token_get("SP00"));
+ menuitem(token_get("SP01"));
+ menuitem(token_get("SP02"));
+ menuitem(token_get("SP03"));
+
+ r.r[0]=9; /* enumerate serial speeds */
+ e=_kernel_swi(OS_SerialOp,&r,&r);
+ if (!e)
+ {
+  int i=r.r[2];
+  while (i)
+  {
+   int speed;
+   speed=(*(int *)r.r[1])/2;
+   if (speed>19200)
+   {
+    char buf[20];
+    sprintf(buf,"%i",speed);
+    menuitem_copy(buf);
+   }
+   i--;
+   r.r[1]+=4;
+  }
+ }
+ menuend();
+
+#else
+
+int *speed; /* dnw */
+char buf[20];
+menuptr=speed_menu_data;
+speed_menu=menuhdr(token_get("TSP"));
+
+/* dnw added to use the block drivers !!!!  */
+log_report(LOG_DEBUG, "at start");
+for (speed = driver_speedtable ;speed < (driver_speedtable + 0x80);speed++)
+ {
+ if ( *speed == 0 )
+  break;
+ if ( *speed >1200 )
+  {
+  sprintf(buf, "%d", *speed );
+  menuitem_copy(buf);
+  }
+ }
+
+ menuend();
+#endif
+
+}
+
+static void wimp_create_main_menu(void)
+{
+ char *configmenu;
+ char *adminmenu;
+ char *statmenu;
+ char *connectmenu;
+ char *censormenu;
+ char *expiremenu;
+
+
+ menuptr=menudata;
+ mainmenu=menuhdr(token_get("T00"));
+ menuitem(token_get("M00"));
+ menuitem(token_get("M01"));
+ menuitem(token_get("M02"));
+ menuitem(token_get("M03"));
+ menuitem(token_get("M04"));
+ menuitem(token_get("M05"));
+ menuitem(token_get("M06"));
+ menuitem(token_get("M07"));
+ menuitem(token_get("M08"));
+ menuend();
+ submenu(mainmenu,0,info_handle);
+ submenu(mainmenu,5,finger_handle);
+ if (script_active)
+ {
+  greyitem(mainmenu,6);
+  ungreyitem(mainmenu,7);
+ } else
+ {
+  greyitem(mainmenu,7);
+  ungreyitem(mainmenu,6);
+ }
+
+
+ connectmenu=menuhdr(token_get("T50"));
+ menuitem(token_get("M50"));
+ menuitem(token_get("M51"));
+ menuend();
+ submenu(mainmenu,6,(int)connectmenu);
+
+
+ configmenu=menuhdr(token_get("T01"));
+ menuitem(token_get("M10"));
+ menuitem(token_get("M11"));
+ menuitem(token_get("M12"));
+ menuitem(token_get("M13"));
+ menuitem(token_get("M14"));
+ menuitem(token_get("M15"));
+ menuend();
+ submenu(mainmenu,1,(int)configmenu);
+
+ adminmenu=menuhdr(token_get("T02"));
+ menuitem(token_get("M20"));
+ menuitem(token_get("M21"));
+ menuitem(token_get("M22"));
+ menuitem(token_get("M23"));
+ menuitem(token_get("M24"));
+ menuitem(token_get("M25"));
+ menuend();
+ submenu(mainmenu,2,(int)adminmenu);
+
+ statmenu=menuhdr(token_get("T03"));
+ menuitem(token_get("M30"));
+ menuitem(token_get("M31"));
+ menuitem(token_get("M32"));
+ menuitem(token_get("M33"));
+ menuend();
+ submenu(statmenu,0,save_handle);
+ submenu(statmenu,1,save_handle);
+ submenu(statmenu,2,save_handle);
+ submenu(statmenu,3,save_handle);
+ submenu(mainmenu,3,(int)statmenu);
+
+ censormenu=menuhdr(token_get("T23"));
+ menuitem(token_get("M231"));
+ menuitem(token_get("M232"));
+ menuend();
+ submenu(adminmenu,3,(int)censormenu);
+
+ expiremenu=menuhdr(token_get("T25"));
+ menuitem(token_get("M251"));
+ menuitem(token_get("M252"));
+ menuend();
+ submenu(adminmenu,5,(int)expiremenu);
+
+
+}
+
+static void open_main_menu(int x)
+{
+ _kernel_swi_regs r;
+
+ r.r[1]=(int)mainmenu;
+ r.r[2]=x-64;
+ r.r[3]=44*9+96;    /* DNW & KB now the main menu opens at the correct height  */
+ _kernel_swi(Wimp_CreateMenu,&r,&r);
+ current_menu=MENU_MAIN;
+}
+
+static void open_menu(int menu,int x,int y)
+{
+ _kernel_swi_regs r;
+
+ switch (menu)
+ {
+  case MENU_MODEMS:
+      r.r[1]=(int)modem_menu;
+      break;
+  case MENU_SPEED:
+      r.r[1]=(int)speed_menu;
+      break;
+  case MENU_PROVIDER:
+      r.r[1]=(int)provider_menu;
+      break;
+  case MENU_DLs:
+      r.r[1]=(int)dl_menu;
+      break;
+  case MENU_LIST:
+      r.r[1]=(int)list_menu;
+      break;
+  case MENU_LOCATION:
+      r.r[1]=(int)location_menu;
+      break;
+  case MENU_GROUPS:
+  case MENU_GROUPS_1:
+  case MENU_GROUPS_2:
+  case MENU_GROUPS_3:
+  case MENU_GROUPS_4:
+  case MENU_GROUPS_5:
+  case MENU_ADDRESSES:
+  case MENU_URLS:
+      r.r[1]=(int)groups_menu;
+      break;
+  case MENU_NEWSGROUPS:
+      r.r[1]=(int)newsgroup_menu;
+      break;
+  case MENU_NGLIST:
+  case MENU_NGLIST1:
+      break;
+ }
+ hourglass_on();
+ r.r[2]=x+20;
+ r.r[3]=y+32;
+ _kernel_swi(Wimp_CreateMenu,&r,&r);
+ hourglass_off();
+ current_menu=menu;
+}
+
+void wimp_start_task(void)
+{
+ /* Start a wimp task */
+
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ int m=0;
+ int taskword=*(int *)"TASK";
+
+ r.r[0]=310;
+ r.r[1]=taskword;
+ r.r[2]=(int)token_get("TaskName");
+ r.r[3]=(int)&m;
+ e=_kernel_swi(Wimp_Initialise,&r,&r);
+ if (e) error_fatal_string(token_get("F00"),e->errmess);
+ task_id=r.r[1];
+
+ /* create and load all windows */
+
+ r.r[1]=(int)"<MailServ$Dir>.Templates";
+ e=_kernel_swi(Wimp_OpenTemplate,&r,&r);
+ if (e) error_fatal_string(token_get("F01"),e->errmess);
+
+ info_handle=load_template("info");
+ {
+  char buf[256];
+#ifdef SU
+  sprintf(buf,"%s SU (%s)",VERSION,__DATE__);
+#else
+  sprintf(buf,"%s (%s)",VERSION,__DATE__);
+#endif
+  set_icon_text(info_handle,3,buf);
+ }
+
+ finger_handle=load_template("finger");
+
+ modem_handle=load_template("Modem");
+ mail_handle=load_template("Mail");
+ news_handle=load_template("News");
+ connection_handle=load_template("IP");
+ po_handle=load_template("poffice");
+ admin_handle=load_template("Admin");
+ groups_handle=load_template("groups");
+ users_handle=load_template("users");
+ newsgroup_handle=load_template("Newsgroups");
+ localgroup_handle=load_template("localgroup");
+ censorship_handle=load_template("addresses");
+ expiry_handle=load_template("expiry");
+ dl_handle=load_template("DLs");
+ log_handle=load_template("log");
+ nglist_handle=load_template("nglist");
+ active_handle=load_template("nglist1");
+ userlist_handle=load_template("userlist");
+ save_handle=load_template("save");
+ url_expiry_handle=load_template("URLexpiry");
+ url_censorship_handle=load_template("URLs");
+
+ e=_kernel_swi(Wimp_CloseTemplate,&r,&r);
+ if (e) error_fatal_string(token_get("F03"),e->errmess);
+
+ wimp_get_mode_info();
+ wimp_create_main_menu();
+ wimp_create_modem_menu();
+ wimp_create_speed_menu();
+ wimp_create_provider_menu();
+ wimp_create_dl_menu();
+}
+
+void wimp_create_baricon(int grey)
+{
+ /* Put an icon on the icon bar */
+ int baricon[64];
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ int height,width,xeig,yeig,mode;
+
+ baricon[0]=icon_handle?-3:-1;
+ baricon[1]=0;
+ baricon[2]=0;
+
+ r.r[0]=0x128;
+ r.r[1]=1;
+ r.r[2]=grey?(int)"gMailServ":(int)"!MailServ";
+ e=_kernel_swi(Wimp_SpriteOp,&r,&r);
+ if (e) error_fatal(e->errmess);
+
+ width=r.r[3];
+ height=r.r[4];
+ mode=r.r[6];
+
+ r.r[0]=mode;
+ r.r[1]=4;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ xeig=r.r[2];
+ r.r[0]=mode;
+ r.r[1]=5;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ yeig=r.r[2];
+
+ baricon[3]=width<<xeig;
+ baricon[4]=height<<yeig;
+ baricon[5]=0x0000311A;
+ baricon[6]=grey?(int)"gMailServ":(int)"!MailServ";
+ baricon[7]=1;
+ baricon[8]=9;
+ r.r[0]=icon_handle;
+ r.r[1]=(int)(baricon);
+ e=_kernel_swi(Wimp_CreateIcon,&r,&r);
+ if (e) error_fatal(e->errmess);
+
+
+ baricon[0]=-2;
+ baricon[1]=icon_handle;
+ icon_handle=r.r[0];
+ if (exists)           //old icon exists so delete it
+ {
+  r.r[1]=(int)baricon;
+  e=_kernel_swi(Wimp_DeleteIcon,&r,&r);
+  if (e) error_fatal(e->errmess);
+ }
+ exists=1;
+}
+
+void wimp_create_baricon_fat(void)
+{
+ /* Put an icon on the icon bar */
+
+ int baricon[64];
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+ int height,width,xeig,yeig,mode;
+
+ baricon[0]=icon_handle?-3:-1;
+ baricon[1]=0;
+ baricon[2]=0;
+
+ r.r[0]=0x128;
+ r.r[1]=1;
+ r.r[2]=(int)"fMailserv";
+ e=_kernel_swi(Wimp_SpriteOp,&r,&r);
+ if (e) error_fatal(e->errmess);
+
+ width=r.r[3];
+ height=r.r[4];
+ mode=r.r[6];
+
+ r.r[0]=mode;
+ r.r[1]=4;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ xeig=r.r[2];
+ r.r[0]=mode;
+ r.r[1]=5;
+ e=_kernel_swi(OS_ReadModeVariable,&r,&r);
+ if (e) error_fatal(e->errmess);
+ yeig=r.r[2];
+
+ baricon[3]=width<<xeig;
+ baricon[4]=height<<yeig;
+ baricon[5]=0x0000311A;
+ baricon[6]=(int)"fmailserv";
+ baricon[7]=1;
+ baricon[8]=9;
+ r.r[0]=icon_handle;
+ r.r[1]=(int)(baricon);
+ e=_kernel_swi(Wimp_CreateIcon,&r,&r);
+ if (e) error_fatal(e->errmess);
+
+ baricon[0]=-2;
+ baricon[1]=icon_handle;
+ icon_handle=r.r[0];
+ if (exists)           //if old icon exists delete it
+ {
+  r.r[1]=(int)baricon;
+  e=_kernel_swi(Wimp_DeleteIcon,&r,&r);
+  if (e) error_fatal(e->errmess);
+ }
+exists = 1;
+}
+
+
+static void wimp_mouse_click(int x,int y,int b,int w,int i)
+{
+ if ((w==-2) && (b==2)) /* Main menu */
+ {
+  open_main_menu(x);
+  return;
+ }
+
+ if (w==finger_handle)
+ {
+  char buf[256];
+  if ((i==1) && (b!=2))
+  {
+   _kernel_swi_regs re;
+   get_icon_text(finger_handle,0,buf);
+   //finger(buf,TRUE);
+   if (b!=1)
+   {
+    re.r[0]=-1;
+    re.r[1]=-1;
+    _kernel_swi(Wimp_CreateMenu,&re,&re);
+   }
+   finger(buf,TRUE);
+  }
+  return;
+ }
+
+ if (w==save_handle)
+ {
+  if (i==2)  /* Ok */
+  {
+   char buf[256];
+   int ok=0;
+   char *b=buf;
+   get_icon_text(save_handle,1,buf);
+   while (*b>31)
+   {
+    if (*b=='.')
+    {
+     ok=TRUE;
+     break;
+    }
+    b++;
+   }
+   if (ok)
+   {
+    _kernel_swi_regs r;
+    which_report();
+    if (do_report(buf))
+    {
+     r.r[1]=-1;
+     _kernel_swi(Wimp_CreateMenu,&r,&r);
+    }
+   } else error_display("To save, drag icon to a directory viewer");
+   return;
+  }
+  if ((i==0) && (b>15)) /* a drag */
+  {
+   int buf[64],x,y,w,h,px,py;
+   char *c;
+   _kernel_swi_regs r;
+   r.r[1]=(int)buf;
+   _kernel_swi(Wimp_GetPointerInfo,&r,&r);
+   px=buf[0];
+   py=buf[1];
+   buf[0]=save_handle;
+   r.r[1]=(int)buf;
+   _kernel_swi(Wimp_GetWindowState,&r,&r);
+   x=buf[1];
+   y=buf[4];
+   w=buf[3]-buf[1];
+   h=buf[4]-buf[2];
+   buf[0]=save_handle;
+   buf[1]=0;
+   r.r[1]=(int)buf;
+   _kernel_swi(Wimp_GetIconState,&r,&r);
+   buf[0]=0;
+   buf[1]=5;
+   buf[2]+=x;
+   buf[3]+=y;
+   buf[4]+=x;
+   buf[5]+=y;
+   buf[6]=-(px-buf[2]);
+   buf[7]=-(py-buf[3]);
+   buf[8]=buf[4]-px+mode_width;
+   buf[9]=buf[5]-py+mode_height;
+   r.r[1]=(int)buf;
+   _kernel_swi(Wimp_DragBox,&r,&r);
+   get_icon_text(save_handle,1,save_file_name);
+   c=save_file_name+strlen(save_file_name);
+   while (c>save_file_name) if (*--c=='.') break;
+   if (*c=='.') c++;
+   if (c!=save_file_name) strcpy(save_file_name,c);
+   which_report();
+  }
+  return;
+ }
+
+ if (w==nglist_handle)
+ {
+  nglist_click(x,y,b);
+  return;
+ }
+
+ if (w==userlist_handle)
+ {
+  userlist_click(x,y,b);
+  return;
+ }
+
+ if (w==active_handle)
+ {
+  active_click(x,y,b);
+  return;
+ }
+
+ if (w==localgroup_handle)
+ {
+  switch (i)
+  {
+   case 2:
+      wimp_close_window(w);
+      break;
+   case 1:
+      users_add_local_group();
+      break;
+  }
+ }
+
+ if (w==modem_handle)
+ {
+  switch (i)
+  {
+   case 2:
+    open_menu(MENU_MODEMS,x,y);
+    return;
+   case 11:
+    open_menu(MENU_SPEED,x,y);
+    return;
+   case 13:
+   case 14:
+    return;
+  }
+ }
+
+ if (w==groups_handle)
+ {
+  char buf[256];
+  switch (i)
+  {
+   case 4:
+    if (wimp_create_group_menu("All",TRUE))
+       open_menu(MENU_GROUPS,x,y);
+    return;
+   case 5:
+    get_icon_text(groups_handle,2,buf);
+    if (wimp_create_group_menu(buf,FALSE))
+       open_menu(MENU_GROUPS_1,x,y);
+    return;
+
+  }
+ }
+
+ if (w==dl_handle)
+ {
+  char buf[256],buf1[256];
+  switch (i)
+  {
+   case 5:
+       if (wimp_create_dl_menu()) open_menu(MENU_DLs,x,y);
+       return;
+   case 4:
+    get_icon_text(dl_handle,3,buf);
+    if (find_dl(buf,buf1) && wimp_create_list_members_menu(buf1))
+       open_menu(MENU_LIST,x,y);
+    return;
+
+  }
+ }
+
+
+ if (w==users_handle)
+ {
+  switch (i)
+  {
+   case 8:
+    if (wimp_create_group_menu("All",TRUE))
+       open_menu(MENU_GROUPS_2,x,y);
+    return;
+  }
+ }
+
+ if (w==connection_handle)
+ {
+  switch (i)
+  {
+   case 2:
+    open_menu(MENU_PROVIDER,x,y);
+    return;
+   case 17:
+    open_menu(MENU_LOCATION,x,y);
+    return;
+  }
+ }
+
+ if (w==newsgroup_handle)
+ {
+  switch (i)
+  {
+   case 7:
+   if (wimp_create_group_menu("All",TRUE))
+       open_menu(MENU_GROUPS_3,x,y);
+    return;
+  }
+ }
+
+
+
+ if (w==censorship_handle)
+ {
+  char buf[256];
+  switch (i)
+  {
+   case 7:
+   if (wimp_create_group_menu("All",TRUE))
+       open_menu(MENU_GROUPS_4,x,y);
+    return;
+   case 8:
+    get_icon_text(w,3,buf);
+    if (wimp_create_address_menu(FALSE,buf[0]?buf:"All"))
+       open_menu(MENU_ADDRESSES,x,y);
+    return;
+
+  }
+ }
+
+ if (w==url_censorship_handle)
+ {
+  char buf[256];
+  switch (i)
+  {
+   case 7:
+   if (wimp_create_group_menu("All",TRUE))
+       open_menu(MENU_GROUPS_5,x,y);
+    return;
+   case 8:
+    get_icon_text(w,3,buf);
+    if (wimp_create_address_menu(TRUE,buf[0]?buf:"All"))
+       open_menu(MENU_URLS,x,y);
+    return;
+
+  }
+ }
+
+ if(w==mail_handle)
+ {
+  switch(i)
+  {
+    case 12:
+    	grey_icon(mail_handle,15);
+  	grey_icon(mail_handle,20);
+  	grey_icon(mail_handle,21);
+  	break;
+
+    case 13:
+      	ungrey_icon(mail_handle,15);
+        ungrey_icon(mail_handle,20);
+        ungrey_icon(mail_handle,21);
+  }
+ }
+
+
+
+ if ((w==-2) && (b==4))
+ {
+  wimp_open_window_centred(log_handle);
+  return;
+ }
+
+ b=config_click(x,y,b,w,i);
+ users_click(x,y,b,w,i);
+}
+
+static void configure(int item)
+{
+
+ wimp_open_window_centred(*config_windows[item]);
+}
+
+static void stat(int item)
+{
+ item=item;
+}
+
+static void admin(int item,int item2)
+{
+ switch (item)
+ {
+  case 4:
+         nglist_load();
+         users_open(*admin_windows[item]);
+         wimp_open_window_centred(*admin_windows[item]);
+         break;
+  case 1:
+         userlist_load();
+         users_open(*admin_windows[item]);
+         wimp_open_window_centred(*admin_windows[item]);
+         break;
+  case 3:
+       if (item2 != -1)
+       {
+        users_open(*censor_windows[item2]);
+        wimp_open_window_centred(*censor_windows[item2]);
+       }
+       break;
+  case 5:
+       if (item2 != -1)
+       {
+        if (item2==0) active_load();
+        users_open(*expiry_windows[item2]);
+        wimp_open_window_centred(*expiry_windows[item2]);
+       }
+       break;
+  default:
+       users_open(*admin_windows[item]);
+       wimp_open_window_centred(*admin_windows[item]);
+       break;
+ }
+}
+
+
+void wimp_open_window_centred(int handle)
+{
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+
+ int buf[64];
+ int width;
+ int height;
+
+ r.r[1]=(int)buf;
+ buf[0]=handle;
+ e=_kernel_swi(Wimp_GetWindowState,&r,&r);
+ if (e) error_fatal(e->errmess);
+ width=buf[3]-buf[1];
+ height=buf[4]-buf[2];
+
+ if ((buf[8] & (1<<16))==0)
+ {
+  buf[1]=(mode_width-width)/2;
+  buf[2]=(mode_height-height)/2;
+  buf[3]=buf[1]+width;
+  buf[4]=buf[2]+height;
+ }
+ buf[7]=-1;
+
+ r.r[1]=(int)buf;
+ buf[0]=handle;
+ if (handle==nglist_handle) nglist_open(buf);
+ else  if (handle==active_handle) active_open(buf);
+ else  if (handle==userlist_handle) userlist_open(buf);
+ else
+ {
+  e=_kernel_swi(Wimp_OpenWindow,&r,&r);
+  if (e) error_fatal(e->errmess);
+ }
+}
+
+extern time_t next_time;
+
+void do_disconnect()
+{
+ if (mail_protocol==MAIL_PROTOCOL_SMTP)    //ne
+      smtp_close();
+ if (mail_protocol==MAIL_PROTOCOL_POP3)
+   pop3_close();
+ nntp_close();
+ nntp_state=0;
+ smtp_state=0;
+ mail_in_state=0;
+ script_active=0;
+ file_close(&script_file);
+ if (connection_type !=DIRECT)
+      modem_disconnect();
+ file_close(&script_file);
+ connect_state=0;
+ script_state=0;
+ greyitem(mainmenu,7);
+ ungreyitem(mainmenu,6);
+ connect_watchdog=0;
+}
+
+void do_connect(int do_news)
+{
+ char buf[256];
+
+/* if we're connected and then get a web request for connection then !
+ */
+if ( do_news == -4 ) /*  this is a web initiated connection */
+ {
+ remember_that_it_was_web_initiated = do_nntp;
+ do_nntp=0;
+ nntp_close();
+ }
+else if (do_news == -2)
+ {
+ do_nntp = remember_that_it_was_web_initiated;
+ }
+else
+ {
+ remember_that_it_was_web_initiated = do_nntp = do_news;
+ }
+
+
+connect_state = 2; /* ie we're dialling */
+
+
+ /* Check not already connected */
+ if (script_active)   /* Script is still active ... */
+ {
+  char buf[256];
+  sprintf(buf,"script_active = %i",script_active);
+  log_report(LOG_DEBUG,buf);
+  re_schedule();
+  return;
+ }
+/* DNW - i added the check_connected() so that you have to be connected in order to make the connection
+ * of course if you have a direct connection then your're *(&(*& in this case but running the script should
+ * solve that ? Maybe a connection_type = DIRECT should be initiated here  */
+
+ if ( (smtp_state || nntp_state || mail_in_state) && ( check_connected() || connection_type == DIRECT ) )
+ {
+  DEBUG((dbg,"smtp_state = %i",smtp_state));      /* Log states in log window */
+  DEBUG((dbg,"nntp_state = %i",nntp_state));
+  DEBUG((dbg,"mail_in_state = %i",mail_in_state));
+
+  log_report(LOG_DEBUG,"do_connect called and we're connected");
+
+
+  /* Now re-open those connections which are not active */
+
+  if (!smtp_state)
+  {
+   smtp_deliver(smtp_server,po_path,mail_domain);
+   smtp_state=smtp_process_out();
+  }
+
+  if (!mail_in_state)
+  {
+   switch (mail_protocol)
+   {
+    case MAIL_PROTOCOL_SMTP:
+         smtp_setup_receive(mail_domain);
+         break;
+    case MAIL_PROTOCOL_POP3:
+         pop3_setup_receive(mail_domain);
+         break;
+   }
+   smtp_on=1;
+  }
+
+  if (!nntp_state &&  do_news > 0 ) /* DNW - added so that a web initiated connect will not trigger a news connect  */
+  {
+   nntp_close();
+   nntp_state=nntp_connect(news_server,po_path,news_org);
+  }
+
+  re_schedule();
+  connect_watchdog=time(NULL);
+  return;
+ }
+
+ /* close any active sockets */
+ smtp_close();
+ pop3_close();
+ nntp_close();
+
+ /* Now do connection */
+
+// get_icon_text(connection_handle,50,buf1);
+ strcpy(buf,"<MailServ$Dir>.Script");
+ nntp_retries=5;
+ script_active=script_start(buf);
+ if (script_active)
+ {
+  greyitem(mainmenu,6);
+  ungreyitem(mainmenu,7);
+ } else
+ {
+  greyitem(mainmenu,7);
+  ungreyitem(mainmenu,6);
+ }
+ connect_state=1;
+ re_schedule();
+}
+
+
+
+void olddo_connect(int do_news)
+{
+ char buf[256];
+
+/* if we're connected and then get a web request for connection then !
+ */
+connect_state = 2; /* ie we're dialling */
+if ( do_news == -4 )
+ { /*  this is a web initiated connection */
+ remember_that_it_was_web_initiated = do_nntp;
+ do_nntp=0;
+ nntp_close();
+ }
+else if (do_news == -2)
+ {
+ do_nntp = remember_that_it_was_web_initiated;
+ }
+else
+ {
+ remember_that_it_was_web_initiated = do_nntp = do_news;
+ }
+
+
+ /* Check not already connected */
+ if (script_active)   /* Script is still active ... */
+ {
+  char buf[256];
+  sprintf(buf,"script_active = %i",script_active);
+  log_report(LOG_DEBUG,buf);
+  re_schedule();
+  return;
+ }
+/* DNW - i added the check_connected() so that you have to be connected in order to make the connection
+ * of course if you have a direct connection then your're *(&(*& in this case but running the script should
+ * solve that ? Maybe a connection_type = DIRECT should be initiated here  */
+
+ if ( (smtp_state || nntp_state || mail_in_state) && ( check_connected() /* || connection_type = DIRECT */ ) )
+ {
+  DEBUG((dbg,"smtp_state = %i",smtp_state));      /* Log states in log window */
+  DEBUG((dbg,"nntp_state = %i",nntp_state));
+  DEBUG((dbg,"mail_in_state = %i",mail_in_state));
+
+  log_report(LOG_DEBUG,"do_connect called and we're connected");
+
+
+  /* Now re-open those connections which are not active */
+
+  if (!smtp_state)
+  {
+   smtp_deliver(smtp_server,po_path,mail_domain);
+   smtp_state=smtp_process_out();
+  }
+
+  if (!mail_in_state)
+  {
+   switch (mail_protocol)
+   {
+    case MAIL_PROTOCOL_SMTP:
+         smtp_setup_receive(mail_domain);
+         break;
+    case MAIL_PROTOCOL_POP3:
+         pop3_setup_receive(mail_domain);
+         break;
+   }
+   smtp_on=1;
+  }
+
+  if (!nntp_state &&  do_news > 0 ) /* DNW - added so that a web initiated connect will not trigger a news connect  */
+  {
+   nntp_close();
+   nntp_state=nntp_connect(news_server,po_path,news_org);
+  }
+
+  re_schedule();
+  connect_watchdog=time(NULL);
+  return;
+ }
+
+ /* close any active sockets */
+ smtp_close();
+ pop3_close();
+ nntp_close();
+
+ /* Now do connection */
+
+// get_icon_text(connection_handle,50,buf1);
+ strcpy(buf,"<MailServ$Dir>.Script");
+ nntp_retries=5;
+ script_active=script_start(buf);
+ if (script_active)
+ {
+  greyitem(mainmenu,6);
+  ungreyitem(mainmenu,7);
+ } else
+ {
+  greyitem(mainmenu,7);
+  ungreyitem(mainmenu,6);
+ }
+ connect_state=1;
+ re_schedule();
+}
+
+
+
+static void wimp_menu_selection(int menu,int item,int item2)
+{
+ switch (menu)
+ {
+  case 0:   /* Info */
+       break;
+  case 1:   /* Config */
+       if (item>-1) configure(item);
+       break;
+  case 2:   /* Admin */
+       if (item>-1) admin(item,item2);
+       break;
+  case 3:   /* Report */
+       if (item>-1) stat(item);
+       break;
+  case 4:   /* Open log */
+       wimp_open_window_centred(log_handle);
+       break;
+  case 5:   /* Finger */
+       break;
+  case 6:   /* Connect */
+       if (!script_active)
+       {
+        do_connect(item==1);
+       }
+       break;
+  case 7:   /* Disconnect */
+       do_disconnect();
+       break;
+  case 8:   /* Quit */
+//       error_display("about to exit");
+ if (connection_type != DIRECT )  /* DNW  */
+       modem_disconnect();
+       file_close(&script_file);
+       database_save("<MailServ$Dir>.Database");
+       exit(0);
+ }
+}
+extern char pb_path[];
+
+
+
+
+
+extern int connect_wd_cheap_start;
+extern int connect_wd_cheap_end;
+extern int connect_we_cheap_start;
+extern int connect_we_cheap_end;
+extern int connect_when_pending;
+extern int connect_interval_cheap;
+extern int connect_interval_peak;
+
+static int cheap_rate(void)
+{
+ int start=connect_wd_cheap_start;
+ int end=connect_wd_cheap_end;
+ int now;
+ time_t t=time(NULL);
+ struct tm *tim;
+ tim=localtime(&t);
+ if ((tim->tm_wday==0) || (tim->tm_wday==6))
+ {
+  start=connect_we_cheap_start;
+  end=connect_we_cheap_end;
+ }
+ now=tim->tm_hour*4+tim->tm_min/15;
+ if ((now > end) && (now < start))
+ {
+    log_report(LOG_DEBUG,"Not cheap rate");
+    return FALSE;
+ }
+ log_report(LOG_DEBUG,"Cheap rate");
+ return TRUE;
+}
+
+
+
+void re_schedule(void)
+{
+ char buf[256];
+
+ next_time=time(NULL);
+ if (cheap_rate() && (connect_interval_cheap > 0))
+   next_time+=connect_interval_cheap*60;
+ else if (!cheap_rate() && (connect_interval_peak > 0))
+   next_time+=connect_interval_peak*60;
+ else
+   next_time = 0;
+ if (next_time > 0)
+   strftime(buf,sizeof(buf),"Next connect time is %H:%M (%d/%m/%Y)",localtime(&next_time));
+ else
+   sprintf(buf,"Periodic connection disabled by configuration.");
+ log_report(LOG_INFO,buf);
+}
+
+static void send_datasave(int type,int len,char *name)
+{
+ _kernel_swi_regs r;
+ int buf[64];
+ int x,y,w,i;
+
+ r.r[1]=(int)buf;
+ _kernel_swi(Wimp_GetPointerInfo,&r,&r);
+ x=buf[0];
+ y=buf[1];
+ w=buf[3];
+ i=buf[4];
+
+ buf[0]=256;
+ buf[2]=0;
+ buf[3]=0;
+ buf[4]=1;
+ buf[5]=w;
+ buf[6]=i;
+ buf[7]=x;
+ buf[8]=y;
+ buf[9]=len;
+ buf[10]=type;
+ sprintf((char*)(buf+11),"%s",name);
+ r.r[0]=18;
+ r.r[1]=(int)buf;
+ r.r[2]=w;
+ r.r[3]=i;
+ _kernel_swi(Wimp_SendMessage,&r,&r);
+}
+
+static int redraw = FALSE; /* Redraw semaphore */
+extern int poll_report;
+
+void wimp_do_poll(int nulls)
+{
+ char buf[256];
+ int *intbuf=(int *)buf;
+ _kernel_swi_regs r;
+ _kernel_oserror *e;
+
+ if (redraw) return;
+
+ if (next_scan==0) next_scan=time(NULL);
+
+ do
+ {
+  r.r[0]=0;
+  r.r[1]=(int)buf;
+  e=_kernel_swi(Wimp_Poll,&r,&r);
+  if (e) error_fatal(e->errmess);
+
+  switch (r.r[0])
+  {
+   case 7: /* Drag end */
+         send_datasave(0xfff,1,save_file_name);
+         break;
+   case 0: /* A null event */
+          if (redraw_log_next_null)
+          {
+           wimp_invalidate_log();
+           redraw_log_next_null=FALSE;
+          }
+          if (!nulls) return;   /* not interested in extra work ... */
+
+          if ((record_disconnect) && !check_connected())
+          {
+           record_disconnect=FALSE;
+           times[times_ptr++][1]=time(NULL);
+           log_report(LOG_INFO,token_get("I01"));
+           connect_watchdog = 0;
+          }
+
+          if (
+               (connect_idle_timeout != 0) &&
+               (connect_watchdog !=0)      &&
+               (check_connected() )        &&
+               (time(NULL)-connect_watchdog >= connect_idle_timeout*60)
+             )
+          {
+           log_report(LOG_INFO,token_get("I02"));
+           do_disconnect();
+           break;
+          }
+
+          if ((time(NULL)-last_expire) >= OneDay)
+          {
+           last_expire=time(NULL);
+           nntp_do_expire();
+          }
+
+          if (time(NULL)>next_scan)
+          {
+           char buf[256];
+           sprintf(buf,"%s.PostBoxes",pb_path);
+           scan(buf,TRUE);
+           next_scan=time(NULL)+5;
+          }
+          /* Do we need to connect ?? */
+          if ((connect_state==0) && (next_time > 0) && (difftime(time(NULL),next_time) >= 0))
+          {
+           do_connect(-2); /* DNW explained in do_connect  */
+          }
+
+          switch (script_active)
+          {
+           case SCRIPT_DONE:
+                if (connect_state==1)  /* Script completed, start services */
+                {                      /* And re-schedule next connect attempt */
+                 if (mail_out_command[0])
+                 {
+                  _kernel_swi_regs r;
+                  char s[256];
+                  sprintf(s,"%s %s %s",mail_out_command,"<MailServ$Dir>.Outgoing",smtp_server);
+                  r.r[0]=(int)s;
+                  _kernel_swi(Wimp_StartTask,&r,&r);
+                  smtp_state=0;
+                 } else
+                 {
+                  smtp_deliver(smtp_server,po_path,mail_domain);
+                  smtp_state=smtp_process_out();
+                 }
+                 if (mail_in_command[0])
+                 {
+                  _kernel_swi_regs r;
+                  char s[256];
+                  if(mail_protocol==MAIL_PROTOCOL_POP3)
+                    sprintf(s,"%s %s %s %s %s",mail_in_command,"<MailServ$Dir>.Incoming",
+                      	    pop_server,connect_node,connect_password);
+                  else
+                   sprintf(s,"%s %s %s %s %s",mail_in_command,"<MailServ$Dir>.Incoming",
+                      	    smtp_server,connect_node,connect_password);
+                  r.r[0]=(int)mail_in_command;
+                  _kernel_swi(Wimp_StartTask,&r,&r);
+                  smtp_on=0;
+                 } else
+                 {
+                  switch (mail_protocol)
+                  {
+                   case MAIL_PROTOCOL_SMTP:
+                        smtp_setup_receive(mail_domain);
+                        break;
+                   case MAIL_PROTOCOL_POP3:
+                        pop3_setup_receive(mail_domain);
+                        break;
+                  }
+                  smtp_on=1;
+                 }
+                 if (do_nntp)
+                 {
+                  /* nntp_retries=500; */
+                  nntp_state=nntp_connect(news_server,po_path,news_org);
+                 }
+                 else nntp_state=0;
+                 connect_state=0;
+                 if (times_ptr<MAX_TIMES)
+                 {
+                  times[times_ptr][0]=time(NULL);
+                  times[times_ptr][1]=0;
+                  record_disconnect=TRUE;
+                 }
+                }
+                break;
+           case SCRIPT_OK:
+                script_active=script_process();
+                break;
+           case SCRIPT_ABORT:
+                /* DEBUG((dbg,"script ABORT")); */
+                if (times_ptr<MAX_TIMES)
+                {
+                 times[times_ptr][0]=time(NULL);
+                 times[times_ptr++][1]=1;
+                }
+                script_active=SCRIPT_DONE;
+                connect_state=0;
+                script_state=0;
+                if (connection_type != DIRECT ) /* DNW  */
+                 modem_disconnect();
+                file_close(&script_file);
+                break;
+           case SCRIPT_ABORT_FATAL:
+           case SCRIPT_SYNTAX:
+                /* DEBUG((dbg,"script FATAL/SYNTAX")); */
+                /* No point re-schedualing as there was a fatal error */
+                connect_state=0;
+                if (connection_type != DIRECT ) /* DNW  */
+                 modem_disconnect();
+                file_close(&script_file);
+                script_active=SCRIPT_DONE;
+                break;
+          }
+          if (smtp_on)
+          {
+           switch (mail_protocol)
+           {
+            case MAIL_PROTOCOL_SMTP:
+                 smtp_process_in();
+                 break;
+            case MAIL_PROTOCOL_POP3:
+                 pop3_process_in();
+                 break;
+           }
+          }
+          if (smtp_state) smtp_state=smtp_process_out();
+          if (nntp_state) nntp_state=nntp_process();
+          if (!script_active && !check_connected())   /* DNW added && !check_connected()  */
+          {                                           /* so if the script isn't active && we're not connected then ..  */
+           ungreyitem(mainmenu,6);
+           greyitem(mainmenu,7);
+          }
+          break;
+   case 1: /* Redraw */
+           redraw=TRUE;
+           if (intbuf[0]==log_handle) log_redraw();
+           else if (intbuf[0]==nglist_handle)
+           {
+            nglist_redraw(intbuf);
+           }
+           else if (intbuf[0]==userlist_handle) userlist_redraw(intbuf);
+           else if (intbuf[0]==active_handle) active_redraw(intbuf);
+           redraw=FALSE;
+          break;
+   case 2:  //open window request
+          if (intbuf[0]==nglist_handle) nglist_open(intbuf);
+          else if (intbuf[0]==userlist_handle) userlist_open(intbuf);
+          else if (intbuf[0]==active_handle) active_open(intbuf);
+          else if (intbuf[0]==log_handle) log_open(intbuf);
+          else
+          {
+           r.r[1]=(int)buf;
+           _kernel_swi(Wimp_OpenWindow,&r,&r);
+          }
+          break;
+   case 3: /* Close window request */
+           r.r[1]=(int)buf;
+           _kernel_swi(Wimp_CloseWindow,&r,&r);
+           break;
+   case 6:
+           wimp_mouse_click(intbuf[0],intbuf[1],intbuf[2],intbuf[3],intbuf[4]);
+           break;
+   case 8: /* Key pressed */
+           if (intbuf[6] != 13)
+           {
+            r.r[0]=intbuf[6];
+            _kernel_swi(Wimp_ProcessKey,&r,&r);
+           } else
+           {
+            config_cr(intbuf[0]);
+            users_cr(intbuf[0]);
+            r.r[1]=-1;
+            _kernel_swi(Wimp_CreateMenu,&r,&r);
+             if (intbuf[0]==finger_handle)
+            {
+             char buf[256];
+             get_icon_text(finger_handle,0,buf);
+             finger(buf,TRUE);
+            }
+           }
+           break;
+   case 9:
+          switch (current_menu)
+          {
+           case MENU_MAIN:
+               wimp_menu_selection(intbuf[0],intbuf[1],intbuf[2]);
+               break;
+           case MENU_MODEMS:
+               wimp_modem_menu_selection(intbuf[0]);
+               break;
+           case MENU_SPEED:
+               wimp_speed_menu_selection(intbuf[0]);
+               break;
+           case MENU_PROVIDER:
+               hourglass_on();
+               wimp_do_poll(FALSE);
+               wimp_provider_menu_selection(intbuf[0]);
+               hourglass_off();
+               break;
+           case MENU_DLs:
+               wimp_dl_menu_selection(intbuf[0]);
+               break;
+           case MENU_LIST:
+               wimp_list_menu_selection(intbuf[0]);
+               break;
+           case MENU_LOCATION:
+               hourglass_on();
+               wimp_do_poll(FALSE);
+               wimp_location_menu_selection(intbuf[0]);
+               hourglass_off();
+               break;
+           case MENU_GROUPS:
+               wimp_groups_menu_selection(intbuf[0],groups_handle,2);
+               break;
+           case MENU_GROUPS_1:
+               wimp_groups_menu_selection(intbuf[0],groups_handle,3);
+               break;
+           case MENU_GROUPS_2:
+               wimp_groups_menu_selection(intbuf[0],users_handle,7);
+               break;
+           case MENU_GROUPS_3:
+               wimp_groups_menu_selection(intbuf[0],newsgroup_handle,3);
+               break;
+           case MENU_GROUPS_4:
+               wimp_groups_menu_selection(intbuf[0],censorship_handle,3);
+               break;
+           case MENU_GROUPS_5:
+               wimp_groups_menu_selection(intbuf[0],url_censorship_handle,3);
+               break;
+           case MENU_ADDRESSES:
+               wimp_groups_menu_selection(intbuf[0],censorship_handle,5);
+               break;
+           case MENU_URLS:
+               wimp_groups_menu_selection(intbuf[0],url_censorship_handle,5);
+               break;
+          }
+          break;
+
+   case 10:      //scroll request
+
+    	 if (intbuf[0]==nglist_handle)
+    	  {
+    	    //intbuf[9] :- scroll direction returned from wimp poll
+    	    //intuf[6]  :- scroll offset
+    	    intbuf[6]+=(nglist_groups_height * intbuf[9] * abs(intbuf[9]));
+    	    r.r[1]=(int)buf;
+    	    _kernel_swi(Wimp_OpenWindow,&r,&r);
+    	  }
+    	  break;
+
+   case 16:
+   case 17:
+   case 18:
+           wimp_do_message(*(int *)(buf+16),buf);
+           break;
+  }
+  if (r.r[0]==9)
+  {
+   r.r[1]=(int)intbuf;
+   _kernel_swi(Wimp_GetPointerInfo,&r,&r);
+   if (intbuf[2] & 1)
+   {
+    if (current_menu==MENU_MAIN) open_main_menu(0);
+      else open_menu(current_menu,0,0);
+   }
+  }
+ } while (!nulls);
+}
+
+void wimp_invalidate_log(void)
+{
+ _kernel_swi_regs r;
+ r.r[0]=log_handle;
+ r.r[1]=-50000;
+ r.r[2]=-50000;
+ r.r[3]=50000;
+ r.r[4]=50000;
+ _kernel_swi(Wimp_ForceRedraw,&r,&r);
+}
+
+void wimp_invalidate_window(int handle)
+{
+ _kernel_swi_regs r;
+ r.r[0]=handle;
+ r.r[1]=-50000;
+ r.r[2]=-50000;
+ r.r[3]=50000;
+ r.r[4]=50000;
+ _kernel_swi(Wimp_ForceRedraw,&r,&r);
+}
+
+void wimp_close_window(int w)
+{
+ _kernel_swi_regs r;
+ int buf[64];
+ buf[0]=w;
+ r.r[1]=(int)buf;
+ _kernel_swi(Wimp_CloseWindow,&r,&r);
+}
+
+
+void get_icon_text(int w,int i,char *where)
+{
+ char *c,*re=where;
+ int buf[64];
+ _kernel_swi_regs r;
+ buf[0]=w;
+ buf[1]=i;
+ r.r[1]=(int)buf;
+ _kernel_swi(Wimp_GetIconState,&r,&r);
+ for (c=(char *)buf[7];*c>31;)
+  *re++=*c++;
+ *re++='\0';
+}
+
+void set_icon_text(int w,int i,char *text)
+{
+ int buf[64];
+ int j=0;
+ _kernel_swi_regs r;
+
+ while ((text != NULL) && (text[j] >= ' '))
+   j++;
+
+ text[j] = '\0';		/* horrible botch, 'cause some of the rest of the code relies on it - CE */
+
+ r.r[1]=(int)buf;
+ buf[0]=w;
+ buf[1]=i;
+ _kernel_swi(Wimp_GetIconState,&r,&r);
+
+ *((char *)buf[7]) = '\0';
+ strncat((char *)(buf[7]),text,(j < buf[9] ? j : buf[9]-1));
+ buf[0]=w;
+ buf[1]=i;
+ buf[2]=0;
+ buf[3]=0;
+ _kernel_swi(Wimp_SetIconState,&r,&r);
+
+ r.r[1]=(int)buf;
+ _kernel_swi(Wimp_GetCaretPosition,&r,&r);
+ if ((buf[0]==w) && (buf[1]==i))
+ {
+  r.r[0]=w;
+  r.r[1]=i;
+  r.r[5]=0;
+  r.r[4]=-1;
+  _kernel_swi(Wimp_SetCaretPosition,&r,&r);
+ }
+}
+
+void set_icon(int w,int i,int n)
+{
+ char buf[256];
+ sprintf(buf,"%i\0",n);
+ set_icon_text(w,i,buf);
+}
+
+void get_icon(int w,int i,int *n)
+{
+ char buf[256];
+ get_icon_text(w,i,buf);
+ sscanf(buf,"%i",n);
+}
+
+void set_icon_time(int w,int i,int n)
+{
+ char buf[256];
+ sprintf(buf,"%02i:%02i\0",n/4,(n%4)*15);
+ set_icon_text(w,i,buf);
+}
+
+void get_icon_time(int w,int i,int *n)
+{
+ char buf[256];
+ int h,m;
+ get_icon_text(w,i,buf);
+ sscanf(buf,"%d:%d",&h,&m);
+ *n=h*4+(m/15);
+}
+
+
+int selected(int w,int i)
+{
+ int buf[64];
+ _kernel_swi_regs r;
+ r.r[1]=(int)buf;
+ buf[0]=w;
+ buf[1]=i;
+ _kernel_swi(Wimp_GetIconState,&r,&r);
+ return (buf[6] & (1<<21));
+}
+
+void select_icon(int w,int i,int on)
+{
+ int buf[64];
+ _kernel_swi_regs r;
+ buf[0]=w;
+ buf[1]=i;
+ buf[2]=on?(1<<21):0;
+ buf[3]=1<<21;
+ r.r[1]=(int)buf;
+ _kernel_swi(Wimp_SetIconState,&r,&r);
+}
+
+//'greys out' an icon ,ne
+void grey_icon(int w,int i)
+ {
+   int buf[64];
+    _kernel_swi_regs r;
+    buf[0]=w;
+    buf[1]=i;
+    buf[2]=1<<22;
+    buf[3]=1<<22;
+    r.r[1]=(int)buf;
+    _kernel_swi(Wimp_SetIconState,&r,&r);
+  }
+
+//'greys out' an icon ,ne
+void ungrey_icon(int w,int i)
+ {
+   int buf[64];
+    _kernel_swi_regs r;
+    buf[0]=w;
+    buf[1]=i;
+    buf[2]=0;
+    buf[3]=1<<22;
+    r.r[1]=(int)buf;
+    _kernel_swi(Wimp_SetIconState,&r,&r);
+  }
