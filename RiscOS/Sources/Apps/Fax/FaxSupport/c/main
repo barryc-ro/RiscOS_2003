@@ -43,6 +43,13 @@
 #define UpCall_Intercept 0
 #define UpCall_PassOn 1
 
+// FTS values
+#define FTSpostDCS "5"           // AT+FTS value after DCS transmitted, before AT+FTM for TCF
+#define FTSpostCFR "5"           // AT+FTS value after CFR received, before AT+FTM for T.4
+#define FTSpostT4 "0"            // AT+FTS value after T.4 transmitted, before AT+FTH for PostMC
+// @@ These values are determined by experiement, because there seems to be latency in their  @@
+// @@ execution; they should therefore be redetermined every time the modem firmware changes. @@
+
 // Timeout numbers
 #define NTimeoutT1 1             // Timeout for initial identification
 #define NTimeoutT2 2             // Timeout for command reception
@@ -151,7 +158,8 @@ typedef struct state {
       uint wasRTN : 1;        // Flag indicating PMR was RTN
       uint fishy : 1;         // Flag indicating DCS was fishy
       uint twoRTNs : 1;       // Flag indicating two consecutive RTNs have been received so far
-      uint firstresp : 1;     // Flag set if the first modem response has not been received so far
+      uint firstresp : 1;     // Flag set if the first modem response has not been received so far [tx]
+      uint firstframe : 1;    // Flag set if the first frame from remote has not been received so far
    } bits;
    char cmd;               // Command (0 if none)
    char resp;              // Response (0 if none)
@@ -953,6 +961,7 @@ D*/
                s->bits.X = 1;
                s->blockstate = BS_tii_start;
                s->bits.firstresp = TRUE;
+               s->bits.firstframe = TRUE;
 
                // Initialise the things GetInfo reads
                s->datarate = 0;
@@ -1032,7 +1041,8 @@ D*/
                s->bits.II = TRUE;
                s->bits.X = 0;
                s->blockstate = BS_rii_start;
-               s->bits.firstresp = TRUE;
+               s->bits.firstresp = FALSE; // We're not expecting any of BUSY etc. at all (only tx is)
+               s->bits.firstframe = TRUE;
 
                // Initialise the things GetInfo reads
                s->datarate = 0;
@@ -2270,7 +2280,10 @@ intern int faxint_tx_pre_message_command (State *s)
 // @@ Need to check subroutine return
 
          PDebug_TPPrintf ("TCFSEND: sending TCF\n");
-         buffermanager_put_string (s->bufIDout, "AT+FTM=");
+         buffermanager_put_string (s->bufIDout, "AT+FTS=" FTSpostDCS ";+FTM=");
+         // @@ We want the DCS to TCF delay to be 75 +/- 20 ms @@
+         // @@ (see T.30:1996/5note3).                         @@
+         // @@ Err on the longer side if necessary.            @@
          buffermanager_put_block (s->bufIDout, (byte *) s->FTMTCF, strlen (s->FTMTCF));
          buffermanager_put_string (s->bufIDout, "\r");
          M_set_info (Info_Sending_TCF);
@@ -2488,9 +2501,10 @@ intern int faxint_tx_pre_message_command (State *s)
 
       case BS_tpre_sendT4:
 
-         buffermanager_put_string (s->bufIDout, "AT+FTS=3;+FTM=");
-         // @@ The +FTS=3 adds about 50 ms delay; this is enough to normally get @@
-         // @@ the CFR to T.4 delay at least 75 ms.                              @@
+         buffermanager_put_string (s->bufIDout, "AT+FTS=" FTSpostCFR ";+FTM=");
+         // @@ We want the CFR to T.4 delay to be at least 75 ms @@
+         // @@ (see T.30:1996/5.3.2.3).                          @@
+         // @@ Err on the longer side if necessary.              @@
          buffermanager_put_block (s->bufIDout, (byte *) s->FTMT4, strlen (s->FTMT4));
          buffermanager_put_string (s->bufIDout, "\r");
          M_modem_get_response (BS_tpre_sendingT4);
@@ -2608,10 +2622,10 @@ intern int faxint_tx_post_message_command (State *s)
       case BS_tpost_sendPMC:
 
          PDebug_TPPrintf ("Block 5: sending PMC\n");
-         buffermanager_put_string (s->bufIDout, "AT+FTS=0;+FTH=3\r");
-         // @@ The +FTS=0 adds about 20 ms delay; this is enough to normally get        @@
-         // @@ the T.4 to PMC delay between 55 and 95 ms.  If anything, it occasionally @@
-         // @@ causes a delay of slightly more than 95 ms; this should be OK.           @@
+         buffermanager_put_string (s->bufIDout, "AT+FTS=" FTSpostT4 ";+FTH=3\r");
+         // @@ We want the T.4 to PostMC delay to be 75 +/- 20 ms @@
+         // @@ (see T.30:1996/5.3.2.2 and 5note4).                @@
+         // @@ Err on the longer side if necessary.               @@
          s->data[0] = 0xff;
          s->data[1] = Control_Final;
          s->data[2] = s->cmd + s->bits.X;
@@ -2989,6 +3003,22 @@ intern int faxint_sub_command_received (State *s)
 
             }
 
+            if (strcmp (s->response, "NO ANSWER") == 0) {
+
+               PDebug_Printf ("%06u  %i  COMMREC: no answer [got_CONNECT]\n"
+                             , clock(), s->port);
+               M_return_error (Error_No_Answer);
+
+            }
+
+            if (strcmp (s->response, "NO CARRIER") == 0) {
+
+               PDebug_Printf ("%06u  %i  COMMREC: no carrier [got_CONNECT]\n"
+                             , clock(), s->port);
+               M_return_error (Error_No_Carrier);
+
+            }
+
             if (strcmp (s->response, "NO DIALTONE") == 0) {
 
                PDebug_Printf ("%06u  %i  COMMREC: no dialtone [got_CONNECT]\n"
@@ -2996,6 +3026,14 @@ intern int faxint_sub_command_received (State *s)
                M_return_error (Error_No_Dialtone);
 
             }
+
+         }
+
+         if (s->bits.firstframe) {
+
+            s->bits.firstframe = FALSE;
+
+            M_set_info (Info_Connected); // ** Note this could get squashed! **
 
          }
 
@@ -3256,6 +3294,14 @@ intern int faxint_sub_response_received (State *s)
          }
 
          // At this point there has been either no timeout, or a drop-through T4 timeout
+
+         if (s->bits.firstframe) {
+
+            s->bits.firstframe = FALSE;
+
+            M_set_info (Info_Connected); // ** Note this could get squashed! **
+
+         }
 
          if (strcmp (s->response, "+FCERROR") == 0) {
 
@@ -4157,6 +4203,10 @@ intern int faxint_rx_main_loop (State *s)
 
          PDebug_TPPrintf ("TCFWAIT: waiting for 50 ms\n"); // @@ Change to FRS=1?
          buffermanager_put_string (s->bufIDout, "AT+FTS=0\r"); // Note there is an additional latency
+// mgr 1998-01-12: Try arguably better technique
+//                 Disastrous results with Pace as local modem!
+//         PDebug_TPPrintf ("TCFWAIT: waiting for 10 ms silence\n");
+//         buffermanager_put_string (s->bufIDout, "AT+FRS=1\r");
          s->cmd = 0;
          M_modem_get_response (BS_rml_waitTCF);
 
