@@ -6,9 +6,9 @@ CFLAGS=-DNDEBUG -DPROCESS_VENEERS -c -O -I${CLXPATH} ${CFL}
 ARMASM=armasm
 CC=gcc
 TOLOCAL=cp
-OBJALL=cmhg.o outaof.o gen.o
-DERIVED=gen.c gen.h
-DERIVED_SRC=veneers.o
+OBJALL=cmhg.o outaof.o gen26.o gen32.o
+DERIVED=gen26.c gen26.h gen32.c gen32.h
+DERIVED_SRC=veneers.o veneers32.o
 
 EXTDIR1=${CLXPATH}
 EXTLIB1=${CLX}
@@ -21,10 +21,16 @@ all: cmhg
 veneers.o: veneers.s
 	${ARMASM} -o $@ $<
 
-gen.h gen.c: veneers.o
-	aoftoc veneers.o gen
+veneers32.o: veneers32.s
+	${ARMASM} -o $@ $<
 
-cmhg.o: gen.h
+gen26.h gen26.c: veneers.o
+	aoftoc veneers.o gen26
+
+gen32.h gen32.c: veneers32.o
+	aoftoc veneers32.o gen32
+
+cmhg.o: gen26.h gen32.h
 
 cmhg: $(DERIVED_SRC)
 cmhg: $(DERIVED)

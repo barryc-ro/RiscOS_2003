@@ -28,8 +28,11 @@ TOUCH   = create
 WIPE    = -wipe
 SQUEEZE = squeeze
 
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
-ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
+# Uncomment his macro to make 32-bit code generation the default option
+#APCS    = -DUSE32BIT
+
+CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} ${APCS}
+ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK} -NOWarn
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
@@ -59,7 +62,7 @@ TARGET     = ${COMPONENT}
 SOURCE     =
 EXPORTS    =
 
-OBJS=	o.cmhg o.outaof o.veneers o.throwback
+OBJS=	o.cmhg o.outaof o.veneers o.veneers32 o.throwback
 
 LIBS=	${CLXLIB} ${CLIB}
 
