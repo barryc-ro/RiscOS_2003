@@ -32,7 +32,7 @@ RM      = remove
 WIPE    = -wipe
 
 CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
+WFLAGS  = r~c~v
 
 AFLAGS   = -depend !Depend -Stamp -quit -CloseExec
 CFLAGS   = ${THROWBACK} -c -depend !Depend ${INCLUDES} -zM -fah -zps1 ${DFLAGS}
