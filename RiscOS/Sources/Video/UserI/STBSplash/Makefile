@@ -109,7 +109,7 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 ${RAMTARGET}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${RLIB}
+        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
