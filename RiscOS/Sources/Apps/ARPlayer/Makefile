@@ -47,7 +47,6 @@ FILES           = Resources.!Boot \
                   Resources.!State \
                   Resources.Dummy \
                   LocalRes:Messages \
-                  ReplaySpt \
                   LocalRes:2D.Templates \
                   LocalRes:3D.Templates
 
@@ -85,7 +84,6 @@ install: $(FILES)
         $(CP) Resources.!State      $(INSTDIR).!$(COMPONENT).!State     $(CPFLAGS)
         $(CP) Resources.Dummy       $(INSTDIR).!$(COMPONENT).Dummy      $(CPFLAGS)
         $(CP) LocalRes:Messages     $(INSTDIR).!$(COMPONENT).Messages   $(CPFLAGS)
-        $(CP) ReplaySpt             $(INSTDIR).!$(COMPONENT).ReplaySpt  $(CPFLAGS)
         $(CP) LocalRes:2D.Templates $(INSTDIR).!$(COMPONENT).Template2D $(CPFLAGS)
         $(CP) LocalRes:3D.Templates $(INSTDIR).!$(COMPONENT).Templates  $(CPFLAGS)
         |
@@ -94,7 +92,6 @@ install: $(FILES)
 clean:
         $(WIPE) o $(WFLAGS)
         $(RM) !RunImage
-        $(RM) ReplaySpt
         @echo $(COMPONENT): cleaned
 
 local_dirs:
@@ -102,10 +99,6 @@ local_dirs:
 
 !RunImage: $(OBJS) local_dirs
         $(LD) -aif $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
-
-ReplaySpt: o.replayspt local_dirs
-        $(LD) -bin $(LDFLAGS) -o $@ o.replayspt
-        SetType $@ Module
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
