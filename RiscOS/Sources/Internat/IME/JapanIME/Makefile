@@ -11,7 +11,7 @@
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -26,8 +26,7 @@ MODSQZ  = modsqz
 
 # defines for CHINA, TAIWAN, KOREA, TANKANJI_CNV, TANBUN, RENBUN1 and DEBUG added because
 # VJE code does, for example, #IF CHINA == 1 which swamps the throwback with warnings
-OPTIONS = -Dunix=1 -DSTRCT_CN=1 -DPROTO=1 -DROMDIC=1 -DCHINA=0 -DTAIWAN=0 -DKOREA=0 \
-          -DTANKANJI_CNV=0 -DTANBUN=0 -DRENBUN1=0 -DDEBUG=0 -DTHIN_CSR=1
+OPTIONS = -Dunix=1 -DSTRCT_CN=1 -DPROTO=1 -DROMDIC=1 -DCHINA=0 -DTAIWAN=0 -DKOREA=0 -DTANKANJI_CNV=0 -DTANBUN=0 -DRENBUN1=0 -DDEBUG=0 -DTHIN_CSR=1 -DSPACE_ALWAYS_CONVERTS=1
 
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ffa -ec -Wps ${INCLUDES} ${OPTIONS} ${OPTS}
 CMHGFLAGS = -p
@@ -55,7 +54,7 @@ INCLUDES = -Ivjesrc,^.IntIME,C:,unixlibs,C:Unicode
 COMPONENT = JapanIME
 TARGET    = aof.${COMPONENT}
 
-OBJS =  o.CModuleHdr o.JapanIME o.vmjapanlbz 
+OBJS = o.CModuleHdr o.JapanIME o.vmjapanlbz 
 
 VJEOBJS = \
         vjesrc.o.wmain vjesrc.o.wtango vjesrc.o.waddchr \
@@ -106,6 +105,7 @@ export: ${EXPORTS} o.dirs
         @echo ${COMPONENT}: export complete
 
 install: rm.${COMPONENT} o.dirs
+        ${MKDIR} ${INSTDIR}
         ${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: ram module installed
 
