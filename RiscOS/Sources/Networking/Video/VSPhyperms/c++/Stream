@@ -64,8 +64,10 @@ Stream::test_empty_buffers(void)
 	 	if (result != ErrorOccurred){
 	 		if(buffers[token_id].block != NULL){
 				buffers[token_id].blocks_returned = 0;
-				if ((result = mysink->FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred)
+				if ((result = mysink->FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
 					err = &(mysink->ReturnCopyOfError());
+					buffers[token_id].in_use = free_token;
+				}
 			}
 			else
 				buffers[token_id].in_use = free_token;
@@ -102,8 +104,10 @@ Stream::test_empty_buffers(void)
 	 	if (result != ErrorOccurred){
 	 		if(buffers[token_id].block != NULL){
 				buffers[token_id].blocks_returned = 0;
-				if ((result = mysink->FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred)
+				if ((result = mysink->FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
 					err = &(mysink->ReturnCopyOfError());
+					buffers[token_id].in_use = free_token;
+				}
 			}
 			else
 				buffers[token_id].in_use = free_token;
@@ -126,7 +130,6 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
   // STB specific variables
   source = source_multicast;
   
-  message_sent = false;
   high_speed_file = false;
   source_flag = free_token;
   comms_timeout = inet_timeout;
@@ -177,7 +180,6 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   ULINT portnum;		// of server object, receiving
     
   // STB specific variables
-  message_sent = false;
   high_speed_file = false;
   source = source_vod;
   source_flag = free_token;
@@ -285,31 +287,15 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   		      	   err = &mysource->ReturnCopyOfError();
  	 	      	   result = ErrorOccurred;
   }
-#if 0
-#ifdef DEBUGLIB
-  Debug("pre play ack = 0");
-#endif  
   if ((result != ErrorOccurred)&&
  	(server->SendAck(server->getMaxRequestedBlock(), server->getMaxRequestedBlock()/*, play_preparation*/) == ErrorOccurred)){
   		  err = &server->ReturnCopyOfError();
   		  result = ErrorOccurred;
  	}// send request for play
-#else
-#ifdef DEBUGLIB
-  Debug("pre play ack = -1");
-#endif  
-  if ((result != ErrorOccurred)&&
- 	(server->SendAck(server->getMaxRequestedBlock(), server->getMaxRequestedBlock(), play_preparation) == ErrorOccurred)){
-  		  err = &server->ReturnCopyOfError();
-  		  result = ErrorOccurred;
- 	}// send request for play
-#endif 	
   if (result != ErrorOccurred){
         result = change_state(state_play);	// this will make an imediate callback for trickplay.
-        if (server != NULL){
+        if (server != NULL)
         	server->send_message_StartNotification(initial_block);
-        	message_sent = true;
-        }
   }
 } 	// stream constructor
 
@@ -324,9 +310,16 @@ Stream::~Stream(void)
     	delete mysource; mysource = NULL;
   }
   else {
+    	int count = 0;
    	do {
+   	  	++count;
     		RemoveErr();
- 		mysink->DropBuffers();	
+ 		if (mysink->DropBuffers() == ErrorOccurred)
+ 			break;
+ 		if (count > 10) {
+ 			mysink->CloseStream();	
+ 			break;
+ 		}
     	}
     	while (change_state(state_stop) == ErrorOccurred);
     	delete mysource; mysource = NULL;
@@ -539,7 +532,7 @@ Stream::CheckEOS(int *play_state)			// call to Decoder
   else
   	(*play_state) = 0;
   
-  return ErrorState();
+  return NoError;
 }
 
 error_flag
@@ -618,6 +611,9 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
   							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60), 
   							   	getNECTime(), from);
 #endif
+		if (source != source_vod)
+  			change_state(state_play);
+			
   		callback_pending += callback_trickplay;
   		_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
   		if (e != NULL){
@@ -721,10 +717,9 @@ Stream::stop_stream(ULONG *new_block_number)
     (*new_block_number) = mysource->get_most_significant_block();
     
     (*new_block_number) += (NEC_databurstval << 1);	// ensure that the next block requested is greater than any sent
-  
   if (ErrorExists())
   	RemoveErr();	// this is no time to complain
-  	
+  
   return change_state(state_stop);
 }
 
@@ -818,7 +813,7 @@ Stream::timeslice(Statistics *stats)
      	 					err = &(myserver->ReturnCopyOfError());
      	 			}
      	 			else{
-     	 			  	message_sent = false;
+     	 			  	myserver->reset_message_sent();
      	 			  	callback_pending += callback_bufferswait;
      	 			  	if ((result != ErrorOccurred)&&(state != state_streamlive)){
      	 					callback_pending += callback_block;
@@ -857,9 +852,8 @@ Stream::timeslice(Statistics *stats)
   	// also calculate if we own all the tokens then we are starting the stream
   	// wait for more than buffer blocks
 
-  if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
+  if ((result == ErrorOccurred)&&(myserver != NULL)){
     	myserver->send_message_Error(err);
-    	message_sent = true;
   }
 
   return result;
@@ -876,20 +870,19 @@ Stream::server_inetevent(void)
   	err = &myserver->ReturnCopyOfError();
   	result = ErrorOccurred;
   } 
-  if ((event == COMMAND_startend_notification)&&(myserver != NULL)&&(!message_sent)){
+  if ((event == COMMAND_startend_notification)&&(myserver != NULL)){
   	if ((state == state_fast_rewind)||(state == state_backward_skip))
 		myserver->send_message_StartNotification(comms_result);        
         else{
        		result = change_state(state_endreceived);
 		myserver->send_message_EndNotification(comms_result);
 	}
-	message_sent = true;
   }
 
-  if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
+  if ((result == ErrorOccurred)&&(myserver != NULL)) {
     	myserver->send_message_Error(err);
-  	message_sent = true;
   }
+    	
   return result;
 }
 
@@ -906,10 +899,10 @@ Stream::DummyAckCall(void)
  		}
  		myserver->comms_flag = false;
   }
-  if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
+  if ((result == ErrorOccurred)&&(myserver != NULL)){
     	myserver->send_message_Error(err);
-    	message_sent = true;
   }
+
  return result;
 }
 
@@ -919,7 +912,7 @@ inline error_flag
 Stream::MPEGInterrupt(int buffer_descriptor)
 {
   int i;	// this runs under interrupt avoid changing other peoples variables
-  error_flag result = ErrorState();
+//  error_flag result = ErrorState();
   
   i = 0;
   while (i < NUM_MPEG_Tokens) {	// remember if num_blocks is zero we cannot touch it.
@@ -955,29 +948,25 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   	}// !stop
  }
 
-  if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
-    	myserver->send_message_Error(&err);
-    	message_sent = true;
-  }
-  return result;
+  //if ((result == ErrorOccurred)&&(myserver != NULL))
+  //  	myserver->send_message_Error(&err);
+
+  return NoError;//result;
 }
 #else
 inline error_flag
 Stream::MPEGInterrupt(int buffer_descriptor)
 {
-  error_flag result = ErrorState();
+  //error_flag result = ErrorState();
   int token_freed = -1;
-  
-  if (result == ErrorOccurred)
-  	return result;
-    
+      
   if ((buffers[0].in_use == claim_token)&&(buffer_descriptor >= (int)buffers[0].block->buffers)&&
       (buffer_descriptor <  (((int)buffers[0].block->buffers) + (buffers[0].block->max_buffers * sizeof(BitstreamBufferDescriptor))) )){
       	  	buffers[0].blocks_returned++;
       	  	
   		if (buffers[0].blocks_returned == buffers[0].block->num_buffers){	// if we have received all the blocks free it
   			
-  			if ((result = mysource->freeBlock(buffers[0].block)) == ErrorOccurred )
+  			if (mysource->freeBlock(buffers[0].block) == ErrorOccurred )
   				err = &mysource->ReturnCopyOfError();
   
   			buffers[0].block = NULL;
@@ -992,7 +981,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
       	  	buffers[1].blocks_returned++;
       	  	
   		if (buffers[1].blocks_returned == buffers[1].block->num_buffers){	// if we have received all the blocks free it
-  			if (( result = mysource->freeBlock(buffers[1].block)) == ErrorOccurred )
+  			if ( mysource->freeBlock(buffers[1].block) == ErrorOccurred )
   				err = &mysource->ReturnCopyOfError();
   
   			buffers[1].block = NULL;
@@ -1008,10 +997,8 @@ Stream::MPEGInterrupt(int buffer_descriptor)
 	if ((!(callback_pending & callback_bufferfree))||(state == state_stop)){
   		callback_pending += callback_bufferfree;	  	
     		_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
- 		if (e != NULL){
+ 		if (e != NULL)
   			MakeError(e);
-  			result = ErrorOccurred;
- 		}
  	}
  	
  	if (state != state_stop){
@@ -1019,11 +1006,10 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   			callback_pending -= callback_fullblocks;
   	}// !stop
   } 
-  if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
-    	myserver->send_message_Error(err);
-    	message_sent = true;
-  }
-  return result;
+  //if ((result == ErrorOccurred)&&(myserver != NULL))
+  //  	myserver->send_message_Error(err);
+    	
+  return NoError;//result;
 }
 #endif
 
@@ -1155,7 +1141,7 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
     		if (((stream->server_sd) == identifier)&&(identifier != -1)) {
         	   	if (code == Socket_Broken_Event){
         	   	  	stream->myserver->MakeError(IP_SocketError);
-        	   	  	err = &stream->ReturnCopyOfError();
+        	   	  	err = &(stream->myserver->ReturnCopyOfError());
         			stream->myserver->send_message_Error(err);
         		     	result = ErrorOccurred;
         		}
