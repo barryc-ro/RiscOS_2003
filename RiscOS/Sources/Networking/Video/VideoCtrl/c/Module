@@ -53,30 +53,9 @@
  */
 
 #if CMHG_VERSION < 516
-
   #define CMHG_CONST
-
 #else
-
   #define CMHG_CONST const
-
-#endif
-
-/*
- * TinySupport SWIs. This does not work if any library static data
- * is used within the module. This means errno (__errno) and __ctype
- * (as used by any macro call to is.... functions). If you re-enable
- * this SWI call, this module will fail to work at all.
- */
-
-#define NO_TINYSTUBS
-
-#ifdef ROM
-  #ifndef NO_TINYSTUBS
-    static _kernel_oserror *__ROM;
-    #define TinySupport_Share   (0x82c43)
-    #define TinySupport_Die     (0x82c41)
-  #endif
 #endif
 
 /*
@@ -106,6 +85,7 @@ static bool   upcallv_claimed                   = false;
 /* Local functions */
 
 static void              module_check_os_version      (void);
+static void              module_atexit                (void);
 static _kernel_oserror * clients_list                 (void);
 static void              module_tear_down             (void);
 
@@ -154,17 +134,6 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
   (void) cmd_fail;
   (void) podule_base;
 
-  #ifdef ROM
-    #ifndef NO_TINYSTUBS
-
-      __ROM = _swix(TinySupport_Share,
-                    _IN(0),
-
-                    pw);
-
-    #endif
-  #endif
-
   #ifdef TRACE
     {
       debug_device dev = TML_OUTPUT;
@@ -177,6 +146,12 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
     }
   #endif
 
+  dprintf(("", "\nHello\n\n"));
+
+  /* Keep this after debuglib initialisation or you won't */
+  /* see any debug output from within the atexit handler. */
+
+  atexit(module_atexit);
   module_check_os_version();
 
   #ifndef ROM
@@ -199,19 +174,21 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
     e = messages_file_open("Resources:$.Resources.VideoCtrl." "VideoCtrl" ".Messages");
   }
 
-  if (e != NULL)
-  {
-    #ifndef ROM
+  #if CMHG_VERSION < 530
 
-      (void) _swix(ResourceFS_DeregisterFiles,
-                   _IN(0),
+    /*
+     * Earlier CMHGs won't call the atexit() handler if we return an
+     * error here 'cos its bust. Could work around it but since there
+     * is a fixed version available, insist on it.
+     */
 
-                   messages_file());
+    #error You need CMHG 5.30 or later to build RTSPMB.
 
-    #endif
+  #else
 
-    return e;
-  }
+    if (e != NULL) return e;
+
+  #endif
 
   if (
        _swix(OS_AddCallBack,
@@ -228,9 +205,45 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
   /* callout library for dealing with those UpCalls.      */
 
   e = callout_init(pw); /* Must do it before claiming UpCallV, of course */
+  if (e != NULL) return e;
 
-  if (e == NULL) return module_claim_upcall_vector();
-  else           return e;
+  return module_claim_upcall_vector();
+}
+
+/**************************************************************/
+/* module_atexit()                                            */
+/*                                                            */
+/* atexit() handler for the module. Note that this is only    */
+/* correctly called if the module is built with CMHG 5.30 or  */
+/* later.                                                     */
+/**************************************************************/
+
+static void module_atexit(void)
+{
+  /* Get rid of the UpCallV handler */
+
+  module_release_upcall_vector();
+
+  /* Shut down the callout library, after ensuring we're not going */
+  /* to get any more UpCalls.                                      */
+
+  callout_final(module_wsp);
+
+  /* Shut down everything else */
+
+  module_tear_down();
+  protocol_free_protocols();
+  register_free_clients();
+  messages_file_close();
+
+  #ifndef ROM
+
+    (void) _swix(ResourceFS_DeregisterFiles,
+                 _IN(0),
+
+                 messages_file());
+
+  #endif
 }
 
 /**************************************************************/
@@ -258,43 +271,12 @@ _kernel_oserror * module_kill(int fatal, int podule, void * pw)
     callback_pending_flag = false;
   }
 
-  /* Get rid of the UpCallV handler */
-
-  module_release_upcall_vector();
-
-  /* Shut down the callout library, after ensuring we're not going */
-  /* to get any more UpCalls.                                      */
-
-  callout_final(module_wsp);
-
-  /* Shut down everything else */
-
-  module_tear_down();
-  protocol_free_protocols();
-  register_free_clients();
-  messages_file_close();
-
-  #ifndef ROM
-
-    (void) _swix(ResourceFS_DeregisterFiles,
-                 _IN(0),
-
-                 messages_file());
-
-  #endif
-
   (void) _swix(OS_ServiceCall,
                _INR(0,2),
 
                VideoControlModuleDying,
                Service_VideoControl,
                Module_VersionNumber);
-
-  #ifdef ROM
-    #ifndef NO_TINYSTUBS
-      if(!__ROM) _swix(TinySupport_Die, 0);
-    #endif
-  #endif
 
   return NULL;
 }
@@ -662,7 +644,7 @@ client * find_client_by_protocol_id(unsigned int id)
 }
 
 /**************************************************************/
-/* client_list()                                              */
+/* clients_list()                                             */
 /*                                                            */
 /* List registered clients. Used to be a debug-only command   */
 /* but was useful enough to be brought into normal builds.    */
@@ -670,25 +652,33 @@ client * find_client_by_protocol_id(unsigned int id)
 
 static _kernel_oserror * clients_list(void)
 {
-  client * list;
+  _kernel_oserror * e;
+  const char      * buffer = NULL;
+  size_t            len;
+  client          * list;
 
   if (client_list == NULL)
   {
-    printf("No clients are registered\n");
+    e = read_message("PC00", &buffer, &len);
+    if (e != NULL) return e;
+
+    printf("%.*s\n", len, buffer);
   }
   else
   {
-    size_t       len;
     const char * info;
 
-    printf("Client   PM SID   SWI base   Active\n");
+    e = read_message("PC01", &buffer, &len);
+    if (e != NULL) return e;
+
+    printf("%.*s\n", len, buffer);
 
     for (len = 0; len < 9; ++len)
     {
       printf("========");
     }
 
-    printf("=======\n");
+    printf("======\n");
 
     for (list = client_list; list; list = list->next)
     {
@@ -697,7 +687,7 @@ static _kernel_oserror * clients_list(void)
       info = c->protocol != 0 ? protocol_get_info_from_swi_base(c->protocol) : NULL;
       if (info == NULL) info = "-";
 
-      printf("%08X %08X %08X   %s\n",
+      printf("%08X %08X %08X   %-49s\n",
              (int) list,
              c->id,
              c->protocol,
