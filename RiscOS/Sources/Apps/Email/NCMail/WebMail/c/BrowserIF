@@ -46,7 +46,7 @@
 #define URL_OFFSET       236
 #define URL_PTR          (char *) 0x01800000
 
-#define DBOX             "remove=\"__dbox\""
+#define DBOX_TARGET      "__dbox"
 
 #define ARG_GRANULARITY  5
 
@@ -71,6 +71,11 @@ typedef struct
 
 
 /* ------------------------------------ FUNCTION PROTOTYPES ------------------------------------- */
+
+static bool  write_url_string (WimpMessage *const   message,
+                               string_value *const  string_val,
+                               const char *const    string,
+                               const size_t         string_size);
 
 static const char *  extract_indirect_string (
                          const urlopen_data *const  openurl,
@@ -140,104 +145,114 @@ static url_handler_t  url_handler[] =
 extern bool  browserif_sendurl (const char *const  url,
                                 const bool         dbox)
 {
-    const char *  _url = url;
-    char *        s    = NULL;
-    bool          rc   = false;
+    const size_t    url_size = strlen (url) + 1;
+    WimpMessage     message;
+    urlopen_data *  open = (urlopen_data *) &message.data;
+    bool            rc = true;
 
+    message.hdr.size = sizeof (message.hdr);
 
-    if (dbox)
+    if (dbox || url_size > sizeof (open->url))
     {
-        /* Append information to the URL to indicate that it is being used to
-         * control a dialogue box.
-         */
-        size_t  url_len = strlen (url);
+        /* Need to use indirect data in Open URL message */
+        memset (&open->indirect,
+                0,
+                sizeof (open->indirect));
 
-        if (url[url_len - 1] != '?')
+        message.hdr.size += sizeof (open->indirect);
+
+        if (write_url_string (&message,
+                              &open->indirect.url,
+                              url,
+                              url_size))
         {
-            /* Need to add '&' to separate variables */
-            ++url_len;
-        }
-
-        s = malloc (url_len + sizeof (DBOX));
-        if (s)
-        {
-            memcpy (s,
-                    url,
-                    url_len + 1);
-
-            if (url[url_len - 1] != '?')
+            if (dbox)
             {
-                strcat (s,
-                        "&");
+                if (!write_url_string (&message,
+                                       &open->indirect.target,
+                                       DBOX_TARGET,
+                                       sizeof (DBOX_TARGET)))
+                {
+                    rc = false;
+                }
             }
-
-            strcat (s,
-                    DBOX);
-
-            _url = s;
-        }
-        else
-        {
-            _url = NULL;
         }
     }
-
-    dprintf(("UI", "URL to be sent is: %s\n", _url));
-
-    if (_url)
-#if 1
+    else
     {
-        WimpMessage     message;
-        urlopen_data *  open = (urlopen_data *) &message.data;
-        size_t          url_size = strlen (_url) + 1;
-
-        /* TEMPORARILY USE THE ANT URL PROTOCOL UNTIL FRESCO'S HANDLING OF THE
-         * ACORN URI PROTOCOL IS FIXED.  THIS WILL *NOT* ACCEPT URLS LONGER
-         * THAN 236 BYTES.
-         */
-
-       if (url_size <= 236)
-       {
-           message.hdr.size = sizeof (WimpMessage);
-           message.hdr.your_ref = 0;
-           message.hdr.action_code = wimp_MOPENURL;
-           memcpy (open->url,
-                   _url,
-                   url_size);
-
-           if (wimp_send_message (Wimp_EUserMessageRecorded,
-                                  &message,
-                                  0,
-                                  0,
-                                  NULL) == NULL)
-           {
-               rc = true;
-           }
-       }
-
+        message.hdr.size += url_size;
+        memcpy (open->url,
+                url,
+                url_size);
     }
-#else
-    {
-        if (uri_dispatch (0,
-                          (char *) _url,
-                          0,
 
-                          NULL,
-                          NULL,
-                          NULL) == NULL)
+    dprintf(("UI", "URL to be sent is: %s\n", url));
+
+    if (rc)
+    {
+        /* Ensure message size is a 4 byte multiple */
+        message.hdr.size = (message.hdr.size + 3) & ~3;
+
+        message.hdr.your_ref = 0;
+        message.hdr.action_code = wimp_MOPENURL;
+
+        if (wimp_send_message (Wimp_EUserMessageRecorded,
+                               &message,
+                               0,
+                               0,
+                               NULL) == NULL)
         {
             rc = true;
         }
     }
-#endif
 
-    if (s)
+    return rc;
+}
+
+
+
+
+static bool  write_url_string (WimpMessage *const   message,
+                               string_value *const  string_val,
+                               const char *const    string,
+                               const size_t         string_size)
+{
+    int   space_left = sizeof(WimpMessage) - message->hdr.size;
+    bool  rc         = true;
+
+    if (string_size <= space_left)
     {
-        free (s);
+        /* offset is relative to data start */
+        string_val->offset = message->hdr.size - sizeof(message->hdr);
+        memcpy (message->data.bytes + string_val->offset,
+                string,
+                string_size);
+        message->hdr.size += string_size;
+    }
+    else
+    {
+        if (_swix (OS_Module,
+                   _IN (0) | _IN (3) | _OUT (2),
+
+                   OS_Module_Claim,
+                   string_size,
+
+                   &string_val->ptr) == NULL)
+        {
+             memcpy (string_val->ptr,
+                     string,
+                     string_size);
+        }
+        else
+        {
+            rc = false;
+        }
     }
 
     return rc;
 }
+
+
 
 
 /************************************************************************/
@@ -431,6 +446,7 @@ static bool  process_ncmail (char *             url,
         {
             arg = process_ncmail_args_file (body_filename,
                                             &count);
+            nb_file_delete (1, (char *) body_filename, NULL);
         }
         else
         {
