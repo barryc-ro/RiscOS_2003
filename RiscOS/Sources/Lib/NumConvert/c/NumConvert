@@ -1,0 +1,1213 @@
+/*****************************************************************************/
+/* File:    numconvert.c                                                     */
+/* Purpose: Telephone number conversions                                     */
+/* Owner:   Mark RISON                                                       */
+/* History: 1997-08-18  MGR   Created                                        */
+/*          1997-08-20  MGR   Add output buffer size checking                */
+/*                            Add support for extensions in entered          */
+/*          1998-02-16  MGR   Add hac^H^H^Hsupport for USA numbering quirks  */
+/*                            Remove C++ comments                            */
+/*                            Add input legality checks                      */
+/*****************************************************************************/
+
+#include "numconvert.h"
+
+#include <string.h>
+
+
+/******************************************************************************
+ *
+ * Abbreviations
+ *
+ * op:	Outside line prefix, e.g. 9
+ * opp:	Outside line pause/wait after prefix, e.g. W
+ * ip:	International prefix, e.g. 00 or 011
+ * ipp:	International pause/wait after prefix, e.g. ,
+ * np:	National prefix, e.g. 0 or 1
+ * cc:	Country code, e.g. 44 or 1
+ * ac:	Area code, e.g. 1223 or 617
+ *
+ * Terminology
+ *
+ * Extension number:	number on local PBX
+ * Outside number:	number not on local PBX (needs outside line prefix
+ *			if dialled from PBX)
+ * Internal number:	for outside numbers:
+ *				'+' or 'a' or 'b' or 'c', followed by country code,
+ *				followed by area code if any, followed by local number
+ *				'a' means "force np and ac if in USA, else as '+'"
+ *				'b' means "force ac if in USA, else as '+'"
+ *				'c' means "force np if in USA, else as '+'"
+ *			for extension numbers:
+ *				'-', followed by extension number
+ *			use #defined tokens for immunity to change
+ * DTMF digits:		0-9, #, * and A-D.
+ * Captured number:	number captured e.g. from DTMF digits sent by
+ *			local fax machine
+ * Entered number:	number entered e.g. in address book; has no op
+ *			but can have leading '+' or 'x'
+ * Dial number:		number suitable for appending to ATD command;
+ *			can contain DTMF digits, T or P, and W and/or commas.
+ * Email number:	number used in email headers:
+ *			'+', followed by country code, followed by one
+ *			underscore and area code if present, followed by
+ *			two underscores and local number
+ *
+ *****************************************************************************/
+
+
+/* Internal function declarations */
+static int numconvert_external_to_internal
+              (const char *externalnum
+              , char *internalnum
+              , int internalnumsize
+              , const char *const op
+              , const char *const ip
+              , const char *const np
+              , const char *const cc
+              , const char *const ac);
+
+static int numconvert_internal_to_external
+              (const char *internalnum
+              , char *externalnum
+              , int externalnumsize
+              , const char *const dialling
+              , const char *const extension
+              , const char *const op
+              , const char *const opp
+              , const char *const ip
+              , const char *const ipp
+              , const char *const np
+              , const char *const cc
+              , const char *const ac);
+
+
+/******************************************************************************
+ *
+ * numconvert_strip
+ *
+ * Strips a character from a string, throughout.
+ *
+ * Inputs:	in	(input string)
+ *		out	(pointer to output string)
+ *		strip	(character to strip)
+ *
+ * Outputs:	out	(stripped string)
+ *
+ * Assumes:	out big enough
+ *
+ * Returns:	nothing
+ *
+ *****************************************************************************/
+
+extern void numconvert_strip (const char *in, char *out, const char strip)
+{
+   char c;
+
+   while ((c = *in++) != '\0') {
+
+      if (c != strip)
+         *out++ = c;
+
+   }
+
+   *out = '\0';
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_captured_to_internal
+ *
+ * Converts captured number to internal number.
+ *
+ * op should be NULL or "" if there is no outside line prefix.
+ *
+ * np should be NULL or "" if there is no national prefix
+ * (ac is ignored in this case).
+ *
+ * Inputs:	capturednum	(captured number)
+ *		internalnum	(pointer to internal number)
+ *		internalnumsize	(sizeof internalnum)
+ *		op
+ *		ip
+ *		np
+ *		cc
+ *		ac
+ *
+ * Outputs:	internalnum	(converted internal number)
+ *
+ * Assumes:	capturednum contains only DTMF digits
+ *		op, ip, np, cc and ac contain only DTMF digits
+ *
+ * Returns:	non-zero on error
+ *
+ *****************************************************************************/
+
+extern int numconvert_captured_to_internal
+              (const char *capturednum
+              , char *internalnum
+              , int internalnumsize
+              , const char *const op
+              , const char *const ip
+              , const char *const np
+              , const char *const cc
+              , const char *const ac)
+{
+   /* Check input legality */
+   /* (numconvert_external_to_internal allows leading 'x' or '+') */
+   if (strspn (capturednum, NUMCONVERT_DTMFDIGITS) != strlen (capturednum))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   return numconvert_external_to_internal (capturednum, internalnum
+             , internalnumsize, op, ip, np, cc, ac);
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_entered_to_internal
+ *
+ * Converts entered number to internal number.
+ *
+ * np should be NULL or "" if there is no national prefix
+ * (ac is ignored in this case).
+ *
+ * To ensure the entered number contains only valid characters, the following
+ * procedure is recommended:
+ *
+ * - use a validation string to only allow DTMF digits, '+', 'x' and space
+ * - strip spaces
+ * - take note of the first char
+ * - if it is '+' or 'x', replace it with a DTMF digit (0, say)
+ * - strip '+' and 'x'
+ * - if the first char was '+' or 'x', reinstate it
+ *
+ * [One wants to allow '+' or 'x' to be entered, but only as the first
+ * (non-space) character.]
+ *
+ * Inputs:	enterednum	(entered number)
+ *		internalnum	(pointer to internal number)
+ *		internalnumsize	(sizeof internalnum)
+ *		ip
+ *		np
+ *		cc
+ *		ac
+ *
+ * Outputs:	internalnum	(converted internal number)
+ *
+ * Assumes:	enterednum contains only DTMF digits and optionally a
+ *		leading '+'/'x'; it does not contain an outside line prefix.
+ *		ip, np, cc and ac contain only DTMF digits.
+ *
+ * Returns:	non-zero on error
+ *
+ *****************************************************************************/
+
+extern int numconvert_entered_to_internal
+              (const char *enterednum
+              , char *internalnum
+              , int internalnumsize
+              , const char *const ip
+              , const char *const np
+              , const char *const cc
+              , const char *const ac)
+{
+   return numconvert_external_to_internal (enterednum, internalnum
+             , internalnumsize, "", ip, np, cc, ac);
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_internal_to_display
+ *
+ * Converts internal number to user-friendly display number
+ * (as close as possible to a local number).  No outside line
+ * prefix is used.
+ *
+ * This routine is also suitable to allow user editing, followed by
+ * reconversion to internal number using numconvert_entered_to_internal.
+ *
+ * np should be NULL or "" if there is no national prefix
+ * (ac is ignored in this case).
+ *
+ * Inputs:	internalnum	(internal number)
+ *		displaynum	(pointer to display number)
+ *		displaynumsize	(sizeof displaynum)
+ *		ip
+ *		np
+ *		cc
+ *		ac
+ *
+ * Outputs:	displaynum	(converted display number)
+ *
+ * Assumes:	internalnum contains only DTMF digits and a leading
+ *		character in the set NUMCONVERT_PREFIXES.
+ *		ip, np, cc and ac contain only DTMF digits.
+ *
+ * Returns:	non-zero on error
+ *
+ *****************************************************************************/
+
+extern int numconvert_internal_to_display
+              (const char *internalnum
+              , char *displaynum
+              , int displaynumsize
+              , const char *const ip
+              , const char *const np
+              , const char *const cc
+              , const char *const ac)
+{
+   return numconvert_internal_to_external (internalnum, displaynum, displaynumsize
+             , NULL, "x", NULL, NULL, ip, NULL, np, cc, ac);
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_internal_to_dial
+ *
+ * Converts internal number to dial number (suitable for appending
+ * to ATD).
+ *
+ * np should be NULL or "" if there is no national prefix
+ * (ac is ignored in this case).
+ * op should be NULL or "" if there is no outside line prefix
+ * (opp is ignored in this case).
+ * opp should be NULL or "" if there is no pause/wait.
+ * ipp should be NULL or "" if there is no pause/wait.
+ *
+ * Inputs:	internalnum	(internal number)
+ *		dialnum		(pointer to dial number)
+ *		dialnumsize	(sizeof dial)
+ *		dialling	(dialling type)
+ *		op
+ *		opp
+ *		ip
+ *		ipp
+ *		np
+ *		cc
+ *		ac
+ *
+ * Outputs:	dialnum		(converted dial number)
+ *
+ * Assumes:	internalnum contains only DTMF digits and a leading '+'/'x'
+ *		op, ip, np, cc and ac contain only DTMF digits
+ *		opp and ipp contain NULL or "" or "W" or ","
+ *		dialling contains NULL or "" or "T" or "P"
+ *
+ * Returns:	non-zero on error
+ *
+ *****************************************************************************/
+
+extern int numconvert_internal_to_dial
+              (const char *internalnum
+              , char *dialnum
+              , int dialnumsize
+              , const char *const dialling
+              , const char *const op
+              , const char *const opp
+              , const char *const ip
+              , const char *const ipp
+              , const char *const np
+              , const char *const cc
+              , const char *const ac)
+{
+   return numconvert_internal_to_external (internalnum, dialnum, dialnumsize
+             , dialling, NULL, op, opp, ip, ipp, np, cc, ac);
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_email_to_internal
+ *
+ * Converts email number to internal number.
+ *
+ * Inputs:	emailnum	(email number)
+ *		internalnum	(pointer to internal number)
+ *
+ * Outputs:	internalnum	(converted internal number)
+ *
+ * Assumes:	internalnum big enough (to be sure, make internalnum as big as emailnum)
+ *		emailnum contains only DTMF digits, underscores, and a leading '+'
+ *
+ * Returns:	nothing
+ *
+ *****************************************************************************/
+
+extern void numconvert_email_to_internal
+               (const char *emailnum
+               , char *internalnum)
+{
+   /* Just zap the underscores! */
+   numconvert_strip (emailnum, internalnum, '_');
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_usernum_to_email
+ *
+ * Converts the user's number to email number.
+ *
+ * ac should be NULL or "" if there is no area code.
+ *
+ * Inputs:	usernum		(user (local) number)
+ *		emaillnum	(pointer to email number)
+ *		cc
+ *		ac
+ *
+ * Outputs:	emaillnum	(converted email number)
+ *
+ * Assumes:	emailnum big enough (to be sure, make emailnum 4 characters bigger
+ *		than usernum plus cc plus ac)
+ *		usernum, cc and ac contain only DTMF digits
+ *
+ * Returns:	nothing
+ *
+ *****************************************************************************/
+
+extern void numconvert_usernum_to_email
+               (const char *const usernum
+               , char *emailnum
+               , const char *const cc
+               , const char *const ac)
+{
+   /* Just concatenate! */
+
+   *emailnum++ = '+';
+
+   strcpy (emailnum, cc);
+
+   if (ac && *ac) {
+
+      strcat (emailnum, "_");
+      strcat (emailnum, ac);
+
+   }
+
+   strcat (emailnum, "__");
+   strcat (emailnum, usernum);
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_internal_to_external
+ *
+ * Converts internal number to external (display or dial) number.
+ *
+ * np should be NULL or "" if there is no national prefix
+ * (ac is ignored in this case).
+ * op should be NULL or "" if there is no outside line prefix
+ * (opp is ignored in this case).
+ * opp should be NULL or "" if there is no pause/wait.
+ * ipp should be NULL or "" if there is no pause/wait.
+ * extension should be NULL or "" if no extension char is wanted.
+ *
+ * Inputs:	internalnum	(internal number)
+ *		externalnum	(pointer to external number)
+ *		externalnumsize	(sizeof externalnum)
+ *		dialling	(dialling type)
+ *		extension	(extension char)
+ *		op
+ *		opp
+ *		ip
+ *		ipp
+ *		np
+ *		cc
+ *		ac
+ *
+ * Outputs:	externalnum	(converted external number)
+ *
+ * Assumes:	internalnum contains only DTMF digits and a leading '+'/'x'
+ *		op, ip, np, cc and ac contain only DTMF digits
+ *		opp and ipp contain NULL or "" or "W" or ","
+ *		dialling contains NULL or "" or "T" or "P"
+ *
+ * Returns:	non-zero on error
+ *
+ *****************************************************************************/
+
+static int numconvert_internal_to_external
+              (const char *internalnum
+              , char *externalnum
+              , int externalnumsize
+              , const char *const dialling
+              , const char *const extension
+              , const char *const op
+              , const char *const opp
+              , const char *const ip
+              , const char *const ipp
+              , const char *const np
+              , const char *const cc
+              , const char *const ac)
+{
+   /* Check input legality */
+   /* Don't check dialling, opp or ipp to allow other unforseen chars */
+   if (strspn (ip, NUMCONVERT_DTMFDIGITS) != strlen (ip)
+      || strspn (cc, NUMCONVERT_DTMFDIGITS) != strlen (cc))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   if (op && *op
+      && strspn (op, NUMCONVERT_DTMFDIGITS) != strlen (op))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   if (np && *np
+      && (strspn (np, NUMCONVERT_DTMFDIGITS) != strlen (np)
+         || strspn (ac, NUMCONVERT_DTMFDIGITS) != strlen (ac)))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   if (strspn (internalnum, NUMCONVERT_PREFIXES) == 0
+      || strspn (internalnum + 1, NUMCONVERT_DTMFDIGITS) != strlen (internalnum) - 1)
+      return NUMCONVERT_ILLEGALCHAR;
+
+   /* Tone/pulse dialling? */
+   if (dialling) {
+
+      externalnumsize -= strlen (dialling);
+      if (externalnumsize >= 1) /* 1 for NUL */
+         strcpy (externalnum, dialling);
+      else
+         return NUMCONVERT_TOOSMALL;
+
+   } else {
+
+      if (externalnumsize >= 1)
+         *externalnum = '\0';
+      else
+         return NUMCONVERT_TOOSMALL;
+
+   }
+
+   /* Does the internal number refer to an extension? */
+   if (*internalnum == NUMCONVERT_EXTENSION) {
+
+      /* Yes, so just return that */
+      if (externalnumsize >= strlen (internalnum + 1) + (extension ? strlen (extension) : 0) + 1) { /* 1 for NUL */
+
+         if (extension) strcat (externalnum, extension);
+         strcat (externalnum, internalnum + 1);
+         return NUMCONVERT_OK;
+
+      } else
+
+         return NUMCONVERT_TOOSMALL;
+
+   } else {
+
+      /* No, so insert the outside line stuff */
+      if (op && *op) {
+
+         externalnumsize -= strlen (op) + (opp && *opp ? strlen (opp) : 0);
+         if (externalnumsize >= 1) { /* 1 for NUL */
+
+            strcat (externalnum, op);
+            if (opp && *opp) strcat (externalnum, opp);
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+   }
+
+   /* USA-specific hack */
+   if (strcmp (cc, "1") == 0
+      && strlen (internalnum) >= 5
+      && internalnum[1] == '1') {
+
+      /* Case a: force both np and ac */
+      if (internalnum[0] == NUMCONVERT_NPANDAC) {
+
+         if (externalnumsize >= strlen (internalnum + 1) + 1) { /* 1 for NUL */
+
+            strcat (externalnum, internalnum + 1);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+      /* Case b: force ac */
+      if (internalnum[0] == NUMCONVERT_AC) {
+
+         if (externalnumsize >= strlen (internalnum + 2) + 1) { /* 1 for NUL */
+
+            strcat (externalnum, internalnum + 2);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+      /* Case c: force np */
+      if (internalnum[0] == NUMCONVERT_NP) {
+
+         if (externalnumsize >= strlen (internalnum + 5) + 1 + 1) { /* 1 for NUL, 1 for "1" */
+
+            strcat (externalnum, "1");
+            strcat (externalnum, internalnum + 5);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+   }
+
+   /* Assume we must be dealing with an outside number, then (leading '+') */
+   ++internalnum;
+
+   /* Does the internal number start with the country code? */
+   if (strncmp (internalnum, cc, strlen (cc)) != 0) {
+
+      /* No, so prepend the international prefix, and return that */
+      if (externalnumsize >= strlen (internalnum) + strlen (ip)
+                         + (ipp && *ipp ? strlen (ipp) : 0) + 1) { /* 1 for NUL */
+
+         strcat (externalnum, ip);
+         if (ipp && *ipp) strcat (externalnum, ipp);
+         strcat (externalnum, internalnum);
+         return NUMCONVERT_OK;
+
+      } else
+
+         return NUMCONVERT_TOOSMALL;
+
+   } else {
+
+      /* Yes; strip it */
+      internalnum += strlen (cc);
+
+   }
+
+   /* Are we potentially expecting a national prefix? */
+   if (np && *np) {
+
+      /* Does the internal number start with the area code? */
+      if (strncmp (internalnum, ac, strlen (ac)) != 0) {
+
+         /* No, so prepend the national prefix, and return that */
+         if (externalnumsize >= strlen (internalnum) + strlen (np) + 1) { /* 1 for NUL */
+
+            strcat (externalnum, np);
+            strcat (externalnum, internalnum);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      } else {
+
+         /* Yes; strip it */
+         internalnum += strlen (ac);
+
+      }
+
+   }
+
+   /* So we're left with a local number; return it */
+   if (externalnumsize >= strlen (internalnum) + 1) { /* 1 for NUL */
+
+      strcat (externalnum, internalnum);
+      return NUMCONVERT_OK;
+
+   }
+
+   return NUMCONVERT_TOOSMALL;
+}
+
+
+/******************************************************************************
+ *
+ * numconvert_external_to_internal
+ *
+ * Converts external (entered or captured) number to internal number.
+ *
+ * op should be NULL or "" if there is no outside line prefix
+ * or if no outside line prefix is expected.
+ *
+ * np should be NULL or "" if there is no national prefix
+ * (ac is ignored in this case).
+ *
+ * Inputs:	externalnum	(external number)
+ *		internalnum	(pointer to internal number)
+ *		internalnumsize	(sizeof internalnum)
+ *		op
+ *		ip
+ *		np
+ *		cc
+ *		ac
+ *
+ * Outputs:	internalnum	(converted internal number)
+ *
+ * Assumes:	externalnum contains only DTMF digits and optionally a
+ *		leading '+'/'x'; it can contain an outside line prefix.
+ *		op, ip, np, cc and ac contain only DTMF digits.
+ *
+ * Returns:	non-zero on error
+ *
+ *****************************************************************************/
+
+static int numconvert_external_to_internal
+              (const char *externalnum
+              , char *internalnum
+              , int internalnumsize
+              , const char *const op
+              , const char *const ip
+              , const char *const np
+              , const char *const cc
+              , const char *const ac)
+{
+   /* Check input legality */
+   if (strspn (ip, NUMCONVERT_DTMFDIGITS) != strlen (ip)
+      || strspn (cc, NUMCONVERT_DTMFDIGITS) != strlen (cc))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   if (np && *np
+      && (strspn (np, NUMCONVERT_DTMFDIGITS) != strlen (np)
+         || strspn (ac, NUMCONVERT_DTMFDIGITS) != strlen (ac)))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   if (op && *op
+      && strspn (op, NUMCONVERT_DTMFDIGITS) != strlen (op))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   if (*externalnum == '+' || *externalnum == 'x'
+         ? strspn (externalnum + 1, NUMCONVERT_DTMFDIGITS) != strlen (externalnum) - 1
+         : strspn (externalnum, NUMCONVERT_DTMFDIGITS) != strlen (externalnum))
+      return NUMCONVERT_ILLEGALCHAR;
+
+   /* Are we potentially expecting an outside line prefix? */
+   if (op && *op) {
+
+      /* Does the captured number start with it? */
+      if (strncmp (externalnum, op, strlen (op)) == 0) {
+
+         /* Yes, so strip the prefix */
+         externalnum += strlen (op);
+
+      } else {
+
+         /* No, so it must be an extension; return it */
+         if (internalnumsize >= strlen (externalnum) + 2) { /* 1 for 'x', 1 for NUL */
+
+            *internalnum++ = NUMCONVERT_EXTENSION;
+            strcpy (internalnum, externalnum);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+   }
+
+   /* Are we perchance dealing with an extension? */
+   if (*externalnum == 'x') {
+
+      /* Just return it! */
+      if (internalnumsize >= strlen (externalnum) + 1) { /* 1 for NUL */
+
+         strcpy (internalnum, externalnum);
+         internalnum[0] = NUMCONVERT_EXTENSION; /* In case not 'x'! */
+         return NUMCONVERT_OK;
+
+      } else
+
+         return NUMCONVERT_TOOSMALL;
+
+   }
+
+   /* We'll be generating an outside (international) number */
+   if (--internalnumsize >= 0)
+
+      *internalnum++ = NUMCONVERT_INTERNATIONAL;
+
+   else
+
+      return NUMCONVERT_TOOSMALL;
+
+   /* Does the entered number start with the international prefix? */
+   if (strncmp (externalnum, ip, strlen (ip)) == 0) {
+
+      /* Yes, so strip the prefix and return the rest */
+      if (internalnumsize >= strlen (externalnum + strlen (ip)) + 1) { /* 1 for NUL */
+
+         strcpy (internalnum, externalnum + strlen (ip));
+         return NUMCONVERT_OK;
+
+      } else
+
+         return NUMCONVERT_TOOSMALL;
+
+   }
+
+   /* Does the entered number start with '+'? */
+   if (*externalnum == '+') {
+
+      /* Yes, so strip the prefix and return the rest */
+      if (internalnumsize >= strlen (externalnum + 1) + 1) { /* 1 for NUL */
+
+         strcpy (internalnum, externalnum + 1);
+         return NUMCONVERT_OK;
+
+      } else
+
+         return NUMCONVERT_TOOSMALL;
+
+   }
+
+   /* USA-specific hack */
+   if (strcmp (cc, "1") == 0) {
+
+      /* Note internalnumsize has been decremented, and internalnum incremented;
+         this results in a number of hacky "- 1"s and "+ 1"s below...            */
+
+      /* Does the entered number have 11 digits,
+         starting with 1 and area code?          */
+      if (strlen (externalnum) == 11
+         && strlen (ac) == 3 /* Just in case... */
+         && externalnum[0] == '1'
+         && externalnum[1] == ac[0]
+         && externalnum[2] == ac[1]
+         && externalnum[3] == ac[2]) {
+
+         /* Yes, so return last 10 digits, with "a1" prepended */
+         if (internalnumsize + 1 >= strlen (externalnum + 1) + 2 + 1) { /* 1 for NUL, 1 for "a1" */
+
+            strcpy (internalnum - 1, "a1");
+            strcat (internalnum - 1, externalnum + 1);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+      /* Does the entered number have 10 digits? */
+      if (strlen (externalnum) == 10) {
+
+         /* Yes, so return it, with "b1" prepended */
+         if (internalnumsize + 1 >= strlen (externalnum) + 2 + 1) { /* 1 for NUL, 1 for "b1" */
+
+            strcpy (internalnum - 1, "b1");
+            strcat (internalnum - 1, externalnum);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+      /* Does the entered number have 8 digits?
+         starting with 1?                       */
+      if (strlen (externalnum) == 8
+         && *externalnum == '1') {
+
+         /* Yes, so return last 7 digits, with "c1" and area code prepended */
+         if (internalnumsize + 1 >= strlen (externalnum + 1) + strlen (ac) + 2 + 1) { /* 1 for NUL, 1 for "c1" */
+
+            strcpy (internalnum - 1, "c1");
+            strcat (internalnum - 1, ac);
+            strcat (internalnum - 1, externalnum + 1);
+            return NUMCONVERT_OK;
+
+         } else
+
+            return NUMCONVERT_TOOSMALL;
+
+      }
+
+   }
+
+   /* Are we potentially expecting a national prefix, and if so,
+      does the entered number start with the national prefix?    */
+   if (np && *np && strncmp (externalnum, np, strlen (np)) == 0) {
+
+      /* Yes, so strip the prefix and return the rest
+         with country code prepended                  */
+      if (internalnumsize >= strlen (externalnum + strlen (np)) + strlen (cc) + 1) { /* 1 for NUL */
+
+         strcpy (internalnum, cc);
+         strcat (internalnum, externalnum + strlen (np));
+         return NUMCONVERT_OK;
+
+      } else
+
+         return NUMCONVERT_TOOSMALL;
+
+   }
+
+   /* So must be a local number; return it with the country and
+      area (if present) codes prepended                         */
+   if (internalnumsize >= strlen (externalnum) + strlen (cc)
+                          + (np && *np ? strlen (ac) : 0) + 1) { /* 1 for NUL */
+
+      strcpy (internalnum, cc);
+      if (np && *np) strcat (internalnum, ac);
+      strcat (internalnum, externalnum);
+      return NUMCONVERT_OK;
+
+   }
+
+   return NUMCONVERT_TOOSMALL;
+}
+
+
+#ifdef NumConvert_TESTHARNESS
+
+/* Test routines */
+
+/*
+#include "swis.h"
+*/
+#include "stdio.h"
+#include "stdlib.h"
+
+#define isdtmf(x) ((x >= '0' && x <= '9') \
+                  || x == '*' || x == '#' \
+                  || (x >= 'A' && x <= 'D'))
+
+void captoint_ (char *captured, char *op, char *np, char *ac, char *type)
+{
+   char internal[256];
+   int r, l;
+   r = numconvert_captured_to_internal (captured, internal, sizeof internal
+          , op, "00", np, "44", ac);
+   if (!r) {
+      printf ("Captured %s converted to internal %s (%s).\n", captured, internal, type);
+      l = strlen (internal) + 1;
+      r = numconvert_captured_to_internal (captured, internal, l
+             , op, "00", np, "44", ac);
+      if (r)
+         printf ("*** Failure when just big enough!\n");
+      r = numconvert_captured_to_internal (captured, internal, l - 1
+             , op, "00", np, "44", ac);
+      if (!r)
+         printf ("*** Success when just too small!\n");
+      r = numconvert_captured_to_internal (captured, internal, 1
+             , op, "00", np, "44", ac);
+      if (!r)
+         printf ("*** Success when size 1!\n");
+      r = numconvert_captured_to_internal (captured, internal, 0
+             , op, "00", np, "44", ac);
+      if (!r)
+         printf ("*** Success when size 0!\n");
+   } else
+      printf ("*** Captured %s conversion to internal failed (%s): %i!\n", captured, type, r);
+}
+
+void captoint (char *captured)
+{
+   captoint_ (captured, "9", "0", "1223", "normal");
+}
+
+void captointnoarea (char *captured)
+{
+   captoint_ (captured, "9", "", NULL, "no area");
+}
+
+void captointnoprefix (char *captured)
+{
+   captoint_ (captured, NULL, "0", "1223", "no prefix");
+}
+
+void inttodisp_ (char *internal, char *ip, char *cc, char *np, char *ac, char *type)
+{
+   char display[256];
+   char newinternal[256];
+   int r, rr, l;
+   r = numconvert_internal_to_display (internal, display, sizeof display
+          , ip, np, cc, ac);
+   if (!r) {
+      printf ("Internal %s converted to display %s (%s).\n", internal, display, type);
+      l = strlen (display) + 1;
+      rr = numconvert_entered_to_internal (display, newinternal, sizeof newinternal
+              , ip, np, cc, ac);
+      if (!rr) {
+         if (strcmp (internal, newinternal) != 0)
+            printf ("*** Reconverted differently %s -> %s -> %s!\n", internal, display, newinternal);
+#if 0
+         else
+            printf ("Reconverted %s -> %s -> %s\n", internal, display, newinternal);
+#endif
+      } else
+         printf ("*** Failed to reconvert to internal!\n");
+      r = numconvert_internal_to_display (internal, display, l
+             , ip, np, cc, ac);
+      if (r)
+         printf ("*** Failure when just big enough!\n");
+      r = numconvert_internal_to_display (internal, display, l - 1
+             , ip, np, cc, ac);
+      if (!r)
+         printf ("*** Success when just too small!\n");
+      r = numconvert_internal_to_display (internal, display, 1
+             , ip, np, cc, ac);
+      if (!r)
+         printf ("*** Success when size 1!\n");
+      r = numconvert_internal_to_display (internal, display, 0
+             , ip, np, cc, ac);
+      if (!r)
+         printf ("*** Success when size 0!\n");
+   } else
+      printf ("*** Internal %s conversion to display failed (%s): %i!\n", internal, type, r);
+}
+
+void inttodisp (char *internal)
+{
+   inttodisp_ (internal, "00", "44", "0", "1223", "normal");
+}
+
+void inttodispusa (char *internal)
+{
+   inttodisp_ (internal, "011", "1", "1", "617", "USA (617)");
+}
+
+void inttodispnoarea (char *internal)
+{
+   inttodisp_ (internal, "00", "44", NULL, "", "no area");
+}
+
+void emailtoint (char *email)
+{
+   char internal[256];
+   numconvert_email_to_internal (email, internal);
+   printf ("Email %s converted to internal %s.\n", email, internal);
+}
+
+void usertoemail (int area)
+{
+   char email[256];
+   numconvert_usernum_to_email ("725258", email, "44", area ? "1223" : NULL);
+   printf ("User %s (%s area) converted to email %s.\n", "725258"
+          , area ? "with" : "no", email);
+}
+
+void inttodial_ (char *internal, char *ip, char *cc, char *tp
+                , char *op, char *opp, char *ipp, char *np, char *ac
+                , char *type)
+{
+   char display[256];
+   int r, l;
+   r = numconvert_internal_to_dial (internal, display, sizeof display
+          , tp, op, opp, ip, ipp, np, cc, ac);
+   if (!r) {
+      printf ("Internal %s converted to dial ATD%s (%s).\n", internal, display, type);
+      l = strlen (display) + 1;
+      r = numconvert_internal_to_dial (internal, display, l
+             , tp, op, opp, ip, ipp, np, cc, ac);
+      if (r)
+         printf ("*** Failure when just big enough!\n");
+      r = numconvert_internal_to_dial (internal, display, l - 1
+             , tp, op, opp, ip, ipp, np, cc, ac);
+      if (!r)
+         printf ("*** Success when just too small!\n");
+      r = numconvert_internal_to_dial (internal, display, 1
+             , tp, op, opp, ip, ipp, np, cc, ac);
+      if (!r)
+         printf ("*** Success when size 1!\n");
+      r = numconvert_internal_to_dial (internal, display, 0
+             , tp, op, opp, ip, ipp, np, cc, ac);
+      if (!r)
+         printf ("*** Success when size 0!\n");
+   } else
+      printf ("*** Internal %s conversion to dial failed (%s): %i!\n", internal, type, r);
+}
+
+void inttodial (char *internal)
+{
+   inttodial_ (internal, "00", "44", NULL, "9", "W", ",", "0", "1223", "no T/P");
+}
+
+void inttodialusa (char *internal)
+{
+   inttodial_ (internal, "011", "1", NULL, "9", "W", ",", "1", "617", "no T/P, USA (617)");
+}
+
+void inttodialnoarea (char *internal)
+{
+   inttodial_ (internal, "00", "44", "T", "9", "W", "", NULL, "", "T, no area and no ipp");
+}
+
+void inttodialnoprefix (char *internal)
+{
+   inttodial_ (internal, "00", "44", "P", NULL, "", NULL, "0", "1223", "P, no prefix and no ipp");
+}
+
+void inttodialnoprefixusa (char *internal)
+{
+   inttodial_ (internal, "011", "1", "P", NULL, "", NULL, "1", "617", "P, no prefix and no ipp, USA (617)");
+}
+
+void enttoint_ (char *captured, char *ip, char *cc, char *np, char *ac, char *type)
+{
+   char internal[256];
+   int r, l;
+   r = numconvert_entered_to_internal (captured, internal, sizeof internal
+      , ip, np, cc, ac);
+   if (!r) {
+      printf ("Entered %s converted to internal %s (%s).\n", captured, internal, type);
+      l = strlen (internal) + 1;
+      r = numconvert_entered_to_internal (captured, internal, l
+         , ip, np, cc, ac);
+      if (r)
+         printf ("*** Failure when just big enough!\n");
+      r = numconvert_entered_to_internal (captured, internal, l - 1
+         , ip, np, cc, ac);
+      if (!r)
+         printf ("*** Success when just too small!\n");
+      r = numconvert_entered_to_internal (captured, internal, 1
+         , ip, np, cc, ac);
+      if (!r)
+         printf ("*** Success when size 1!\n");
+      r = numconvert_entered_to_internal (captured, internal, 0
+         , ip, np, cc, ac);
+      if (!r)
+         printf ("*** Success when size 0!\n");
+   } else
+      printf ("*** Entered %s conversion to internal failed (%s): %i!\n", captured, type, r);
+}
+
+void enttoint (char *captured)
+{
+   enttoint_ (captured, "00", "44", "0", "1223", "normal");
+}
+
+void enttointusa (char *captured)
+{
+   enttoint_ (captured, "011", "1", "1", "617", "USA (617)");
+}
+
+void enttointnoarea (char *captured)
+{
+   enttoint_ (captured, "00", "44", "", NULL, "no area");
+}
+
+int main (void)
+{
+  /*
+   system ("Spool mem:checkconv");
+   _swix (OS_WriteI + 20, 0);
+   _swix (OS_WriteI + 26, 0);
+   _swix (OS_WriteI + 12, 0);
+   */
+   captoint ("5258");
+   captoint ("9725258");
+   captoint ("901223725258");
+   captoint ("900441223725258");
+   captointnoarea ("5258");
+   captointnoarea ("9725258");
+   captointnoarea ("90044725258");
+   captointnoprefix ("725258");
+   captointnoprefix ("01223725258");
+   captointnoprefix ("00441223725258");
+   inttodisp ("-5258");
+   inttodisp ("+441223725258");
+   inttodisp ("+4412345678");
+   inttodisp ("+41227331136");
+   inttodispnoarea ("-5258");
+   inttodispnoarea ("+44725258");
+   inttodispnoarea ("+41227331136");
+   emailtoint ("+44_1223__725258");
+   emailtoint ("+44__725258");
+   usertoemail (0);
+   usertoemail (1);
+   inttodial ("-5258");
+   inttodial ("+441223725258");
+   inttodial ("+4412345678");
+   inttodial ("+41227331136");
+   inttodialnoarea ("-5258");
+   inttodialnoarea ("+44725258");
+   inttodialnoarea ("+41227331136");
+   inttodialnoprefix ("-5258");
+   inttodialnoprefix ("+441223725258");
+   inttodialnoprefix ("+4412345678");
+   inttodialnoprefix ("+41227331136");
+   enttoint ("+441223725258");
+   enttoint ("00441223725258");
+   enttoint ("0044123456789");
+   enttoint ("01223725258");
+   enttoint ("0123456789");
+   enttoint ("725258");
+   enttoint ("x5258");
+   enttoint ("+41227331136");
+   enttointnoarea ("+44725258");
+   enttointnoarea ("0044725258");
+   enttointnoarea ("0044456789");
+   enttointnoarea ("725258");
+   enttointnoarea ("+41227331136");
+   enttointnoarea ("x5258");
+   printf ("New stuff:\n");
+   enttoint ("725258D");
+   enttoint ("725258d");
+   enttoint ("x5258d");
+   enttointusa ("+441223725258");
+   enttointusa ("011441223725258");
+   enttointusa ("15032345678");
+   enttointusa ("5032345678");
+   enttointusa ("16172345678");
+   enttointusa ("6172345678");
+   enttointusa ("12345678");
+   enttointusa ("x5258");
+   inttodispusa ("-5258");
+   inttodispusa ("+441223725258");
+   inttodispusa ("+4412345678");
+   inttodispusa ("+41227331136");
+   inttodispusa ("+16172345678");
+   inttodispusa ("a16172345678");
+   inttodispusa ("b16172345678");
+   inttodispusa ("c16172345678");
+   inttodispusa ("+15032345678");
+   inttodispusa ("a15032345678");
+   inttodispusa ("b15032345678");
+   inttodispusa ("c15032345678");
+   inttodisp ("+16172345678");
+   inttodisp ("a16172345678");
+   inttodisp ("b16172345678");
+   inttodisp ("c16172345678");
+   inttodialusa ("-5258");
+   inttodialusa ("+441223725258");
+   inttodialusa ("+4412345678");
+   inttodialusa ("+41227331136");
+   inttodialusa ("+16172345678");
+   inttodialusa ("a16172345678");
+   inttodialusa ("b16172345678");
+   inttodialusa ("c16172345678");
+   inttodialusa ("+15032345678");
+   inttodialusa ("a15032345678");
+   inttodialusa ("b15032345678");
+   inttodialusa ("c15032345678");
+   inttodialnoprefixusa ("-5258");
+   inttodialnoprefixusa ("+441223725258");
+   inttodialnoprefixusa ("+4412345678");
+   inttodialnoprefixusa ("+41227331136");
+   inttodialnoprefixusa ("+16172345678");
+   inttodialnoprefixusa ("a16172345678");
+   inttodialnoprefixusa ("b16172345678");
+   inttodialnoprefixusa ("c16172345678");
+   inttodialnoprefixusa ("+15032345678");
+   inttodialnoprefixusa ("a15032345678");
+   inttodialnoprefixusa ("b15032345678");
+   inttodialnoprefixusa ("c15032345678");
+   /*
+   system ("Spool");
+   */
+   return 0;
+}
+
+#endif
