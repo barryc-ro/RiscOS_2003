@@ -67,7 +67,7 @@ DFLAGS =\
  -DALLOW_OLD_PATTERNS\
  -DSET_MISC_OPTIONS
 
-# ANSILib flags
+# ANSILib and stub flags
 CLFLAGS =\
  -DDEFAULT_TEXT
 
@@ -470,10 +470,10 @@ lib.riscoslibm: ${RLIB_MOD_OBJS}
         ${LIBFILE} ${LIBFLAGS} $@ ${RLIB_MOD_OBJS}
 
 lib.stubs: clib.s.cl_stub_r
-        ${OBJASM} ${AFLAGS} -from clib.s.cl_stub_r -to $@
+        ${OBJASM} ${ALFLAGS} -from clib.s.cl_stub_r -to $@
 
 lib.rstubs: rlib.s.rl_stub_r
-        ${OBJASM} ${AFLAGS} -from rlib.s.rl_stub_r -to $@
+        ${OBJASM} ${ALFLAGS} -from rlib.s.rl_stub_r -to $@
 
 lib.romcstubs: clib.s.cl_stub_rm
         ${OBJASM} ${AFLAGS} -from clib.s.cl_stub_rm -to $@
