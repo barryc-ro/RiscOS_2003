@@ -30,8 +30,12 @@
 
 static MessagesFD mfd;
 static IdBlock id_block;
-static int f, f2;
-static Image *im, *im2;
+static int f, headers;
+static Image *im;
+#ifdef DOUBLE
+static int f2;
+static Image *im2;
+#endif
 static ObjectId windowid, toolbarid, colbarid;
 static int needsize;
 static int bgcol=0;
@@ -102,15 +106,17 @@ static int nullevent(int event_code, WimpPollBlock *event, IdBlock *id, void *ha
     int readsize;
     _kernel_oserror *e=0;
     int status;
-    int actually_read, finished=0;
+    int actually_read, offset=0, finished=0;
     static int old_status=-1;
     /*char *fred;
 
     flex_alloc((flex_ptr) &fred, 4000);*/
 
+    numberrange_get_value(0, toolbarid, slidergadget, &readsize);
+
     if (handle)
     {
-        _swi(URL_ReadData, _INR(0,3)|_OUT(0)|_OUT(4), 0, URLword, buffer, sizeof buffer,
+        _swi(URL_ReadData, _INR(0,3)|_OUT(0)|_OUT(4), 0, URLword, buffer, readsize,//sizeof buffer,
                                                   &status,
                                                   &actually_read);
         if (status != old_status)
@@ -138,8 +144,6 @@ static int nullevent(int event_code, WimpPollBlock *event, IdBlock *id, void *ha
     }
     else
     {
-        numberrange_get_value(0, toolbarid, slidergadget, &readsize);
-
         _swi(OS_GBPB, _INR(0,3)|_OUT(3), 4, f, buffer, readsize, &notread);
 
         actually_read=readsize-notread;
@@ -149,11 +153,25 @@ static int nullevent(int event_code, WimpPollBlock *event, IdBlock *id, void *ha
             numberrange_set_value(0, toolbarid, slidergadget, 10239);
     }
 
+    if (handle && headers < 4)
+    {
+        while (actually_read > 0)
+        {
+            if      (buffer[offset] == '\r' && headers == 0) headers = 1;
+            else if (buffer[offset] == '\n' && headers == 1) headers = 2;
+            else if (buffer[offset] == '\r' && headers == 2) headers = 3;
+            else if (buffer[offset] == '\n' && headers == 3) headers = 4;
+            else headers = 0;
+
+            offset++, actually_read--;
+        }
+    }
+
     if (actually_read > 0)
     {
         clock_t start, end;
         start = clock();
-        e=im->Load(im, buffer, actually_read, &changed);
+        e=im->Load(im, buffer + offset, actually_read, &changed);
         end = clock();
         //_swix(OS_WriteI + 4, 0);
         //_swix(OS_WriteI + 30, 0);
@@ -246,12 +264,12 @@ static int modechange(WimpMessage *message, void *handle)
 static int startfetch(int event_code, ToolboxEvent *event, IdBlock *id, void *handle)
 {
     char buffer[256];
-    _kernel_oserror *e;
 
     writablefield_get_value(0, id->self_id, URLgadget, buffer, sizeof buffer, 0);
 
     _swi(URL_Register, _IN(0)|_OUT(1), 0, &URLword);
-    _swi(URL_GetURL, _INR(0,5), 0, URLword, 0, buffer, 0, 0);
+    _swi(URL_GetURL, _INR(0,5), 0, URLword, 1, buffer, 0, 2);
+    headers=0;
 
     if (im)
     {
@@ -332,6 +350,133 @@ static int loadimage(WimpMessage *message, void *handle)
     return 1;
 }
 
+static int convertimage(const char *infile, const char *outfile)
+{
+    unsigned int      type, filetype, filesize;
+    const char      * imagetype;
+
+    int               actually_read, notread;
+    int               finished = 0;
+    unsigned int      total_read, char_count;
+    BBox              changed;
+    int               readsize = sizeof(buffer);
+    _kernel_oserror * e        = NULL;
+
+    _swix(OS_File,
+          _INR(0,1) | _OUT(0) | _OUT(4) | _OUT(6),
+
+          23, /* Read catalogue info for named stamped object */
+          infile,
+
+          &type,
+          &filesize,
+          &filetype);
+
+    if (type == 0)
+    {
+        printf("Cannot find input file '%s'\n", infile);
+        return EXIT_FAILURE;
+    }
+
+    switch (filetype)
+    {
+        case 0x695: imagetype="gif"; break;
+        case 0xB60: imagetype="png"; break;
+        case 0xC85: imagetype="jpeg"; break;
+        case 0xFF9: imagetype="x-riscos-sprite"; break;
+        default:
+        {
+            printf("Cannot handle objects of type &%03X\n", filetype);
+            return EXIT_FAILURE;
+        }
+        break;
+    }
+
+    /* Open the file and start a new image */
+
+    printf("'%s' - ", infile);
+
+    _swi(OS_Find,
+         _INR(0,1) | _OUT(0),
+
+         0x4f,
+         infile,
+
+         &f);
+
+    im = NewImage(imagetype, 0);
+
+    /* Read until finished */
+
+    char_count = 0;
+
+    while (finished == 0)
+    {
+        _swi(OS_GBPB,
+             _INR(0,3) | _OUT(3),
+
+             4,
+             f,
+             buffer,
+             readsize,
+
+             &notread);
+
+        actually_read = readsize - notread;
+        total_read += actually_read;
+        if (notread > 0) finished = 1;
+
+        if (actually_read > 0)
+            e = im->Load(im, buffer, actually_read, &changed);
+
+        while (char_count-- > 0) _swix(0x108, 0);
+        printf("%d%% %n", (100 * total_read) / filesize, &char_count);
+
+        if (finished || e)
+        {
+            _kernel_oserror * e2;
+            BBox              rbox;
+
+            printf("\n");
+
+            _swi(OS_Find,
+                 _INR(0,1),
+
+                 0,
+                 f);
+
+            e2 = im->EndLoad(im, &rbox);
+            if (!e) e = e2;
+
+            bgcol = 0xdddddd00;
+            im->BGCol(im, &bgcol, 0);
+        }
+
+        if (e)
+        {
+            im->Delete(im);
+            printf("%s\n", e->errmess);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* Write the output file */
+
+    printf("Writing '%s'... ", outfile);
+
+    e = im->DumpSprite(im, outfile, -1);
+    im->Delete(im);
+
+    if (e)
+    {
+        printf("\n%s\n", e->errmess);
+        return EXIT_FAILURE;
+    }
+
+    printf("Finished.\n");
+    return EXIT_SUCCESS;
+}
+
 static int quitmessage(WimpMessage *message, void *handle)
 {
     _swi(OS_WriteC,_IN(0),4);
@@ -365,7 +510,7 @@ static int windowclosed(int event_code, ToolboxEvent *event, IdBlock *id, void *
     return 1;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
     static int messages[]={Wimp_MDataLoad, Wimp_MModeChange, Wimp_MPaletteChange, 0};
     static int events[]={Window_HasBeenHidden, SaveAs_SaveToFile, FetchAction, 0};
@@ -374,6 +519,17 @@ int main()
     r.r[0]=3;
     _kernel_swi(OS_ReadDefaultHandler, &r,&r);
     _kernel_swi(OS_ChangeEnvironment, &r, &r);
+
+    /* CLI mode? */
+
+    if (argc == 3)
+    {
+        flex_init("Test", 0, 0);
+        flex_set_budge(1);
+        return convertimage(argv[1], argv[2]);
+    }
+
+    /* No, so start as a task */
 
     toolbox_initialise(0, 310, messages, events, "<ImageTest$Dir>", &mfd, &id_block,
     NULL, NULL, NULL);
