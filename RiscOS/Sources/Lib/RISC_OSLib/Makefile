@@ -397,6 +397,7 @@ clean_all:
         ${RM} syms.Entries
         ${RM} syms.C_Entries
         ${RM} derived.swis
+        ${RM} s.swioptions
         ${RM} s.abssym
         ${RM} s.c_abssym
         ${RM} s.a_abssym
@@ -492,9 +493,12 @@ lib.arthurlib: o.arth_new_n o.arth_old_n o.ArtAsm_n o.ArtAsm_o
         ${LIBFILE} ${LIBFLAGS} $@ o.Arth_new_n o.Arth_old_n o.ArtAsm_n o.ArtAsm_o
 
 # Derived headers:
-derived.swis: s.makehswis h.swisheader
+derived.swis: s.makehswis h.swisheader s.swioptions
         ${AS} ${AFLAGS} -from s.makehswis -to $@
         settype $@ text
+
+s.swioptions:
+        @SWIOptions
 
 #
 # Rules for exporting:
