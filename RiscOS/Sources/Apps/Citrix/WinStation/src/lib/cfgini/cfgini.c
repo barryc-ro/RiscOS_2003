@@ -8,7 +8,18 @@
 *
 *   Author: Butch Davis (5/12/95) [from Kurt Perry's CFG library]
 *
-*   $Log$
+*   cfgini.c,v
+*   Revision 1.6  1998/06/19 17:12:31  smiddle
+*   Merged in Beta2 code. A few redundant header files removed, various new ones
+*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*   ini code though.
+*   Added a check for the temporary ICA file being created OK. If not then it gives
+*   a warning that the scrap directory might need to be set up.
+*   Upped version number to 0.40 so that there is room for some bug fixes to the
+*   WF 1.7 code.
+*
+*   Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.69   Feb 23 1998 17:25:56   sumitd
 *  Overwrote Kalyan's changes - oops...
@@ -1991,6 +2002,11 @@ GetSection( PCHAR pSectionName,
 
        TRACE((TC_LIB, TT_API2, "GetSection: entry end cb=%d", cb));
     }
+
+    /* add this to stop buffer overruns on empty sections */
+    if (cb == 0)
+	pSectionBuffer[cb++] = 0;
+
     pSectionBuffer[cb++] = 0;
     pSectionBuffer = (PCHAR) realloc(pSectionBuffer, cb);
 
@@ -3214,6 +3230,8 @@ PCHAR AddEntrySection( PCHAR pSection, PCHAR pEntry, PCHAR pValue )
    PCHAR    pReturn    = NULL;
    BOOL     EntryFound = FALSE;
 
+   TRACE((TC_LIB, TT_API1, "AddEntrySection: section %p add %s=%s", pSection, pEntry, pValue));
+
    pNewEntry = (PCHAR) malloc(MAX_INI_LINE);
 
    pTemp = pSection;
@@ -3240,7 +3258,7 @@ PCHAR AddEntrySection( PCHAR pSection, PCHAR pEntry, PCHAR pValue )
    }
 
    if (EntryFound) {                   
-      
+
       len = strlen(pNewEntry);
       pNewEntry[len++] = '=';
       memcpy( &(pNewEntry[len]), pValue, strlen(pValue));
@@ -3257,6 +3275,8 @@ PCHAR AddEntrySection( PCHAR pSection, PCHAR pEntry, PCHAR pValue )
       pReturn[half1++] = 0;
       memcpy( &(pReturn[half1]), pTemp, half2);
 
+      TRACE((TC_LIB, TT_API1, "AddEntrySection: found length %d output %p", half1 + half2, pReturn));
+      
    } else {
       
       len = strlen(pEntry);
@@ -3267,12 +3287,20 @@ PCHAR AddEntrySection( PCHAR pSection, PCHAR pEntry, PCHAR pValue )
       pNewEntry[len] = 0;
 
       half1 = IniSize(pSection) - 1;
-      pReturn = (PCHAR) malloc (half1 + len + 2);
+      pReturn = (PCHAR) calloc (half1 + len + 2, 1);
       memcpy( pReturn, pSection, half1);
       memcpy( &(pReturn[half1]), pNewEntry, len);
       half1 += len;
+
+      DTRACE((TC_LIB, TT_API1, "AddEntrySection: write0 at %d", half1));
       pReturn[half1++] = 0;
+
+      DTRACE((TC_LIB, TT_API1, "AddEntrySection: write0 at %d", half1));
       pReturn[half1++] = 0;
+
+      TRACE((TC_LIB, TT_API1, "AddEntrySection: add new length %d output %p %d/%d", half1, pReturn, pReturn[half1-2], pReturn[half1-1]));
+      DTRACE((TC_LIB, TT_API1, "AddEntrySection: add new length %d output %p", half1, pReturn));
+      TRACEBUF((TC_LIB, TT_API1, pReturn, half1));
    }
 
 if (pNewEntry) {
@@ -3354,8 +3382,10 @@ VOID EatWhiteSpace( PCHAR pString )
 
     //trim right : newline, return, tab, spaces
     p = strlen(pTemp);
-    while (   (pTemp[p-1] == '\n') || (pTemp[p-1] == '\r') 
-           || (pTemp[p-1] == ' ' ) || (pTemp[p-1] == '\t') ) 
+    while ( p > 0 && (
+	      (pTemp[p-1] == '\n') || (pTemp[p-1] == '\r') 
+           || (pTemp[p-1] == ' ' ) || (pTemp[p-1] == '\t') )
+	)
        { pTemp[--p] = 0; }
     
     strcpy(pString, pTemp); 

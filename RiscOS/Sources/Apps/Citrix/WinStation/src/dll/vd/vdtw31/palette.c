@@ -65,6 +65,7 @@
 *******************************************************************************/
 
 #include "windows.h"
+#include "mem.h"
 
 /*
  *  Get the standard C includes

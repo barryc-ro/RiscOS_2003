@@ -24,7 +24,7 @@
 
 #include "wfglobal.h"
 
-#include "MemLib/memflex.h"
+#include "mem.h"
 
 #include "twro.h"
 
@@ -642,12 +642,11 @@ static sprite_descr *get_sprite_descr(HGDIOBJ obj)
 
 static void free_sprite(sprite_descr *descr)
 {
-    LOGERR(MemFlex_Free((flex_ptr)&descr->area));
+    FlexFree((flex_ptr)&descr->area);
 }
 
 static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palette)
 {
-    sprite_area *area;
     sprite_header *sprite;
 
     int bit_width = w * bpp;
@@ -664,10 +663,12 @@ static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palett
 
     TRACE((TC_TW, TT_TW_res4, "create_sprite: %d @ %d x %d @ %d bpp palette %d size %d", create_sprite_index, w, h, bpp, palette, size));
     
-    LOGERR(MemFlex_Alloc((flex_ptr)&descr->area, size));
-    if ((area = descr->area) != NULL)
+    descr->area = NULL;
+    if (FlexAlloc((flex_ptr)&descr->area, size))
     {
 	char buf[16];			// must be long enough for the longest sprite name
+
+	sprite_area *area = descr->area;
 	area->size = size;		// area size is total size malloced including space for wastage
 
 	size = sizeof(sprite_area) +	// recalculate size to use as the actual size of the sprite
@@ -702,10 +703,9 @@ static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palett
     descr->width = w;
     descr->height = h;
     descr->bpp = bpp;
-    descr->area = area;
     descr->empty = TRUE;
 
-    return area != NULL;
+    return descr->area != NULL;
 }
 
 static void copy_1bit(char *out, const char *in, int npixels)
@@ -1145,7 +1145,7 @@ static void free_object(HGDIOBJ obj)
     case OBJ_MEMDC:
     {
 	HDC dc = (HDC)obj;
-	LOGERR(MemFlex_Free((flex_ptr)&dc->data.current.palette));
+	FlexFree((flex_ptr)&dc->data.current.palette);
 #if REALIZE_BRUSH
 	free_sprite(&dc->data.realized.brush);
 #else
@@ -1161,7 +1161,7 @@ static void free_object(HGDIOBJ obj)
     case OBJ_PAL:
     {
 	HPALETTE palette = (HPALETTE)obj;
-	LOGERR(MemFlex_Free((flex_ptr)&palette->data.colours));
+	FlexFree((flex_ptr)&palette->data.colours);
 	break;
     }
 
@@ -1278,7 +1278,7 @@ static void set_default_dc(HDC dc)
 static void uncache_dc(HDC dc)
 {
     // clear cached mode palette
-    LOGERR(MemFlex_Free(&dc->data.current.palette));
+    FlexFree((flex_ptr)&dc->data.current.palette);
 
     // cached colour lookup tables
 #if REALIZE_BRUSH
@@ -3128,7 +3128,7 @@ HPALETTE CreatePalette(CONST LOGPALETTE *pal)
     
     palette->data.n_entries = pal->palNumEntries;
 
-    LOGERR(MemFlex_Alloc((flex_ptr)&palette->data.colours, pal->palNumEntries * sizeof(pal->palPalEntry[0])));
+    FlexAlloc((flex_ptr)&palette->data.colours, pal->palNumEntries * sizeof(pal->palPalEntry[0]));
     memcpy(palette->data.colours, pal->palPalEntry, pal->palNumEntries * sizeof(pal->palPalEntry[0]));
 
     return palette;
@@ -3491,7 +3491,7 @@ UINT RealizePalette(HDC dc)
     {
 	TRACE((TC_TW, TT_TW_PALETTE, "RealizePalette: add palette to dc"));
 
-	LOGERR(MemFlex_Alloc(&dc->data.current.palette, sizeof(ropalette) << dc->data.bpp));
+	FlexAlloc((flex_ptr)&dc->data.current.palette, sizeof(ropalette) << dc->data.bpp);
 
 	if (dc->data.current.palette == NULL)
 	    return 0;
@@ -3535,7 +3535,7 @@ UINT RealizePalette(HDC dc)
 
 	    TRACE((TC_TW, TT_TW_PALETTE, "RealizePalette: adding palette to bitmap %p", bitmap));
 	    
-	    if (LOGERR(MemFlex_MidExtend(&bitmap->data.sprite.area, sizeof(sprite_area) + sizeof(sprite_header), pal_size)) != NULL)
+	    if (!FlexMidExtend((flex_ptr)&bitmap->data.sprite.area, sizeof(sprite_area) + sizeof(sprite_header), pal_size))
 	    {
 		return 0;
 	    }

@@ -1089,6 +1089,7 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 	{ "vdcpm30",	(PLIBPROCEDURE)VdLoad/*, VdCpmDriverProcedures */ },
 	{ "vdspl30",	(PLIBPROCEDURE)VdLoad/*, VdSplDriverProcedures */ },
 	{ "vdcdm",	(PLIBPROCEDURE)VdLoad/*, VdCdmDriverProcedures */ },
+	{ "vdcam",	(PLIBPROCEDURE)VdLoad/*, VdCamDriverProcedures */ },
 #ifdef INCL_SCRIPT
 	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
 #endif
@@ -1133,6 +1134,9 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 #endif
 #ifdef INCL_DRIVES
 	modules[15].fnTable = VdCdmDriverProcedures;
+#endif
+#ifdef INCL_AUDIO
+	modules[16].fnTable = VdCamDriverProcedures;
 #endif
 	inited = TRUE;
     }

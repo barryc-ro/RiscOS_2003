@@ -9,7 +9,18 @@
 *
 *   Author: Kurt Perry (4/08/1994)
 *
-*   $Log$
+*   iniapi.c,v
+*   Revision 1.3  1998/06/19 17:12:43  smiddle
+*   Merged in Beta2 code. A few redundant header files removed, various new ones
+*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*   ini code though.
+*   Added a check for the temporary ICA file being created OK. If not then it gives
+*   a warning that the scrap directory might need to be set up.
+*   Upped version number to 0.40 so that there is room for some bug fixes to the
+*   WF 1.7 code.
+*
+*   Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.36   12 Feb 1998 13:35:30   butchd
 *  CPR 8345: fixed existing max() logic to work correctly
@@ -42,6 +53,8 @@
 
 /*  Get the standard C includes */
 #include <stdio.h>
+#include "mem.h"
+
 #include <string.h>
 #include <stdlib.h>
 

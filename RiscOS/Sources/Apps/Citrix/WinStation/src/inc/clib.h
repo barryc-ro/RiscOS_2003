@@ -9,7 +9,18 @@
 *
 *  $Author:      Brad Pedersen
 *
-*   $Log$
+*   clib.h,v
+*   Revision 1.9  1998/06/19 17:12:12  smiddle
+*   Merged in Beta2 code. A few redundant header files removed, various new ones
+*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*   ini code though.
+*   Added a check for the temporary ICA file being created OK. If not then it gives
+*   a warning that the scrap directory might need to be set up.
+*   Upped version number to 0.40 so that there is room for some bug fixes to the
+*   WF 1.7 code.
+*
+*   Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.37   08 Jan 1998 15:23:58   brada
 *  Add additional clib functions for VDCM
@@ -75,22 +86,6 @@ extern void Delay(int t);
 
 #define     ERROR_DEFAULT           0xffff
 extern int LoadString( const char *base, int idResource, char *szBuffer, int cbBuffer );
-
-#if 1
-
-#include "kernel.h"
-typedef _kernel_oserror os_error;
-#include "MemLib/memheap.h"
-
-#define GlobalAlloc(flags, size)	((HGLOBAL)MemHeap_malloc(size))
-#define GlobalFree(ptr)			(MemHeap_free((void *)(ptr)), (HGLOBAL)0)
-#else
-#define GlobalAlloc(flags, size)	((HGLOBAL)malloc(size))
-#define GlobalFree(ptr)			(free((void *)(ptr)), (HGLOBAL)0)
-#endif
-
-#define GlobalLock(ptr)			((void *)ptr)
-#define GlobalUnlock(ptr)		
 
 extern int read_word(void *a);
 extern void write_word(void *a, int b);

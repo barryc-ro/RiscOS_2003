@@ -9,7 +9,18 @@
 *
 *   Author: Brad Pedersen  (3/29/94)
 *
-*   $Log$
+*   buffer.c,v
+*   Revision 1.2  1998/06/19 17:11:58  smiddle
+*   Merged in Beta2 code. A few redundant header files removed, various new ones
+*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*   ini code though.
+*   Added a check for the temporary ICA file being created OK. If not then it gives
+*   a warning that the scrap directory might need to be set up.
+*   Upped version number to 0.40 so that there is room for some bug fixes to the
+*   WF 1.7 code.
+*
+*   Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.25   Oct 09 1997 18:30:56   briang
 *  Conversion to MemIni use
@@ -180,12 +191,12 @@ OutBufPoolAlloc( PWD pWd, USHORT Count, USHORT Length )
                 rc = CLIENT_ERROR_NO_MEMORY;
                 goto badparam;
             }
-        }
 
-        /*
-         *  Initialize OUTBUF parameter structure
-         */
-        memset( pOutBuf->pParam, 0, pWd->OutBufParam );
+	    /*
+	     *  Initialize OUTBUF parameter structure
+	     */
+	    memset( pOutBuf->pParam, 0, pWd->OutBufParam );
+        }
 
         /*
          *  Link to free buffer pool

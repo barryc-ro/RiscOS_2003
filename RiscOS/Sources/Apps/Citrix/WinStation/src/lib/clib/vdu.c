@@ -4,6 +4,7 @@
 
 #include "windows.h"
 #include "vdu.h"
+#include "mem.h"
 
 #include <stdlib.h>
 
@@ -125,8 +126,12 @@ int GetModeNumber(void)
     /* If new style mode must use new style sprites (3.5) */
     if ((unsigned)mode > 255)
     {
+	MEMCHECK_PUSH();
+	
         os_mode_selector *m = (os_mode_selector *)(long)mode;
 	mode = build_mode_number(m->log2_bpp);
+
+	MEMCHECK_POP();
     }
 
     return mode;

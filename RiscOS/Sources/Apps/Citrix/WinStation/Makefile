@@ -25,6 +25,8 @@ LIBFILEFLAGS=	-c
 CPFLAGS=	-p
 LDFLAGS=
 
+MCFLAGS=	-DMemCheck_MEMCHECK -zpc1 -fw
+
 # ----------------------------------------------------------------------------------------------------
 
 # -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT -DINCL_PRINTER -DINCL_ASYNC -DINCL_TCPIP
@@ -32,6 +34,7 @@ LDFLAGS=
 DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DINCL_PRINTER -DINCL_TCPIP
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
+		-Isrc/inc \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
 		-I$(RISCOS_BUILD_EXPORT)/Lib \
 		-I$(RISCOS_BUILD_EXPORT)/C \
@@ -117,7 +120,8 @@ BASELIBS=	${COMMONLIBS} \
 
 BASELIBSD=	$(RISCOS_BUILD_EXPORT)/Lib/debug/lremote.o \
 		${COMMONLIBS} \
-		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o
+		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o \
+		$(RISCOS_BUILD_EXPORT)/Lib/MemCheck/MemCheck.o
 
 BASELIBSZ=	${COMMONLIBSZ} \
 		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
@@ -138,7 +142,8 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} 
 .c.o:;	$(CC) $< -o $@     -DROM=0             $(CCFLAGS)
 #.c.o:;	$(CC) $<     -E -C -DROM=0             $(CCFLAGS) > $@
 
-.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
+#.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
+.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS) ${MCFLAGS}
 
 .c.oz:;	$(CC) $< -o $@ -zM -DROM=1             $(CCFLAGS)
 
@@ -316,7 +321,7 @@ cleanicaenum:
 CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/cfgload/cfgload.c \
 		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/machine.c \
-		src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
+		src/lib/clib/mem.c src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
 		src/lib/encrypt/encrypt.c \
 		src/lib/ini/iniapi.c src/lib/ini/helpers.c \
 		src/lib/io/icabrows/icabrows.c src/lib/io/tcpro/tcpro.c \
@@ -332,7 +337,7 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/cfgload/cfgload.o \
 		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/machine.o \
-		src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
+		src/lib/clib/mem.o src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
 		src/lib/encrypt/encrypt.o \
 		src/lib/ini/iniapi.o src/lib/ini/helpers.o \
 		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
@@ -348,7 +353,7 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \
 		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/machine.od \
-		src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
+		src/lib/clib/mem.od src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od src/lib/ini/helpers.od \
 		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \
@@ -365,7 +370,7 @@ CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 CITRIXLIBOBJSZ=	src/lib/cfgini/cfgini.oz \
 		src/lib/cfgload/cfgload.oz \
 		src/lib/clib/delay.oz src/lib/clib/fileio.oz src/lib/clib/loadstr.oz src/lib/clib/machine.oz \
-		src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
+		src/lib/clib/mem.oz src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
 		src/lib/encrypt/encrypt.oz \
 		src/lib/ini/iniapi.oz src/lib/ini/helpers.oz \
 		src/lib/io/icabrows/icabrows.oz src/lib/io/tcpro/tcpro.oz \
@@ -825,9 +830,53 @@ VDSPLLIBOBJSZ=	src/dll/vd/vdspl/common/cpmserv.oz \
 		src/dll/vd/vdspl/common/vdspl.oz \
 		src/dll/vd/vdspl/spool/rospool.oz
 
+# CLient audio driver
+
+VDCAMLIBSRC=	src/dll/vd/vdcam/common/camserv.c \
+		src/dll/vd/vdcam/common/ctxadpcm.c \
+	 	src/dll/vd/vdcam/common/formats.c \
+		src/dll/vd/vdcam/common/lin_pcm.c \
+		src/dll/vd/vdcam/common/memmgmt.c \
+		src/dll/vd/vdcam/common/sendpkts.c \
+		src/dll/vd/vdcam/common/statemch.c \
+		src/dll/vd/vdcam/common/vdcam.c \
+		src/dll/vd/vdcam/drivers/riscos/audhal.c
+
+VDCAMLIBOBJS=	src/dll/vd/vdcam/common/camserv.o \
+		src/dll/vd/vdcam/common/ctxadpcm.o \
+	 	src/dll/vd/vdcam/common/formats.o \
+		src/dll/vd/vdcam/common/lin_pcm.o \
+		src/dll/vd/vdcam/common/memmgmt.o \
+		src/dll/vd/vdcam/common/sendpkts.o \
+		src/dll/vd/vdcam/common/statemch.o \
+		src/dll/vd/vdcam/common/vdcam.o \
+		src/dll/vd/vdcam/drivers/riscos/audhal.o
+
+VDCAMLIBOBJSD=	src/dll/vd/vdcam/common/camserv.od \
+		src/dll/vd/vdcam/common/ctxadpcm.od \
+	 	src/dll/vd/vdcam/common/formats.od \
+		src/dll/vd/vdcam/common/lin_pcm.od \
+		src/dll/vd/vdcam/common/memmgmt.od \
+		src/dll/vd/vdcam/common/sendpkts.od \
+		src/dll/vd/vdcam/common/statemch.od \
+		src/dll/vd/vdcam/common/vdcam.od \
+		src/dll/vd/vdcam/drivers/riscos/audhal.od
+
+VDCAMLIBOBJSZ=	src/dll/vd/vdcam/common/camserv.oz \
+		src/dll/vd/vdcam/common/ctxadpcm.oz \
+	 	src/dll/vd/vdcam/common/formats.oz \
+		src/dll/vd/vdcam/common/lin_pcm.oz \
+		src/dll/vd/vdcam/common/memmgmt.oz \
+		src/dll/vd/vdcam/common/sendpkts.oz \
+		src/dll/vd/vdcam/common/statemch.oz \
+		src/dll/vd/vdcam/common/vdcam.oz \
+		src/dll/vd/vdcam/drivers/riscos/audhal.oz
+
+
 VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC} ${VDCPMLIBSRC} ${VDSPLLIBSRC}
 VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS} ${VDCPMLIBOBJS} ${VDSPLLIBOBJS}
 VDLIBOBJSD=	${VDCOMMONLIBOBJSD} ${VDTW31LIBOBJSD} ${VDCPMLIBOBJSD} ${VDSPLLIBOBJSD}
+# ${VDCAMLIBOBJSD}
 VDLIBOBJSZ=	${VDCOMMONLIBOBJSZ} ${VDTW31LIBOBJSZ} ${VDCPMLIBOBJSZ} ${VDSPLLIBOBJSZ}
 
 ${VDLIB}:	${VDLIBOBJS}

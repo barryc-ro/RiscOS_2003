@@ -38,6 +38,7 @@
 #include "twtype.h"
 #include "../../../inc/clib.h"
 #include <stdlib.h>
+#include "mem.h"
 
 extern ULONG   LargeCacheSize;   //jkscaffold bugbug
 

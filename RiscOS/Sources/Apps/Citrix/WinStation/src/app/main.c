@@ -43,12 +43,7 @@
 #include "../dll/vd/vdtw31/twh2cinc.h"
 
 #include "vdu.h"
-
-/* --------------------------------------------------------------------------------------------- */
-
-//typedef _kernel_oserror os_error;
-//#include "MemLib/memheap.h"
-#include "MemLib/memflex.h"
+#include "mem.h"
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -1313,7 +1308,7 @@ static void splash_open(void)
 	TRACE((TC_UI, TT_API1, "splash_open: fh %d len %d", fh, len));
 	
 	/* load splash screen */
-	if (LOGERR(MemFlex_Alloc(&splash_ptr, len + 4)) == NULL)
+	if (FlexAlloc(&splash_ptr, len + 4))
 	{
 	    _kernel_oserror *e;
 
@@ -1323,7 +1318,7 @@ static void splash_open(void)
 	    /* check for sprite validity */
 	    e = LOGERR(_swix(OS_SpriteOp, _INR(0,1), 17 + 512, splash_ptr));
 	    if (e && e->errnum == 1822)
-		MemFlex_Free(&splash_ptr);
+		FlexFree(&splash_ptr);
 	}
 	close(fh);
 
@@ -1410,7 +1405,7 @@ static void splash_force_top(void)
 
 static void splash_close(void)
 {
-    MemFlex_Free(&splash_ptr);
+    FlexFree(&splash_ptr);
 
     free(splash_coltrans);
     splash_coltrans = NULL;
@@ -1605,9 +1600,8 @@ static void initialise(int argc, char *argv[])
 				     &message_block, &event_id_block,
 				     &current_wimp, &task_handle, &sprite));
 
-    LOGERR(MemFlex_Initialise2(APP_NAME " flex"));
-    LOGERR(MemHeap_Initialise(APP_NAME " heap"));
-    
+    MemInit();
+
     /* cleanup that needs task running */
     atexit(cleanup_task);
 
@@ -1676,6 +1670,12 @@ int main(int argc, char *argv[])
 
     time(&tp);
     TRACE((TC_UI, TT_API1, "(1) *** New " APP_NAME " " VERSION_STRING " started %s", ctime(&tp)));
+#endif
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_Init();
+    MemCheck_RegisterArgs(argc, argv);
+    MemCheck_InterceptSCLStringFunctions();
 #endif
 
     initialise(argc, argv);

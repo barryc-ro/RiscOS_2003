@@ -9,7 +9,18 @@
 *
 *   Author:   Brad Pedersen
 *
-*   $Log$
+*   logapi.c,v
+*   Revision 1.11  1998/06/19 17:12:48  smiddle
+*   Merged in Beta2 code. A few redundant header files removed, various new ones
+*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*   ini code though.
+*   Added a check for the temporary ICA file being created OK. If not then it gives
+*   a warning that the scrap directory might need to be set up.
+*   Upped version number to 0.40 so that there is room for some bug fixes to the
+*   WF 1.7 code.
+*
+*   Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.29   15 Apr 1997 18:52:52   TOMA
 *  autoput for remove source 4/12/97
@@ -49,6 +60,7 @@
 
 #include "windows.h"
 #include "fileio.h"
+#include "mem.h"
 
 /*  Get the standard C includes */
 #include <stdarg.h>
@@ -155,7 +167,6 @@ int WFCAPI LogLoad( PPLIBPROCEDURE pfnLogProcedures )
 
 int WFCAPI LogOpen( PLOGOPEN pLogOpen )
 {
-
    // close old log file
    if(ghLogHandle != -1) {
       close(ghLogHandle);
@@ -327,7 +338,11 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
 #if defined(REMOTE_DEBUG) && defined(DEBUG)
    if( guLogFlags & LOG_REMOTE )
    {
+       MEMCHECK_PUSH();
+       
        debug_print_line(db_sess, Buffer + 9);	// skip over the timestamp
+
+       MEMCHECK_POP();
    }
 #endif
 }
@@ -502,7 +517,12 @@ void *LogErr( void *err, PCHAR pFileName, int LineNumber )
 
 static void cleanup(void)
 {
+    MEMCHECK_PUSH();
+
     remote_debug_close((debug_session *)db_sess);
+
+    MEMCHECK_POP();
+
     db_sess = NULL;
 }
 
@@ -621,9 +641,14 @@ static void rdebug_open(void)
 {
     if (!db_sess)
     {
+	MEMCHECK_PUSH();
+	
 	remote_debug_open(APP_NAME, &db_sess);
 	if (db_sess)
 	    remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
+
+	MEMCHECK_POP();
+	
 	atexit(cleanup);
     }
 }

@@ -34,6 +34,7 @@
 #include "wfglobal.h"
 
 #include "../../../inc/clib.h"
+#include "mem.h"
 
 HGLOBAL  htiny_cache;
 

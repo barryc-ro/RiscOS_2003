@@ -9,6 +9,17 @@
 *  Author:  David Pope  8-6-97
 * 
 *  $Log$
+*  Revision 1.1  1998/06/19 17:13:21  smiddle
+*  Merged in Beta2 code. A few redundant header files removed, various new ones
+*  added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*  ini code though.
+*  Added a check for the temporary ICA file being created OK. If not then it gives
+*  a warning that the scrap directory might need to be set up.
+*  Upped version number to 0.40 so that there is room for some bug fixes to the
+*  WF 1.7 code.
+*
+*  Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.4   17 Dec 1997 13:08:48   davidp
 *  added Extra field to OPEN packet for wider format support
@@ -30,11 +41,11 @@
 #ifndef __VDCAM_H__
 #define __VDCAM_H__
 
-#include <citrix\ica.h>
-#include <citrix\ica-c2h.h>        // for VD_C2H structure
+#include "citrix/ica.h"
+#include "citrix/ica-c2h.h"        // for VD_C2H structure
 
 // All of the wire structures in this header must be packed
-#pragma pack(1)
+//#pragma pack(1)
 
 #define VERSION_CLIENTL_VDCAM   1
 #define VERSION_CLIENTH_VDCAM   1 
@@ -148,6 +159,7 @@ typedef struct _VDCAM_C2H
                                 //   by the client
 } VDCAM_C2H, * PVDCAM_C2H;
 
+#define sizeof_VDCAM_C2H	(sizeof(VD_C2H) + 3)
 
 //////////////////////////////////////////////////////////////////////////////
 // H2C - Initialize connection to signify host's readiness
@@ -160,6 +172,7 @@ typedef struct _CAM_INIT
                                 //   supported by the host
 } CAM_INIT, * PCAM_INIT;
 
+#define sizeof_CAM_INIT	3
 
 //////////////////////////////////////////////////////////////////////////////
 // H2C - Open device
@@ -168,10 +181,13 @@ typedef struct _CAM_OPEN_REQUEST
 {
     UCHAR       iCommand;       // set to CAM_COMMAND_OPEN
     DEVICE_ID   DeviceID;       // unique device identifier
-    FORMAT_ID   FormatID;       // Citrix-assigned format ID
+				// Citrix-assigned format ID
+    USHORT      FormatID_iFormat;
+    USHORT      FormatID_wSubFormat;
     UCHAR       Extra[4];       // format-specific extra information
 } CAM_OPEN_REQUEST, * PCAM_OPEN_REQUEST;
 
+#define sizeof_CAM_OPEN_REQUEST	10
 
 //////////////////////////////////////////////////////////////////////////////
 // H2C - Close device
@@ -182,6 +198,7 @@ typedef struct _CAM_CLOSE_REQUEST
     DEVICE_ID   DeviceID;       // which device to close
 } CAM_CLOSE_REQUEST, * PCAM_CLOSE_REQUEST;
 
+#define sizeof_CAM_CLOSE_REQUEST	2
 
 //////////////////////////////////////////////////////////////////////////////
 // H2C - Write to device
@@ -195,7 +212,6 @@ typedef struct _CAM_WRITE_REQUEST
     UCHAR       reserved[2];
 } CAM_WRITE_REQUEST, * PCAM_WRITE_REQUEST;
 
-
 //////////////////////////////////////////////////////////////////////////////
 // H2C - Request capability packet
 
@@ -207,6 +223,7 @@ typedef struct _CAM_REQUEST_CAPABILITY
     USHORT      nFormatIDs;     // number of FORMAT_ID structs to follow
 } CAM_REQUEST_CAPABILITY, * PCAM_REQUEST_CAPABILITY;
 
+#define sizeof_CAM_REQUEST_CAPABILITY	6
 
 //////////////////////////////////////////////////////////////////////////////
 // C2H - Capability information packet
@@ -219,6 +236,7 @@ typedef struct _CAM_CAPABILITY_INFO
     USHORT      nFormatIDs;         // number of format IDs
 } CAM_CAPABILITY_INFO, * PCAM_CAPABILITY_INFO;
 
+#define sizeof_CAM_CAPABILITY_INFO	6
 
 //////////////////////////////////////////////////////////////////////////////
 // C2H - Reset
@@ -229,6 +247,8 @@ typedef struct _CAM_RESET
     DEVICE_ID   DeviceID;       // device to reset
     UCHAR       iReason;        // why this device needed resetting
 } CAM_RESET, * PCAM_RESET;
+
+#define sizeof_CAM_RESET	3
 
 // values for iReason field above
 
@@ -272,6 +292,7 @@ typedef struct _CAM_RESET_ACK
     DEVICE_ID   DeviceID;       // device whose reset to acknowledge
 } CAM_RESET_ACK, * PCAM_RESET_ACK;
 
+#define sizeof_CAM_RESET_ACK	2
 
 //////////////////////////////////////////////////////////////////////////////
 // C2H - Resource Ack
@@ -279,9 +300,11 @@ typedef struct _CAM_RESET_ACK
 typedef struct _CAM_RESOURCE_ACK
 {
     UCHAR   iCommand;           // set to CAM_COMMAND_RESOURCE_ACK
-    USHORT  iResource;          // which resource pool we're talking about
-    USHORT  nReleased;          // how many units to release
+    UCHAR   iResource[2];       // which resource pool we're talking about
+    UCHAR   nReleased[2];       // how many units to release
 } CAM_RESOURCE_ACK, * PCAM_RESOURCE_ACK;
+
+#define sizeof_CAM_RESOURCE_ACK	5
 
 // values defined for the iResource field above
 #define CAM_RESOURCE_COMMANDS   0x0001
@@ -313,7 +336,7 @@ typedef struct _CAM_RESOURCE_ACK
 
 
 //// turn off packing
-#pragma pack()
+//#pragma pack()
 
 
 #endif // __VDCAM_H__

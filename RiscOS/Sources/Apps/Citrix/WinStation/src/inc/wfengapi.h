@@ -12,7 +12,18 @@
 *
 *  Author: Butch Davis (4/4/95)
 *
-*  $Log$
+*  wfengapi.h,v
+*  Revision 1.5  1998/06/19 17:12:27  smiddle
+*  Merged in Beta2 code. A few redundant header files removed, various new ones
+*  added. It all compiles and sometimes it runs. Mostly it crashes in the new
+*  ini code though.
+*  Added a check for the temporary ICA file being created OK. If not then it gives
+*  a warning that the scrap directory might need to be set up.
+*  Upped version number to 0.40 so that there is room for some bug fixes to the
+*  WF 1.7 code.
+*
+*  Version 0.40. Tagged as 'WinStation-0_40'
+*
 *  
 *     Rev 1.76   Feb 22 1998 12:23:54   xuanh
 *  DEF_USEAREAANDCOUNTRY is TRUE.
@@ -1507,6 +1518,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_AUDHW_DRIVERNAME        "AUDHALW.DLL"
 #elif defined(WIN32)
 #define DEF_AUDHW_DRIVERNAME        "AUDHALN.DLL"
+#elif defined(RISCOS)
+#define DEF_AUDHW_DRIVERNAME        "AUDHAL"
 #endif
 
 #define INI_AUDHW_BUFFERPOOLSIZE    "BufferPoolSize"
