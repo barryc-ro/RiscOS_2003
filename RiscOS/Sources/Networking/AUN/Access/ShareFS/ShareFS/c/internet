@@ -1,99 +1,7 @@
 /* -*-C-*-
  *
- * $Header$
- * $Source$
- *
- * Copyright (c) 1995 ANT Ltd., Cambridge, England
- *
- * 96/11/27 - CE
- *	Added 'names' to freeway_register calls.
- *
- * $Log$
- * Revision 4.3  1998/06/16 16:33:07  celkins
- * Reflects changes made 18months ago :-(
- *
- * 1) Added type description for use with Freeway 0.28 (requires this version).
- * 2) Fixed -spin bug (now unsigned int output)
- * 3) Fixed *configure shareboot bugs
- * 4) Fixed up use of CMOS to that documented
- *
- * Only made changes to Share+ (series 3.xx) version, since it was agreed
- * that only this version should be maintained in future.
- *
- * Revision 1.15  95/05/25  09:23:11  pwain
- * Changed default Access+ windowsize to 2 for final build
- *
- * Revision 1.14  95/05/24  13:39:46  pwain
- * Fixed CDRom logons to use "Discs" window. Login directory still created
- * but not used.
- *
- * Rework of repeat logins to use the same code as a "find". This means an
- * additional call to FreewayEnumerate, but has the advantage of opening
- * correct window when it is a CD in question.
- *
- * Revision 1.13  95/05/16  10:38:40  pwain
- * Fixed problem where a *sharefslogoff did not shut down
- * directory view windows associated with the share.
- * ,
- *
- * Revision 1.12  95/05/09  15:46:32  pwain
- * Added an extra check at the end of the loop looking for authenticated
- * obects in "owner_logon". This should fix the RPC client problem (I hope!)
- *
- * Revision 1.11  95/05/04  16:14:53  pwain
- * Fixed minor niggle where if a user logs onto a previously
- * mounted share, nothing seemed to happen. Now if the share
- * is already logged on, the window of the shares is redisplayed
- *
- * Revision 1.10  95/05/04  15:41:21  pwain
- * Change to the way that logon for Access+ is done. If no user name
- * is specified, an immediate error is produced rather than waiting
- * for a timeout to occur.
- *
- *
- * Revision 1.9  95/03/15  14:43:44  pwain
- * Opps, Access was still using windowsize of 4. Fixed.
- * Setwindowsize slight reformatted to keep Kevin happy.
- *
- * Revision 1.8  95/03/15  14:14:53  pwain
- * Added a statement in setwindowsize to suppress warnings
- * about the cmd variable.
- *
- * Revision 1.7  95/03/15  14:10:49  pwain
- * Added conditional statements so that by default
- * Access uses a WINDOWSIZE of 2 and Access+ uses 4.
- * Also put in upperbound on WINDOWSIZE of 32.
- *
- * Revision 1.6  95/03/15  11:46:34  pwain
- * Fixed the share::.boot.!shareboot not working for AccessPlus.
- * Upped WINDOWSIZE to 4 for all versions. Added *sharefswindow
- * command to view WINDOWSIZE and set WINDOWSIZE (in internet.c)
- * Version number changed to x.33
- *
- * Revision 1.5  95/03/08  15:45:49  pwain
- * ShareFS 2.x now uses the CD share icon if a
- * disc is exported -cdrom. ShareFS 3.x version
- * updated to keep both versions in line.
- *
- * Revision 1.4  95/02/27  16:41:52  pwain
- * All existing malloc() calls changed to use rmalloc().
- * This is because ShareFS uses a different module entry
- * code which means that its stack is kept in RMA. DO NOT
- * USE MALLOC IN ShareFS CODE.
- *
- * Revision 1.3  95/02/02  09:58:20  pwain
- * Moved definition of lastopen to only be in Access+ code
- * (Compiler warning)
- *
- * Revision 1.2  95/01/17  09:03:41  pwain
- * Removed compilation warning messages.
- *
- * Revision 1.1  95/01/09  13:53:06  kwelton
- * Initial revision
- *
+ * $Id$
  */
-
-/* $Id$ */
 
 /*{{{  compile options*/
 #define MAXDATA (1024*1024)
@@ -134,6 +42,7 @@
 #include "freeway.h"
 #include "resourcefs.h"
 #include "modface.h"
+#include "filer.h"
 int CHUNKSIZE = 8192;
 
 #ifdef AACLIENT
@@ -311,10 +220,6 @@ int gethostname(char *name, int namelen)	/* Missing from library */
 }
 
 #ifndef SERVERLIST
-/*{{{  #define htonl*/
-/* If only C had a rotate operator, we could code a 4 instruction eor,lsr,bic,eor sequence */
-#define ROR(x,y) ((unsigned)(x)>>(y)|(unsigned)(x)<<32-(y))
-//#define htonl(x)        (((x)^ROR(x,16))>>8&~0xff00^ROR(x,8))
 
 char *inet_ntoa(struct in_addr in)	/* Numeric only version */
 {
@@ -385,6 +290,9 @@ void sendpacket(int c, void *p, int n)	/* Transmit p+n to c */
     int cc;
     memset(&ouraddr, 0, sizeof(ouraddr));
     ouraddr.sin_family = AF_INET;
+#ifndef COMPAT_INET4
+    ouraddr.sin_len = sizeof(ouraddr);
+#endif
     ouraddr.sin_addr.s_addr = (long) c;
     ouraddr.sin_port = ourport;
     DEBUGf("..sendto %s %p+%x <%x>..", inet_ntoa(ouraddr.sin_addr), p, n, *(int *) p);	/* P:1954 */
@@ -416,12 +324,23 @@ void sendsplitpacket(int c, void *p, int n, void *q, int m, int evil)
     sendpacket(c, b, n + m);
 }
 
+static struct ifreq *nextreq(struct ifreq *ifr)
+{
+#ifndef COMPAT_INET4
+    if (ifr->ifr_addr.sa_len) {
+        /* Dodgy hack for dual Internet 4/Internet 5 compat */
+        ifr = (struct ifreq *) ((caddr_t) ifr + ifr->ifr_addr.sa_len - sizeof(struct sockaddr));
+    }
+#endif
+    ++ifr;
+}
+
 static void broadcast(char *msg, int msglen)	/* broadcast msg over
 						 * all interfaces */
 {
     struct ifconf ifc;		/* P:139 */
     char buf[256];
-    struct ifreq *ifr;
+    struct ifreq *ifr, *end;
     int n;
     struct sockaddr_in ouraddr;
     DEBUGf("Broadcast %d bytes code %x:", msglen, msg[0]);	/* P:21 */
@@ -434,7 +353,8 @@ static void broadcast(char *msg, int msglen)	/* broadcast msg over
 	return;			/* P:0 */
     }
     ifr = ifc.ifc_req;
-    for (n = ifc.ifc_len / sizeof(struct ifreq); --n >= 0; ifr++)	/* P:417 */
+    end = (struct ifreq *) (ifc.ifc_buf + ifc.ifc_len);
+    for (; ifr < end; ifr = nextreq(ifr))
     {
 	if (ifr->ifr_addr.sa_family != AF_INET)	/* P:139 */
 	{
@@ -473,6 +393,9 @@ static void broadcast(char *msg, int msglen)	/* broadcast msg over
 	}
 	DEBUGf("%lx,", ouraddr.sin_addr.s_addr);	/* P:21 */
 	ouraddr.sin_port = ourport;
+#ifndef COMPAT_INET4
+	ouraddr.sin_len = sizeof(ouraddr);
+#endif
 	if (sendto(oursocket, msg, msglen, 0, (struct sockaddr *) & ouraddr, sizeof(ouraddr)) < 0)
 	{
 	    lasterror = lookuperrno(errno, "broadcast sendto");	/* P:0 */
@@ -777,7 +700,7 @@ void owner_logoff(char *name)
 
   found:
     _swix(Freeway_Register, _INR(0, 2), Freeway_Register_Deregister_Auth, DOMAIN_DISCS, (next->o_pin));
-    sprintf(buf, "Filer_Closedir Resources:$.Logon.%s", next->o_name);
+    sprintf(buf, "Filer_Closedir " DISCFS_PREFIX ":$.Logon.%s", next->o_name);
     _kernel_oscli(buf);
     dodismount(next->o_name);
     free(next->o_name);
@@ -804,7 +727,7 @@ int owner_logon(char *name, char *pinstr, int fromfiler)
 	    /*
 	     * Original fix, which in light of CD shares is now wrong!
 	     *  sprintf(buf,
-	     *	    "Filer_Opendir Resources:$.Logon.%s %d 300 -LargeIcons",
+	     *	    "Filer_Opendir " DISCFS_PREFIX ":$.Logon.%s %d 300 -LargeIcons",
 	     *	    o->o_name, 150 + lastopen);
 	     * lastopen += 15;
 	     * _kernel_oscli(buf);
@@ -913,7 +836,7 @@ int owner_logon(char *name, char *pinstr, int fromfiler)
 	if (!(descriptor & ATTRIBUTE_CDROM))
 	{
 	    sprintf(buf,
-		    "Filer_Opendir Resources:$.Logon.%s %d 300 -LargeIcons",
+		    "Filer_Opendir " DISCFS_PREFIX ":$.Logon.%s %d 300 -LargeIcons",
 		    o->o_name, 150 + lastopen);
 	    lastopen += 15;
 	    _kernel_oscli(buf);
@@ -922,10 +845,10 @@ int owner_logon(char *name, char *pinstr, int fromfiler)
 	{
 #if 0
 	    sprintf(buf,
-	            "Filer_Opendir Resources:$.Logon.%s %d 300 -LargeIcons",
+	            "Filer_Opendir " DISCFS_PREFIX ":$.Logon.%s %d 300 -LargeIcons",
 		    o->o_name, 150 + lastopen);
 #else
-	    sprintf(buf, "Filer_Opendir Resources:$.Discs %d 300 -LargeIcons",
+	    sprintf(buf, "Filer_Opendir " DISCFS_PREFIX ":$.Discs %d 300 -LargeIcons",
 		    150 + lastopen);
 #endif
 	    lastopen += 15;
@@ -1180,6 +1103,9 @@ error *turnon(void)	/**/
     }
     memset(&ouraddr, 0, sizeof(ouraddr));
     ouraddr.sin_family = AF_INET;
+#ifndef COMPAT_INET4
+    ouraddr.sin_len = sizeof(ouraddr);
+#endif
     ouraddr.sin_addr.s_addr = htonl(INADDR_ANY);
     ouraddr.sin_port = ourport;
     oursocket = socket(AF_INET, SOCK_DGRAM, 0);
