@@ -74,7 +74,7 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
 {
     VALUE v;
     STRING *list = attribute->templates;
-    /*int w;*/
+    int w;
 
     if (string.bytes == 0)
     {
@@ -539,9 +539,6 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
            bigger than 100% is acceptable. Clip rather than ignore */
 	if (v.u.f > 100.0)
 	    v.u.f = 100.0;
-#if DEBUG && 0
-	v.type = value_none;	/* temp hack! */
-#endif
     }
     else if (string.bytes >= 1 && string.ptr[0] == '*')
     {

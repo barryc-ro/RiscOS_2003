@@ -363,11 +363,11 @@ static key_list nc_movement1_keys[] =
     { 0 }
 };
 
-#define nc_toolbar_keys rca_toolbar_keys
-#define nc_codec_keys	rca_codec_keys
-#define nc_osk_keys	rca_osk_keys
-#define nc_frame_link_keys	rca_frame_link_keys
-#define nc_external_popup_keys	rca_external_popup_keys	
+#define nc_toolbar_keys 0
+#define nc_codec_keys	0
+#define nc_osk_keys	0
+#define nc_frame_link_keys	0
+#define nc_external_popup_keys	0
 
 /* ------------------------------------------------------------------------------------- */
 

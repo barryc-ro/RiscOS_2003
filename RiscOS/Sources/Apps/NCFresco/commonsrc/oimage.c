@@ -454,7 +454,6 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     rid_text_item_image *tii = (rid_text_item_image *) ti;
     int width = -1, height = -1;
     image_flags fl;
-    int min;
 
     IMGDBG(("oimage_size: src '%s' im %p bwidth %d, hspace %d, vspace %d, fwidth %d\n",
 	    tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace, fwidth));
@@ -486,32 +485,22 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
     oimage_size_image(tii->alt, &tii->ww, &tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 
+    IMGDBG(("oimage_size:       width %d height %d\n", width, height));
+
     /* DAF: Formatter doesn't invisible objects please */
     if (width < 1)
 	width = 1;
     if (height < 1)
 	height = 1;
 
-    tii->hgap = (tii->bwidth + tii->hspace) *doc->scale_value/100 * 2;
-    min = (tii->bwidth ? 2 : 0) + (tii->hspace ? 2 : 0);
-    if (tii->hgap < min)
-	tii->hgap = min;
-	
-    tii->vgap = (tii->bwidth + tii->vspace) *doc->scale_value/100 * 2;
-    min = (tii->bwidth ? 2 : 0) + (tii->vspace ? 2 : 0);
-    if (tii->vgap < min)
-	tii->vgap = min;
-    
-    width += tii->hgap * 2;
-    height += tii->vgap * 2;
+    width += (tii->bwidth + tii->hspace) * 4;
+    height += (tii->bwidth + tii->vspace) * 4;
 
     ti->width = width;
     ti->pad = 0;
 
     ti->max_up = oimage_decode_align(tii->flags, height);
     ti->max_down = height - ti->max_up;
-
-    IMGDBG(("oimage_size:       width %d height %d hgap %d vgap %d item width %d max up %d down %d\n", width, height, tii->hgap, tii->vgap, ti->width, ti->max_up, ti->max_down));
 }
 
 /* size method */
@@ -526,6 +515,7 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 {
 #ifndef BUILDERS
     rid_text_item_image *tii = (rid_text_item_image *) ti;
+    int bw = tii->bwidth;
     wimp_box bbox;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
@@ -537,10 +527,10 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	return;
     }
 
-    bbox.x0 = hpos + tii->hgap;
-    bbox.y0 = bline - ti->max_down + tii->vgap;
-    bbox.x1 = hpos + ti->width - tii->hgap;
-    bbox.y1 = bline + ti->max_up - tii->vgap;
+    bbox.x0 = hpos + tii->hspace*2 + bw*2;
+    bbox.y0 = bline - ti->max_down + tii->vspace*2 + bw*2;
+    bbox.x1 = bbox.x0 + ti->width - tii->hspace*2*2 - bw*2*2;
+    bbox.y1 = bbox.y0 + ti->max_up + ti->max_down - tii->vspace*2*2 - bw*2*2;
 
     if (oimage_renderable(tii, doc))
     {
@@ -564,17 +554,14 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	oimage_render_text(ti, doc, fs, &bbox, tii->alt);
     }
 
-    if (tii->bwidth)
+    if (bw)
     {
-	int bw = tii->bwidth *doc->scale_value/100 * 2;
-	if (bw < 2)
-	    bw = 2;
- 	oimage_render_border(ti, doc, &bbox, bw);
+ 	oimage_render_border(ti, doc, &bbox, bw*2);
 
 #if DRAW_AREA_HIGHLIGHT
         if (tii->usemap && tii->data.usemap.selection)
         {
-            imagemap_draw_area(doc, tii->imh, tii->data.usemap.selection, x, bline + ti->max_up - tii->vgap);
+            imagemap_draw_area(doc, tii->imh, tii->data.usemap.selection, x, bline + ti->max_up - tii->vspace*2);
         }
 #endif
     }
@@ -620,8 +607,8 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
     {
 	/* Remember that the y is in work area co-ordinates */
 
-	x = x - tii->hgap;
-	y = (ti->max_up) - tii->vgap - y;
+	x = x - (tii->bwidth * 2) - tii->hspace*2;
+	y = ((ti->max_up) - (tii->bwidth *2) - tii->vspace*2) - y;
 
         image_os_to_pixels((image)tii->im, &x, &y, doc->scale_value);
 
@@ -683,9 +670,9 @@ void *oimage_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
     case object_image_BOX:
     {
 	static wimp_box box;
-	box.x0 = tii->hgap;
+	box.x0 = tii->hspace*2 + tii->bwidth*2;
 	box.x1 = -box.x0;
-	box.y0 = tii->vgap;
+	box.y0 = tii->vspace*2 + tii->bwidth*2;
 	box.y1 = -box.y0;
 	return &box;
     }

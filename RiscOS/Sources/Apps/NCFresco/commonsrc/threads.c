@@ -35,12 +35,6 @@ static int tmp_argc;
 static char **tmp_argv;
 static main_function tmp_mf;
 
-#if DEBUG
-/* Some debugging to check the maximum number of threads running at once */
-static int thread__total = 0;
-static int thread__largest = 0;
-#endif
-
 extern void thread_exit(int rc)
 {
     IMGDBG(("thrd%p: in thread_exit\n", running_thread));
@@ -101,16 +95,6 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
         return NULL;
     }
 
-#if DEBUG
-    thread__total++;
-    if (thread__largest < thread__total)
-    {
-	thread__largest = thread__total;
-	DBG(("thread_start: max %d\n"));
-    }
-#endif
-
-    
 #if DEBUG >= 3
     fprintf(stderr, "Got a stack\n");
 #endif
@@ -161,7 +145,7 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
 	new->exec_point[jmpbuf_lr] &= ~3;
 	new->exec_point[jmpbuf_lr] |= (return_point[jmpbuf_lr]  & 3);
 
-        IMGDBGN(("running_thread = %p\n", new));
+        IMGDBG(("running_thread = %p\n", new));
 
 	running_thread = new;
 	longjmp(new->exec_point, 1);
@@ -169,7 +153,7 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
 	fprintf(stderr, "Thread start long jump returned\n");
 #endif
 
-        IMGDBGN(("running_thread = 0\n"));
+        IMGDBG(("running_thread = 0\n"));
 	running_thread = 0;
     }
 
@@ -178,14 +162,14 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
 
 thread thread_run(thread t)
 {
-    IMGDBGN(("thrd%p: being run\n",t));
+    IMGDBG(("thrd%p: being run\n",t));
     if ((t->status = (thread_status) setjmp(return_point)) == 0)
     {
-        IMGDBGN(( "running_thread = %p\n", t ));
+        IMGDBG(( "running_thread = %p\n", t ));
 	running_thread = t;
 	longjmp(t->exec_point, 1);
 
-	IMGDBGN(( "running_thread = 0\n" ));
+	IMGDBG(( "running_thread = 0\n" ));
 	running_thread = 0;
     }
 
@@ -220,10 +204,6 @@ void thread_destroy(thread t)
 
     mm_free(t);
 
-#if DEBUG
-    thread__total--;
-#endif
-
     if ( t == running_thread )
     {
         IMGDBG(( "running_thread = 0\n" ));
@@ -233,7 +213,7 @@ void thread_destroy(thread t)
 
 void thread_wait(char *s)
 {
-    IMGDBGN(("thrd%p: wait(%s)\n", running_thread, s ));
+    IMGDBG(("thrd%p: wait(%s)\n", running_thread, s ));
     running_thread->halt_point = s;
 
     if (setjmp(running_thread->exec_point) == 0)

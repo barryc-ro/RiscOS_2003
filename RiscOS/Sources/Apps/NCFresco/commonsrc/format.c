@@ -57,12 +57,12 @@
 
 
 
-static BOOL basic_size_stream(antweb_doc *doc,
+static void basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
 			      rid_text_stream *stream,
 			      int depth);
 
-static BOOL basic_size_table(antweb_doc *doc,
+static void basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
 			     rid_table_item *table,
 			     int depth);
@@ -99,20 +99,10 @@ static void format_one_off_assertions(void)
     ASSERT(PCT_MIN == ABS_MIN + 1);
     ASSERT(PCT_MAX == ABS_MAX + 1);
     ASSERT(FIRST_MIN == 0);
-
-    /* Should have only one minwidth style active at once! */
-    ASSERT( !!gbf_active(GBF_MINWIDTH_A) + 
-	    !!gbf_active(GBF_MINWIDTH_B) + 
-	    !!gbf_active(GBF_MINWIDTH_C) + 
-	    !!gbf_active(GBF_MINWIDTH_D) == 1 );
 }
 
-/* TRUE means all constraints should be nuked. This happens,
-currently, when a value has reached the clipping point of SHORTISH,
-which happens easily with automatically generated test cases and the
-choice of 15 bits of width value. FALSE means do nothing special. */
 
-static BOOL format_width_checking_assertions(rid_table_item *table, BOOL horiz) 
+static void format_width_checking_assertions(rid_table_item *table, BOOL horiz)
 {
     int *widths = HORIZCELLS(table,horiz);
 
@@ -122,25 +112,22 @@ static BOOL format_width_checking_assertions(rid_table_item *table, BOOL horiz)
 
     ASSERT(widths[ABS_MAX] <= widths[PCT_MAX]);
     ASSERT(widths[PCT_MAX] <= widths[REL_MAX]);
-
-    if (widths[REL_MIN] >= SHORTISH_MAX || widths[REL_MAX] >= SHORTISH_MAX)
-    {
-	FMTDBG(("\n\nformat_width_checking_assertions: SHORTISH_MAX triggered clipping!\n\n\n"));
-	return TRUE;
-    }
-
-    return FALSE;
+/*
+    ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
+    ASSERT(widths[ABS_MIN] <= widths[ABS_MAX]);
+    ASSERT(widths[PCT_MIN] <= widths[PCT_MAX]);
+    ASSERT(widths[REL_MIN] <= widths[REL_MAX]);
+*/
 }
 
 /*****************************************************************************/
 
-static BOOL basic_size_stream(antweb_doc *doc,
+static void basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
 			      rid_text_stream *stream,
 			      int depth)
 {
     rid_text_item *ti;
-    BOOL si1_pct = FALSE;
 
     FMTDBGN(("basic_size_stream(%p %p %p): basic stream sizing\n",
 	     doc, rh, stream));
@@ -150,7 +137,7 @@ static BOOL basic_size_stream(antweb_doc *doc,
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
-	    si1_pct |= basic_size_table(doc, rh, table, depth+1);
+	    basic_size_table(doc, rh, table, depth+1);
 	}
 	else
 	{
@@ -178,8 +165,6 @@ static BOOL basic_size_stream(antweb_doc *doc,
     stream->fwidth = 1000000000;
     format_stream(doc, rh, stream, DONT, depth);
     stream->width_info.maxwidth = stream->widest;
-
-    return si1_pct;
 }
 
 /*****************************************************************************/
@@ -352,12 +337,10 @@ static void calc_abs_maxwidth(antweb_doc *doc,
     int width;
     int *widths = (horiz ? table->hwidth : table->vwidth);
 
-colspan_trace_cells(table, horiz);
     /* Set unused column headers to zero */
     colspan_all_and_eql_set(table, horiz, ABS_MAX,
 			    colspan_flag_ABSOLUTE_COL | colspan_flag_ABSOLUTE_GROUP, 0, 0);
 
-colspan_trace_cells(table, horiz);
     /* Use RAW_MAX values for used locations that do not have an ABS
        contribution. */
     colspan_all_and_eql_copy(table, horiz, ABS_MAX,
@@ -365,34 +348,19 @@ colspan_trace_cells(table, horiz);
 			     0,
 			     RAW_MAX);
 
-colspan_trace_cells(table, horiz);
     /* For all used items with an ABS contribution, ensure it is at
        least as large as the RAW_MIN value. */
-    /* DAF: 970628: Changes RAW_MIN to ABS_MIN. */
     colspan_column_and_eql_lt_copy(table, horiz, ABS_MAX,
 				   colspan_flag_ABSOLUTE_COL,
 				   colspan_flag_ABSOLUTE_COL,
-				   ABS_MIN);
+				   RAW_MIN);
 
-colspan_trace_cells(table, horiz);
     colspan_all_and_eql_lt_copy(table, horiz, ABS_MAX,
 				colspan_flag_ABSOLUTE_GROUP,
 				colspan_flag_ABSOLUTE_GROUP,
-				ABS_MIN);
-
-    colspan_column_and_eql_lt_copy(table, horiz, ABS_MAX,
-				   0,
-				   0,
-				   ABS_MIN);
-
-colspan_trace_cells(table, horiz);
-    colspan_all_and_eql_lt_copy(table, horiz, ABS_MAX,
-				0,
-				0,
-				ABS_MIN);
+				RAW_MIN);
 
     width = colspan_algorithm(table, ABS_MAX, horiz);
-colspan_trace_cells(table, horiz);
 
     /* Record widths for percentages to work from */
     colspan_column_init_from_leftmost(table, ABS_MAX, horiz);
@@ -469,22 +437,19 @@ static int largest_implied_table_width(rid_table_item *table,
 		const int z = (100 * q ) / a;
 		if (z > widest)
 		    widest = z;
-
 		if (gbf_active(GBF_SI1_PCT))
 		{
 		    const int F = (a * SI1_PCT_WIDTH) / 100;
 		    if (z > F)
 		    {
-			FMTDBG(("largest_implied_table_width: SI1_PCT (A) triggered: NUKING COLUMN %d (%d > %d)\n", x, z, F));
-			table->flags |= rid_tf_SI1_PCT;
-			table->colspans[x].flags |= colspan_flag_STOMP_PERCENT;
+			FMTDBG(("largest_implied_table_width: SI1_PCT triggered on column %d\n", x));
+			table->flags |= 0;
 		    }
 		}
-		FMTDBG(("A: x %d, q %d, a %d, z %d, widest %d, width_non_pct %d\n", x,q,a,z,widest,width_non_pct));
+		FMTDBGN(("q %d, a %d, z %d, widest %d\n", q,a,z,widest));
 	    }
 	    else
 	    {
-		FMTDBG(("B: x %d, q %d, a %d, z -, widest %d, width_non_pct %d\n", x,q,a,widest,width_non_pct));
 		width_non_pct += q;
 	    }
 	}
@@ -498,16 +463,6 @@ static int largest_implied_table_width(rid_table_item *table,
 
 	    if (x > widest)
 	    {
-		const int z = ((100 - pct_used) * SI1_PCT_WIDTH) / 100;
-		if (x > z && gbf_active(GBF_SI1_PCT))
-		{
-		    int i;
-		    FMTDBG(("\n\nlargest_implied_table_width: SI1_PCT (B) triggered: NUKING ALL PERCENTAGES! (%d > %d)\n\n\n", x, z));
-		    table->flags |= rid_tf_SI1_PCT;
-		    for (i = 0; i < max; i++)
-			table->colspans[i].flags |= colspan_flag_STOMP_PERCENT;
-
-		}
 		if (horiz)
 		    table->flags |= rid_tf_NON_PCT_GREW_HORIZ;
 		else
@@ -610,6 +565,72 @@ static int largest_implied_table_width(rid_table_item *table,
     return widest;
 }
 
+/*****************************************************************************
+
+  Force a total size change or +1 or -1 (the bias parameter) to the
+  table, supplying the expected resulting size. This is a potentially
+  expensive operation, as we might have to alter each group.
+
+  We operate by running though each column with a group, L to R, and
+  alter any PERCENT_THIS widths by the bias factor. Eventually, this
+  should hit a point where a maximumal constraint gets lowered and the
+  size changes. We also alter any such column header, just in case. We
+  are careful about -1 (NOTINIT), 0 (INAVCTIVE) and 1 (DON'T GO LOWER
+  THAN) and their meanings when we start altering them.
+
+  @@@@ FIXME: There is probably a case that causes us to spin: A table
+  where all width contributions come from percentages, where each such
+  width is a group, each percentage is 1% and there are about target
+  of them. Only another browser hacker is going to have a page like
+  this, so delay fixing.
+
+ */
+
+#if 0
+static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bias, int target)
+{
+    const width_array_e max = HORIZMAX(table, horiz);
+    const int bias2 = bias == 1 ? 0 : 1;
+    int total = 0;
+    int x;
+
+    ASSERT(bias == -1 || bias == 1);
+
+    FMTDBG(("tiresome_pct_forced_change(dp %d, id %d, %s) bias=%d, target=%d\n",
+	    table->depth, table->idnum, HORIZVERT(horiz), bias, target));
+    for (x = 0; x < max; x++)
+    {
+	pcp_cell cell = &table->colspans[x];
+	pcp_group grp = cell->first_start;
+
+	if (cell->flags & colspan_flag_PERCENT_THIS)
+	    if (cell->width[PCT_RAW] > bias2)
+		cell->width[PCT_RAW] += bias;
+
+	if (grp != NULL)
+	{
+	    do
+	    {
+		if (grp->flags & colspan_flag_PERCENT_THIS)
+		    if (grp->width[PCT_RAW] > bias2 )
+			grp->width[PCT_RAW] += bias;
+		grp = grp->next_start;
+	    } while (grp != NULL);
+	}
+
+	total = pct_raw_recalc(table, horiz);
+
+	if (total == target)
+	    break;
+
+	ASSERT(total == target - 1 || total == target + 1);
+    }
+
+    ASSERT(total == target);
+
+    return total;
+}
+#endif
 /*****************************************************************************
 
   Normalise the percentage specifications.
@@ -1087,41 +1108,7 @@ static void calc_rel_maxwidth(antweb_doc *doc,
 
 /*****************************************************************************/
 
-static void recurse_nuke_constraints(rid_table_item *table, BOOL horiz)
-{
-    int x, y;
-    rid_table_cell *cell;
-    const int max = HORIZMAX(table, horiz);
-    pcp_cell the_cells = table->colspans;
-    rid_text_item *ti;
-
-    FMTDBG(("recurse_nuke_constraints: NUKING CONSTRAINTS IN TABLE %d\n", table->idnum));
-
-    /* Nuke all constraints at our level */
-    for (x = 0; x < max; x++)
-    {
-	table->colspans[x].flags |= colspan_flag_STOMP_PERCENT |
-	    colspan_flag_STOMP_ABSOLUTE |
-	    colspan_flag_STOMP_RELATIVE;
-
-	colspan_do_the_stomping(table, HORIZONTALLY);
-
-    }   
-
-    /* And get all children to do the same */
-    for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x,&y)) != NULL; )
-    {
-	for (ti = cell->stream.text_list; ti != NULL; ti = ti->next)
-	{
-	    if (ti->tag == rid_tag_TABLE)
-		recurse_nuke_constraints( ((rid_text_item_table*)ti)->table, horiz );
-	}
-    }
-}
-
-/*****************************************************************************/
-
-static BOOL basic_size_table(antweb_doc *doc,
+static void basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
 			     rid_table_item *table,
 			     int depth)
@@ -1129,7 +1116,6 @@ static BOOL basic_size_table(antweb_doc *doc,
     int x, y;
     rid_table_cell *cell;
     int uwidth;
-    BOOL rc = FALSE;		/* Don't trigger entire reformatting */
 
     FMTDBG(("basic_size_table(%p %p id %d): recurse down doing basic sizing\n", doc, rh, table->idnum));
 
@@ -1147,8 +1133,6 @@ static BOOL basic_size_table(antweb_doc *doc,
     FMTDBG(("basic_size_table: id %d: now do colspan calculations\n", table->idnum));
 
     colspan_init_structure(table, HORIZONTALLY, doc->scale_value);
-
-    colspan_trace_cells(table, HORIZONTALLY);
 
     for (x = 0; x < table->cells.x; x++)
 	if (table->colspans[x].width[RAW_MIN] == NOTINIT)
@@ -1213,38 +1197,11 @@ static BOOL basic_size_table(antweb_doc *doc,
     }
 #endif
 
-    if ( format_width_checking_assertions(table, HORIZONTALLY) )
-    {
-	int x;
-	rc = TRUE;
-	FMTDBG(("basic_size_table: NUKING ALL CONSTRAINTS ON TABLE %d\n", table->idnum));
-
-	recurse_nuke_constraints(table, HORIZONTALLY);
-
-	colspan_do_the_stomping(table, HORIZONTALLY);
-    }
+    format_width_checking_assertions(table, HORIZONTALLY);
 
     /* notice we don't free the colspan structure here, as we need it during
      * the "real" format recursion
      */
-
-    if (table->flags & rid_tf_SI1_PCT)
-    {
-	table->flags &= ~rid_tf_SI1_PCT;
-
-	if (gbf_active(GBF_SI1_PCT))
-	{
-	    FMTDBG(("basic_size_table: S1_PCT TRIGGERED - NUKING NOW: id %d\n", table->idnum));
-	    if (! rc)
-	    {
-		/* IE didn't have SHORTISH_MAX clipping do this already */
-		colspan_do_the_stomping(table, HORIZONTALLY);
-		rc = TRUE;
-	    }
-	}
-    }
-
-    return rc;
 }
 
 /*****************************************************************************
@@ -1610,8 +1567,7 @@ static void recurse_format_stream(antweb_doc *doc,
 
 /* Never scale things to under this percentage */
 /* 576/640 = 0.9 = ideal ratio. go for less though! */
-#define MIN_SCALE	80
-#define SCALE_UNIT	10
+#define MIN_SCALE 80
 
 /* Allow a bit of play to avoid a few pixels over becoming a lot of pixels under */
 #define AUTOFIT_THRESHOLD 32
@@ -1651,42 +1607,21 @@ extern void rid_toplevel_format(antweb_doc *doc,
 /* 	doc->scale_value = 100; */
 
 	FMTDBG(("Sizing root stream\n"));
-
-	if ( basic_size_stream(doc, rh, root_stream, 0) )
-	{
-	    FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
-		    root_stream->width_info.minwidth,
-		    root_stream->width_info.maxwidth,
-		    fwidth,
-		    doc->scale_value,
-		    MIN_SCALE));
-	    if ( gbf_active(GBF_SI1_PCT) )
-	    {
-		FMTDBG(("\nSI1_PCT CAUSED  PERCENTAGE NUKING -- SO RESIZING\n\n\n"));
-	    }
-	    /* Nuking will have taken place during sizing on each
-               table as it applies. Haven't the foggiest how many
-               times one should iterate to achieve stability, so no
-               iteration and just hope it's sensible. */
-	    rid_zero_widest_height( root_stream );
-	    fvpr_forget( root_stream );
-	    basic_size_stream(doc, rh, root_stream, 0);
-	}
+	basic_size_stream(doc, rh, root_stream, 0);
 	FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
 		root_stream->width_info.minwidth,
 		root_stream->width_info.maxwidth,
 		fwidth,
 		doc->scale_value,
 		MIN_SCALE));
-	
 #if 0
 	dump_header(rh);
 #endif
-	while ( (rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD) && 
-	       gbf_active(GBF_AUTOFIT) &&
-		doc->scale_value > MIN_SCALE )
+	if (rh->stream.width_info.minwidth > fwidth)
 	{
-		doc->scale_value -= SCALE_UNIT;
+	    if ( gbf_active(GBF_AUTOFIT) && rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD  && doc->scale_value > MIN_SCALE)
+	    {
+		doc->scale_value = MIN_SCALE;
 
 #ifndef BUILDERS
 		/* It's all changed -- force a redraw of a view (using
@@ -1706,6 +1641,10 @@ extern void rid_toplevel_format(antweb_doc *doc,
 			root_stream,
 			root_stream->width_info.minwidth,
 			root_stream->width_info.maxwidth));
+
+		/* ensure that bg and animations are cached at the right size */
+		antweb_uncache_image_info( doc );
+	    }
 	}
 
 	if (rh->stream.width_info.minwidth > fwidth)

@@ -121,33 +121,6 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 }
 #endif /* BUILDERS */
 
-static int getwebfont(antweb_doc *doc, rid_text_item *ti)
-{
-    int whichfont;
-
-#ifdef SELECT_CURRENT_FONT
-    whichfont = ti->st.wf_index;
-#else
-    whichfont = WEBFONT_TTY;
-#endif
-
-    /* pdh: autofit bodge */
-    if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) )
-    {
-        if ( doc->scale_value < 100
-             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
-        {
-           /* make it one size smaller */
-           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
-           whichfont -= 1;
-        }
-    }
-
-    antweb_doc_ensure_font( doc, whichfont );
-
-    return whichfont;
-}
-
 void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
 #ifdef BUILDERS
@@ -168,22 +141,21 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     sel->doc = doc;
 
-    whichfont = getwebfont(doc, ti);
+#ifdef SELECT_CURRENT_FONT
+    whichfont = ti->st.wf_index;
+#else
+    whichfont = WEBFONT_TTY;
+#endif
+
+    antweb_doc_ensure_font( doc, whichfont );
+
     wf = &webfonts[whichfont];
 
     line_space = wf->max_up + wf->max_down;
 
-#if 1
-    /* This is better? */
-    if (sel->flags & rid_sf_MULTIPLE)
-	width = webfont_font_width(whichfont, "<None>");
-    else
-	width = 0;
-#else
     /* This isn't quite right but it will do for now */
     width = webfont_tty_width(6, 1); /* Length of '<none>' in chars */
-#endif
-    
+
     if (font_setfont(wf->handle) != 0)
 	return;
 
@@ -287,7 +259,6 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font_string fstr;
     int fg, bg;
     BOOL selected = backend_is_selected(doc, ti);
-    int whichfont;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
@@ -346,13 +317,19 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (checked > 1)
 	str = "<Many>";
 
-    whichfont = getwebfont(doc, ti);
-    
-    if (fs->lf != webfonts[whichfont].handle)
+#ifdef SELECT_CURRENT_FONT
+    if (fs->lf != webfonts[ti->st.wf_index].handle)
     {
-	fs->lf = webfonts[whichfont].handle;
+	fs->lf = webfonts[ti->st.wf_index].handle;
 	font_setfont(fs->lf);
     }
+#else
+    if (fs->lf != webfonts[WEBFONT_TTY].handle)
+    {
+	fs->lf = webfonts[WEBFONT_TTY].handle;
+	font_setfont(fs->lf);
+    }
+#endif
 
     if (fs->lfc != fg || fs->lbc != bg)
     {

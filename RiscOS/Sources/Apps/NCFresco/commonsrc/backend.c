@@ -671,8 +671,8 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
         if (ti->tag == rid_tag_IMAGE)
 	{
 	    rid_text_item_image *tii = (rid_text_item_image *)ti;
-	    int xx = *px - tii->hgap;
-	    int yy = (ti->max_up) - tii->vgap - *py;
+	    int xx = *px - (tii->bwidth * 2) - tii->hspace*2;
+	    int yy = ((ti->max_up) - (tii->bwidth *2) - tii->vspace*2) - *py;
 
 	    image_os_to_pixels((image)tii->im, &xx, &yy, doc->scale_value);
 	    *px = xx;
@@ -3044,8 +3044,6 @@ static os_error *antweb_document_format_no_fvpr(antweb_doc *doc, int user_width)
 
     fprintf(stderr, "margin left=%d, top=%d\n", doc->rh->margin.left, doc->rh->margin.top);
 #endif
-
-    DBG(("antweb_document_format: format finished minwidth %d fwidth %d scale %d\n", doc->rh->stream.width_info.minwidth, doc->rh->stream.fwidth, doc->scale_value));;
 
     return NULL;
 }

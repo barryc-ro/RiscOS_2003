@@ -45,7 +45,7 @@ void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     if (gbf_active(GBF_NEW_FORMATTER))
     {
-	TABDBG(("\n\n\n\n\notable_size: new formatter so not doing anything\n\n\n\n\n\nDONT EXPECT THIS TO BE CALLED\n\n\n\n\n\n"));
+	TABDBG(("otable_size: new formatter so not doing anything\n"));
     }
     else
     {

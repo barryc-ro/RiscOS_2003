@@ -21,17 +21,12 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_TRANSLATE_UNDEF_CHARS * 1 ) +
 		( GBF_NEW_FORMATTER * 1		) +
 		( GBF_AUTOFIT * 1		) +
-		( GBF_AUTOFIT_ALL_TEXT * 1	) +
 		( GBF_NETSCAPE_OVERLAPS * 0	) +
 		( GBF_HARD_TABLES * 0		) +
 		( GBF_EARLYIMGFETCH * 0		) +
 		( GBF_LOW_MEMORY * 0		) +
 		( GBF_ANTI_TWITTER * 0		) + 
-		( GBF_SI1_PCT * 1		) +
-		( GBF_MINWIDTH_A * 0		) +
-		( GBF_MINWIDTH_B * 1		) +
-		( GBF_MINWIDTH_C * 0		) +
-		( GBF_MINWIDTH_D * 0		)
+		( GBF_SI1_PCT * 1		)
 ;
 
 #elif defined(BUILDERS)
@@ -48,11 +43,7 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_EARLYIMGFETCH * 0		) +
 		( GBF_LOW_MEMORY * 0		) +
 		( GBF_ANTI_TWITTER * 0		) + 
-		( GBF_SI1_PCT * 1		) +
-		( GBF_MINWIDTH_A * 0		) +
-		( GBF_MINWIDTH_B * 1		) +
-		( GBF_MINWIDTH_C * 0		) +
-		( GBF_MINWIDTH_D * 0		)
+		( GBF_SI1_PCT * 1		)
 ;
 
 #elif defined(FRESCO) && !defined(PRODUCTION)
@@ -69,13 +60,8 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_HARD_TABLES * 0		) +
 		( GBF_EARLYIMGFETCH * 0		) +
 		( GBF_LOW_MEMORY * 0		) +
-		( GBF_ANTI_TWITTER * 0		) +
-		( GBF_SI1_PCT * 1		) +
-		( GBF_MINWIDTH_A * 0		) +
-		( GBF_MINWIDTH_B * 1		) +
-		( GBF_MINWIDTH_C * 0		) +
-		( GBF_MINWIDTH_D * 0		)
-;
+		( GBF_ANTI_TWITTER * 0		) + 
+		( GBF_SI1_PCT * 1		)
 
 #endif /* Build variant switch */
 

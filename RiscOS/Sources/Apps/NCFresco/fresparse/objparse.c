@@ -175,7 +175,6 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 
     obj->standby = valuestringdup(standby);
 #ifndef BUILDERS
-#ifndef BUILDERS
     /* if no standbyu message given then use the file type name */
     if (obj->standby == NULL)
     {
@@ -183,7 +182,6 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 	if (s)
 	    obj->standby = strdup(s);
     }
-#endif
 #endif
     obj->name = valuestringdup(name);
 

@@ -22,23 +22,8 @@
 #define GBF_ANTI_TWITTER		0x00001000 /* using s/w anti-twitter */
 #define GBF_VERY_LOW_MEMORY		0x00002000 /* have almost exhausted emergency cache */
 #define GBF_SI1_PCT			0x00004000 /* Hack for Si for %ages and minwidth */
-#define GBF_AUTOFIT_ALL_TEXT		0x00008000 /* shrink all text on autofit */
 
-/*****************************************************************************/
-
-#define GBF_MINWIDTH_A			0x10000000 /* NCFresco */
-#define GBF_MINWIDTH_B			0x20000000 /* Fresco */
-#define GBF_MINWIDTH_C			0x40000000 /* Reserved */
-#define GBF_MINWIDTH_D			0x80000000 /* Reserved */
-
-/*
-
-A = max(LM) + max(CW) + max(RM)
-    [tends to be wide]
-B = max(LM + CW + RM) 
-    [tends to be narrow]
-
-*****************************************************************************
+/*****************************************************************************
 
    Production builds of Fresco try to resolve gbf_active() usage at
    compile time. Other variants leave it until runtime (the original

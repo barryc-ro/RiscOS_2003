@@ -887,7 +887,6 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
 	if (widths[RAW_MAX] < cell->stream.width_info.maxwidth)
 	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
 
-	FMTDBG(("prior to assert min %d, max %d - A\n", widths[RAW_MIN], widths[RAW_MAX]));
 	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
     }
     else
@@ -963,16 +962,7 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
 	if (widths[RAW_MAX] < cell->stream.width_info.maxwidth)
 	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
 
-	FMTDBG(("prior to assert min %d, max %d - B\n", widths[RAW_MIN], widths[RAW_MAX]));
-
-	if (widths[RAW_MIN] > widths[RAW_MAX])
-	{
-	    FMTDBG(("ASSERTION WOULD HAVE TRIGGERED\n"));
-	}
-#if 1
 	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
-#endif
-	{ static int BORRIS_FIX_ME; }
     }
     else
     {
@@ -1084,84 +1074,6 @@ static void set_nocons(rid_table_item *table, BOOL horiz, int x, rid_cell_flags 
 	set_nocons_vert(table, x, f);
 }
 
-extern void colspan_do_the_stomping(rid_table_item *table, BOOL horiz)
-{
-    const int max = HORIZMAX(table, horiz);
-    int x;
-    pcp_cell the_cells = table->colspans;
-
-    FMTDBG(("colspan_do_the_stomping: table %d\n", table->idnum));
-
-    colspan_trace_cells(table, horiz);
-
-    /* Clear old contribution flags */
-    for (x = 0; x < max; x++)
-    {
-	the_cells[x].flags &= ~ (colspan_flag_RELATIVE | colspan_flag_PERCENT | colspan_flag_ABSOLUTE);
-    }
-    
-    /* Now recalculate what contributions we have to give each
-       column. Some contributions *will* find themselves stomped on
-       now. */
-
-    for (x = 0; x < max; x++)
-    {
-	BOOL stomped = FALSE;
-	pcp_cell cell = &the_cells[x];
-	pcp_group group = cell->first_start;
-	
-	if ( (cell->flags & colspan_flag_STOMP_ABSOLUTE) != 0 )
-	{
-	    set_nocons(table, horiz, x, rid_cf_ABSOLUTE);
-	    FMTDBG(("col %d, abs, stomped %d\n", x, stomped));
-	}
-	
-	if ( (cell->flags & colspan_flag_STOMP_RELATIVE) != 0 )
-	{
-	    set_nocons(table, horiz, x, rid_cf_RELATIVE);
-	    FMTDBG(("col %d, rel, stomped %d\n", x, stomped));
-	}
-	
-	if ( (cell->flags & colspan_flag_STOMP_PERCENT) != 0 )
-	{
-	    set_nocons(table, horiz, x, rid_cf_PERCENT);
-	    FMTDBG(("col %d, pct, stomped %d\n", x, stomped));
-	}
-	
-	while (group != NULL)
-	{
-	    int z;
-	    stomped = FALSE;
-	    
-	    if ( (group->flags & colspan_flag_ABSOLUTE_GROUP) != 0 )
-	    {
-		for (z = x; !stomped && z <= group->iend; z++)
-		    stomped = (the_cells[z].flags & colspan_flag_STOMP_ABSOLUTE) != 0;
-	    }
-	    else if ( (group->flags & colspan_flag_PERCENT_GROUP) != 0 )
-	    {
-		for (z = x; !stomped && z <= group->iend; z++)
-		    stomped = (the_cells[z].flags & colspan_flag_STOMP_PERCENT) != 0;
-	    }
-	    else if ( (group->flags & colspan_flag_RELATIVE_GROUP) != 0 )
-	    {
-		for (z = x; !stomped && z <= group->iend; z++)
-		    stomped = (the_cells[z].flags & colspan_flag_STOMP_RELATIVE) != 0;
-	    }
-	    
-	    if (stomped)
-	    {
-		FMTDBG(("Wide cell %d,%d stomped\n", group->table_cell->cell.x, group->table_cell->cell.y));
-		group->table_cell->flags |= rid_cf_NOCONS;
-	    }
-	    
-	    group = group->next_start;
-	}
-    }
-    FMTDBG(("colspan_do_the_stomping: finished table %d\n", table->idnum));
-}
-
-
 static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
 {
     int x;
@@ -1212,15 +1124,78 @@ static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
     {
 	FMTDBG(("colspan_init_structure: worth_recalculating is %d: MARKING\n", worth_recalculating));
 
-	colspan_do_the_stomping(table, horiz);
+	colspan_trace_cells(table, horiz);
+
+	/* Clear old contribution flags */
+	for (x = 0; x < max; x++)
+	{
+	    the_cells[x].flags &= ~ (colspan_flag_RELATIVE | colspan_flag_PERCENT | colspan_flag_ABSOLUTE);
+	}
+
+	/* Now recalculate what contributions we have to give each
+	   column. Some contributions *will* find themselves stomped
+	   on now. */
+
+	for (x = 0; x < max; x++)
+	{
+	    BOOL stomped = FALSE;
+	    pcp_cell cell = &the_cells[x];
+	    pcp_group group = cell->first_start;
+
+	    if ( (cell->flags & colspan_flag_STOMP_ABSOLUTE) != 0 )
+	    {
+		set_nocons(table, horiz, x, rid_cf_ABSOLUTE);
+		FMTDBG(("col %d, abs, stomped %d\n", x, stomped));
+	    }
+
+	    if ( (cell->flags & colspan_flag_STOMP_RELATIVE) != 0 )
+	    {
+		set_nocons(table, horiz, x, rid_cf_RELATIVE);
+		FMTDBG(("col %d, rel, stomped %d\n", x, stomped));
+	    }
+
+	    if ( (cell->flags & colspan_flag_STOMP_PERCENT) != 0 )
+	    {
+		set_nocons(table, horiz, x, rid_cf_PERCENT);
+		FMTDBG(("col %d, pct, stomped %d\n", x, stomped));
+	    }
+
+	    while (group != NULL)
+	    {
+		int z;
+		stomped = FALSE;
+
+		if ( (group->flags & colspan_flag_ABSOLUTE_GROUP) != 0 )
+		{
+		    for (z = x; !stomped && z <= group->iend; z++)
+			stomped = (the_cells[z].flags & colspan_flag_STOMP_ABSOLUTE) != 0;
+		}
+		else if ( (group->flags & colspan_flag_PERCENT_GROUP) != 0 )
+		{
+		    for (z = x; !stomped && z <= group->iend; z++)
+			stomped = (the_cells[z].flags & colspan_flag_STOMP_PERCENT) != 0;
+		}
+		else if ( (group->flags & colspan_flag_RELATIVE_GROUP) != 0 )
+		{
+		    for (z = x; !stomped && z <= group->iend; z++)
+			stomped = (the_cells[z].flags & colspan_flag_STOMP_RELATIVE) != 0;
+		}
+
+		if (stomped)
+		{
+		    FMTDBG(("Wide cell %d,%d stomped\n", group->table_cell->cell.x, group->table_cell->cell.y));
+		    group->table_cell->flags |= rid_cf_NOCONS;
+		}
+
+		group = group->next_start;
+	    }
+	}
     }
 
     FMTDBG(("have_contradictions: worth_recalculating is %d\n", worth_recalculating));
 
     return worth_recalculating > 0;
 }
-
-/*****************************************************************************/
 
 /*****************************************************************************
 
@@ -2167,7 +2142,6 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
 
-#if 0
     if (fwidth < master[PCT_MIN])
     {
 	FMTDBG(("colspan_share_extra_space: forcing PCT_MIN of %d\n", master[PCT_MIN]));
@@ -2177,6 +2151,34 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	slop = 0;
 	fwidth = master[PCT_MIN];
     }
+#if 0
+    else if (fwidth == master[RAW_MIN])
+    {
+	FMTDBG(("colspan_share_extra_space: precisely RAW_MIN\n"));
+	colspan_algorithm(table, RAW_MIN, horiz);
+	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
+	slop = 0;
+    }
+    else if (fwidth < master[ABS_MIN])
+    {
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
+	slop = fwidth - master[RAW_MIN];
+	FMTDBG(("colspan_share_extra_space: less than ABS_MIN, slop %d\n", slop));
+    }
+    else if (fwidth == master[ABS_MIN])
+    {
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
+	slop = 0;
+	FMTDBG(("colspan_share_extra_space: precisely ABS_MIN\n"));
+    }
+    else if (fwidth < master[PCT_MIN])
+    {
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
+	slop = fwidth - master[ABS_MIN];
+	FMTDBG(("colspan_share_extra_space: less than PCT_MIN, slop %d\n", slop));
+    }
+#endif
     else
     {
 	if (fwidth > master[LAST_MAX] && user_width == 0)
@@ -2185,26 +2187,9 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	slop = reflect_percentages(table, horiz, fwidth);
 	FMTDBG(("colspan_share_extra_space: can do PCT_MIN: slop %d\n", slop));
     }
-#else
-    colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
-	
-    if (fwidth < master[PCT_MIN])
-    {
-	FMTDBG(("colspan_share_extra_space: forcing PCT_MIN of %d\n", master[PCT_MIN]));
-	fwidth = master[PCT_MIN];
-    }
-    else
-    {
-	if (fwidth > master[LAST_MAX] && user_width == 0)
-	    fwidth = master[LAST_MAX];
-	FMTDBG(("colspan_share_extra_space: can do PCT_MIN: slop %d\n", slop));
-    }
-    
-    slop = reflect_percentages(table, horiz, fwidth);
-#endif
-    
+
     ASSERT(slop >= 0);
-    
+
     if (slop > 0)
     {
 	/* Share in order raw, abs then pct */

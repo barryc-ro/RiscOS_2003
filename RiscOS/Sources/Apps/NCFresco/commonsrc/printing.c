@@ -75,7 +75,7 @@ struct _awp_job_str {
 #if USE_MARGINS
     wimp_box old_margin;
 #endif
-    int old_blending, old_display_scale, old_scale_value;
+    int old_blending, old_display_scale;
 };
 
 static os_error *awp_open_printer(int *jobp)
@@ -328,10 +328,6 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 
     /* reset scale to 100% */
     new_job->old_display_scale = config_display_scale;
-
-    new_job->old_scale_value = doc->scale_value;
-    doc->scale_value = 100;
-
     if (config_display_scale != 100)
     {
 	config_display_scale = 100;
@@ -446,8 +442,6 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
  err:
     if (had_rescale)
     {
-	doc->scale_value = new_job->old_scale_value;
-
 	if (new_job->old_display_scale != 100)
 	{
 	    config_display_scale = new_job->old_display_scale;
@@ -526,8 +520,6 @@ static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
     config_colours[render_colour_PLAIN] = job->old_col_plain;
 
     config_display_blending = job->old_blending;
-
-    doc->scale_value = job->old_scale_value;
 
     if (job->old_display_scale != 100)
     {

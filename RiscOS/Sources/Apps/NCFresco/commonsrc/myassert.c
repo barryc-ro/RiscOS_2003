@@ -14,9 +14,6 @@ extern void __ASSERT(int v, const char *expr, const char *file, int line)
         if (!v)
         {
                 os_error e;
-		fflush(stderr);
-		dbg("Assertion failure: %s, %s, %d\n", expr, file, line);
-		fflush(stderr);
                 memset(&e, 0, sizeof(e));
                 sprintf(e.errmess, "Internal error: %s: line %d of %s", expr, line, file);
                 frontend_fatal_error(&e);

@@ -1025,7 +1025,7 @@ static tb_bar_info *tb_bar_init(int bar_num)
     return tbi;
 }
 
-static void tb_bar_dispose(BOOL do_exit_fn)
+static void tb_bar_dispose(void)
 {
     tb_bar_info *tbi = bar_list;
 
@@ -1034,7 +1034,7 @@ static void tb_bar_dispose(BOOL do_exit_fn)
     if (tbi == NULL)
 	return;
     
-    if (do_exit_fn && bar_names[tbi->num].exit_fn)
+    if (bar_names[tbi->num].exit_fn)
 	bar_names[tbi->num].exit_fn();
 
     /* unlink top item */
@@ -1054,7 +1054,7 @@ BOOL tb_status_unstack_possible(void)
     return bar_list && bar_list->return_bar != BAR_CANT;
 }
 
-BOOL tb_status_unstack(BOOL do_exit_fn)
+BOOL tb_status_unstack(void)
 {
     tb_status_state_t old_state = status_state;
     tb_bar_descriptor *tbd;
@@ -1074,7 +1074,7 @@ BOOL tb_status_unstack(BOOL do_exit_fn)
     return_cmp = bar_list->return_component;
     
     /* dispose of current bar */
-    tb_bar_dispose(do_exit_fn);
+    tb_bar_dispose();
 
     /* open new bar */
     tb_status_new(NULL, return_bar);
@@ -1094,7 +1094,7 @@ BOOL tb_status_unstack(BOOL do_exit_fn)
 
 void tb_status_unstack_all(BOOL leave_bar_up)
 {
-    tb_bar_dispose(TRUE);
+    tb_bar_dispose();
     if (leave_bar_up)
 	tb_status_new(NULL, config_display_control_initial);
 }
@@ -1112,7 +1112,7 @@ void tb_status_new(fe_view v, int bar_num)
 	return;
 
     /* dipose of what's there currently */
-    tb_bar_dispose(TRUE);
+    tb_bar_dispose();
     
     /* create a new one */
     if ((tbi = tb_bar_init(bar_num)) != NULL)
@@ -1782,7 +1782,7 @@ void tb_status_hide(int only_if_small)
 	/* if not the main bar then dispose of it and recreate the main bar (but don't open!) */
 	if (bar_list->num != config_display_control_initial)
 	{
-	    tb_bar_dispose(TRUE);
+	    tb_bar_dispose();
 	    tb_bar_init(config_display_control_initial);
 	}
 	
@@ -2380,9 +2380,8 @@ void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 	for (i = 0; i < sizeof(codec_component)/sizeof(codec_component[0]); i++)
 	    setstate(bar_list->object_handle, codec_component[i], state == i);
 
-	/* we disable the exit fn here as the codec should already have stopped itself */
 	if (closing && codecs_open == 0)
-	    tb_status_unstack(FALSE);
+	    tb_status_unstack();
     }
 }
 
@@ -2391,7 +2390,7 @@ void tb_codec_kill(void)
     if (bar_list && bar_list->num == BAR_CODEC)
     {
 	codecs_open = 0;
-	tb_status_unstack(TRUE);
+	tb_status_unstack();
     }
 }
 

@@ -110,7 +110,6 @@ extern void dbgpoll(void);
 #if DEBUG
 extern int debug_set(const char *feature, int enable);
 extern int debug_get(const char *feature);
-extern void dbglist(void);
 #endif
 
 /* -------------------------------------------------------------------------------- */

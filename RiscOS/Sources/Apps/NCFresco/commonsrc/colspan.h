@@ -440,8 +440,6 @@ extern void csg_examine(pcp_cell the_cells, const int max);
 
 extern int csg_find_abs_floaters(rid_table_item *table, BOOL horiz);
 
-extern void colspan_do_the_stomping(rid_table_item *table, BOOL horiz);
-
 /*****************************************************************************/
 
 

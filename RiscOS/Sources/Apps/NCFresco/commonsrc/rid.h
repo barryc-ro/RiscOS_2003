@@ -47,10 +47,8 @@
 
 #if 0
 #define SHORTISH        int
-#define SHORTISH_MAX	((int)0x7fffffff)
 #else
 #define SHORTISH        short
-#define SHORTISH_MAX	((short)0x7fff)
 #endif
 
 #define NEWGROW		1
@@ -179,11 +177,7 @@ typedef SHORTISH rid_flag;
 #define rid_flag_COLOUR_SHIFT      8
 
 #define rid_flag_FVPR		0x1000	/* Item reach FVPR style final values */
-#if 0
 #define rid_flag_COALESCED      0x2000  /* Item has been coalesced with next */
-#else
-#define rid_flag_PCENTSIZED	0x2000  /* Item uses %ages to determine it's size */
-#endif
 #define rid_flag_RINDENT        0x4000  /* Right indent (or not! only one level) */
 #define rid_flag_WIDE_FONT	0x8000	/* item contains some 16bit characters */
 
@@ -1040,7 +1034,6 @@ typedef struct {
     void *im;
     char *usemap;               /* client side image map */
     int hspace, vspace;         /* gutters */
-    int hgap, vgap;		/* bwidth + ww or bwodth + hh in OS units - scaled */
     struct
     {
         struct

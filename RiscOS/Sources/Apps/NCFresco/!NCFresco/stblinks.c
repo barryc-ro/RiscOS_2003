@@ -21,7 +21,6 @@
 #include "frameutils.h"
 
 #include "stbfe.h"
-#include "stbopen.h"
 #include "stbtb.h"
 #include "stbview.h"
 #include "stbutils.h"
@@ -570,10 +569,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 
 	/* if no new frame then try moving to toolbar */
 	/* 20Jun: can't do this if it is a transient popup that is centered*/
-	if (!new_v && (!v->open_transient ||
-		       !(v->transient_position == fe_position_CENTERED_WITH_COORDS ||
-			 v->transient_position == fe_position_CENTERED) ||
-		       strcmp(v->name, TARGET_PASSWORD) == 0))
+	if (!new_v && !(v->open_transient &&
+	    (v->transient_position == fe_position_CENTERED_WITH_COORDS ||
+	     v->transient_position == fe_position_CENTERED)))
 	{
 	    if (/* (flags & be_link_VERT) &&  */move_to_toolbar(flags))
 		return;
@@ -648,10 +646,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	}
 
 	/* try moving to toolbar */
-	if (!v->open_transient ||
-	    !(v->transient_position == fe_position_CENTERED_WITH_COORDS ||
-	      v->transient_position == fe_position_CENTERED) ||
-	    strcmp(v->name, TARGET_PASSWORD) == 0)
+	if (!(v->open_transient &&
+	    (v->transient_position == fe_position_CENTERED_WITH_COORDS ||
+	     v->transient_position == fe_position_CENTERED)))
 	{
 	    if (move_to_toolbar(flags))
 	    {
