@@ -666,16 +666,16 @@ install_common: ${FILES}
 
 install: install_common
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
-	-Access ${INSTDIR}.!Boot	lr/r
-	-Access ${INSTDIR}.!Run		lr/r
-	-Access ${INSTDIR}.!RunImage	lr/r
-	-Access ${INSTDIR}.!Sprites	lr/r
-	-Access ${INSTDIR}.!Sprites22	lr/r
+	-Access ${INSTDIR}.!Boot	wr/r
+	-Access ${INSTDIR}.!Run		wr/r
+	-Access ${INSTDIR}.!RunImage	wr/r
+	-Access ${INSTDIR}.!Sprites	wr/r
+	-Access ${INSTDIR}.!Sprites22	wr/r
 	-Access ${INSTDIR}.Choices	wr/r
-	-Access ${INSTDIR}.Controls	lr/r
-	-Access ${INSTDIR}.Messages	lr/r
-	-Access ${INSTDIR}.Res		lr/r
-	-Access ${INSTDIR}.Sprites	lr/r
+	-Access ${INSTDIR}.Controls	wr/r
+	-Access ${INSTDIR}.Messages	wr/r
+	-Access ${INSTDIR}.Res		wr/r
+	-Access ${INSTDIR}.Sprites	wr/r
 	-Access ${INSTDIR}.User.Hotlist	wr/r
 	@echo
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
