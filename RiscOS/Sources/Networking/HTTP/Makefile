@@ -50,7 +50,7 @@ SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
 #
 # Include files
 #
-INCLUDES  = -IC:,TCPIPLibs:,$(SSLDIR)
+INCLUDES  = -IC:,$(SSLDIR),TCPIPLibs:
 DFLAGS = -DCSFS
 # -DDEBUG -DREMOTE_DEBUG
 #
