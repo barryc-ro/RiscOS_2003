@@ -121,6 +121,7 @@ translate: dirs
         @echo ** Translating NCOptions...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Acknow -o $(RESAPP).HTML.Setup.Acknow
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.BSD -o $(RESAPP).HTML.Setup.BSD
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.CallWait -o $(RESAPP).HTML.Setup.CallWait
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.IntroWel -o $(RESAPP).HTML.Setup.IntroWel
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML-Ether.Setup.Options -o $(RESAPP).HTML-Ether.Setup.Options
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML-Modem.Setup.Options -o $(RESAPP).HTML-Modem.Setup.Options
@@ -131,7 +132,8 @@ translate: dirs
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.StartUp -o $(RESAPP).HTML.Setup.StartUp
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Telephone -o $(RESAPP).HTML.Setup.Telephone
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Text -o $(RESAPP).HTML.Setup.Text
-        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Timeout -o $(RESAPP).HTML.Setup.Timeout
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML-Ether.Setup.Timeout -o $(RESAPP).HTML-Ether.Setup.Timeout
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML-Modem.Setup.Timeout -o $(RESAPP).HTML-Modem.Setup.Timeout
         
 resources: translate
 	@echo ** Exporting non-translatable resource files
