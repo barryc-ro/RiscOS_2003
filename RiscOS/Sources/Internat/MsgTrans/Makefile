@@ -51,7 +51,8 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
