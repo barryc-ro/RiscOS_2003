@@ -150,7 +150,8 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${EXP_HDR}.h.${COMPONENT}: h.SSLHdr
-        ${CP} h.SSLHdr $@ ${CPFLAGS}
+	awk -- "/.define AcornSSL\_00/,/endif/" h.SSLHdr { > $@ }
+	@SetType $@ Text
 
 ${ROM_MODULE}: ${OBJS} ${INETLIB} ${ROMCSTUBS}
         ${MKDIR} aof
