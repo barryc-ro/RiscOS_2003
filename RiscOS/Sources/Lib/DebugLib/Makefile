@@ -1,12 +1,5 @@
 # Makefile for debuglib
 #
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date		Name		Description
-# ----		----		-----------
-# 1997-10-07	BAL		Created
-
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -31,10 +24,11 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} -throwback
 ASFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
+LNFLAGS		= -aof
 WFLAGS		= ~CFR~V
 
 
@@ -42,12 +36,15 @@ WFLAGS		= ~CFR~V
 # Libraries
 #
 
+LIBDIR		= <Lib$Dir>
 CLIB		= CLIB:o.stubs
 RLIB		= RISCOSLIB:o.risc_oslib
 RSTUBS		= RISCOSLIB:o.rstubs
 ROMSTUBS	= RISCOSLIB:o.romstubs
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
+
+REMOTEDBLIB	= ${LIBDIR}.debug.o.lremote
 
 
 # ------------------------------------------------------------------------------
@@ -67,21 +64,37 @@ TARGET		= debuglib
 TARGETZ		= debuglibzm
 EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
-OBJS		= o.debug o.inits o.quits o.output
+OBJS = \
+ o.debug \
+ o.inits \
+ o.quits \
+ o.output \
+ o.serial_lib \
 
-OBJSZ		= z.debug z.inits z.quits z.output
+OBJSZ = \
+ oz.debug \
+ oz.inits \
+ oz.quits \
+ oz.output \
+ oz.serial_lib \
 
-LIBS		= libs.pd_pl libs.svcprint libs.t_pl libs.lremote
+LIBS = \
+ libs.pd_pl \
+ libs.t_pl \
+ ${REMOTEDBLIB} \
 
-LIBSZ		= libs.pd_m_pl libs.svcprint libs.t_m_pl libs.lremotezm
+LIBSZ = \
+ libs.pd_m_pl \
+ libs.t_m_pl \
+ ${REMOTEDBLIB}zm \
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .z .s .h .c
+.SUFFIXES: .o .oz .s .h .c
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.c.z:;     ${CC} ${CCFLAGS} -zm -zps1 -o $@ $<
+.c.oz:;    ${CC} ${CCFLAGS} -zm -zps1 -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 
 
@@ -89,7 +102,7 @@ LIBSZ		= libs.pd_m_pl libs.svcprint libs.t_m_pl libs.lremotezm
 # Build all the library
 #
 
-all:	${TARGET}
+all:	${TARGET} ${TARGETZ}
 
 
 # ------------------------------------------------------------------------------
@@ -104,47 +117,41 @@ install_rom: ${TARGET}
 
 clean:
 	${WIPE} o ${WFLAGS}
-	${WIPE} z ${WFLAGS}
+	${WIPE} oz ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.debuglib dirs
 	${CP}	h.debuglib	${EXPORT_DIR}.h.debuglib ${CPFLAGS}
-	@echo ${COMPONENT}: export complete (hdrs)
+	@echo * ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
 	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
 	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (libs)
+	@echo * ${COMPONENT}: export complete (libs)
 
-local_dirs:
+o.dirs:
 	${MKDIR} o
-	${MKDIR} z
+	${MKDIR} oz
+	create o.dirs
+	stamp  o.dirs
 
 dirs:
 	${MKDIR} ${LIBDIR}
 	${MKDIR} ${EXPORT_DIR}
 	${MKDIR} ${EXPORT_DIR}.h
 	${MKDIR} ${EXPORT_DIR}.o
-	${MKDIR} ${EXPORT_DIR}.z
-        
 
 # ------------------------------------------------------------------------------
 # Final link
 #
 
-${TARGET}: ${OBJS} local_dirs
-	${LD} ${LNFLAGS} -o ${TARGET} -aof ${OBJS} ${LIBS}
+${TARGET}: ${OBJS} o.dirs
+	${LD} ${LNFLAGS} -o ${TARGET} ${OBJS} ${LIBS}
 
-${TARGETZ}: ${OBJSZ} local_dirs
-	${LD} ${LNFLAGS} -o ${TARGETZ} -aof ${OBJSZ} ${LIBSZ}
-
-#${TARGET}: ${OBJS} local_dirs
-#	${LB} ${LBFLAGS} -l -o ${TARGET} ${OBJS} ${LIBS}
-        
-#${TARGETZ}: ${OBJSZ} local_dirs
-#	${LB} ${LBFLAGS} -l -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
+${TARGETZ}: ${OBJSZ} o.dirs
+	${LD} ${LNFLAGS} -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
