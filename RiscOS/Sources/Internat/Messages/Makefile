@@ -130,6 +130,7 @@ bbe-messages: bbe-generic-resources-get-alias ${TAGEXT}
   ${MKDIR} ${BBEDIR}.${UTILS}
   BBE_Export_Dir Global.${LOCALE}
   BBE_Export_Dir s
+  ${CP} ${BBEDIR}.s.BBEDefs ${BBEDIR}.s.Defs DF~C~V~R
   BBE_Export_File ${TAGEXT}
   BBE_Export_File ${MSGEXT}
   BBE_Export_File ${MSGTOK}
