@@ -885,7 +885,7 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
 
 /*****************************************************************************/
 
-extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor, VALUE *tabindex)
+extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor, VALUE *tabindex, VALUE *wrap)
 {
     rid_text_item_textarea *new;
     rid_text_item *nb;
@@ -919,6 +919,13 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
     if (tabindex->type == value_integer)
 	ta->base.tabindex = tabindex->u.i;
 
+    if (wrap->type == value_none)
+	ta->wrap = rid_ta_wrap_NONE;
+    else if (wrap->type == value_enum && wrap->u.i == HTML_TEXTAREA_WRAP_HARD)
+	ta->wrap = rid_ta_wrap_HARD;
+    else
+	ta->wrap = rid_ta_wrap_SOFT;
+    
     if (ta->rows == 0)
 	ta->rows = 1;
 
@@ -937,6 +944,10 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
 
+#if NEW_TEXTAREA
+    memzone_init(&ta->default_text, MEMZONE_CHUNKS);
+    memzone_init(&ta->text, MEMZONE_CHUNKS);
+#endif
     rid_text_item_connect(me->rh->curstream, nb);
 }
 

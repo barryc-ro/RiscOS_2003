@@ -576,18 +576,36 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	if (htmlctx->form && htmlctx->form->last_text)
 	{
 	    rid_textarea_item *tai;
-	    rid_textarea_line *tal;
 	    STRING null;
 
+#if NEW_TEXTAREA
+	    STRING text;
+	    int off;
 	    tai = htmlctx->form->last_text;
 
+	    null.bytes = 0;
+	    text = get_tab_expanded_string(item, null);
+	    if ((off = memzone_alloc(&tai->default_text, tai->default_text.used + text.bytes + 1)) != -1)
+	    {
+		char *s;
+
+		flexmem_noshift();
+
+		s = tai->default_text.data + off;
+		memcpy(s, text.ptr, text.bytes);
+		s[text.bytes] = '\n';
+
+		flexmem_shift();
+	    }
+	    string_free(&text);
+#else
+	    rid_textarea_line *tal;
+	    tai = htmlctx->form->last_text;
 	    tal = mm_calloc(1, sizeof(*tal));
-#if 1
+
 	    null.bytes = 0;
 	    tal->text = get_tab_expanded_string(item, null).ptr;
-#else
-	    tal->text = stringdup(item);
-#endif
+
 	    if (tai->default_lines)
 	    {
 		tai->def_last_line->next = tal;
@@ -598,6 +616,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	    {
 		tai->default_lines = tai->def_last_line = tal;
 	    }
+#endif
 	}
 	else
 	{

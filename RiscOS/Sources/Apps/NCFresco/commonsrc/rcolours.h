@@ -41,12 +41,12 @@
 #define plinth_col_HL_D	(0x66666600 | render_colour_RGB)
 
 /* blue plinth colours */
-#define plinth_col_B_L	(0x4444cc00 | render_colour_RGB)
-#define plinth_col_B_M	(0x3377ff00 | render_colour_RGB)
-#define plinth_col_B_D	(0x44448800 | render_colour_RGB)
+#define plinth_col_B_L	(0xcc444400 | render_colour_RGB)
+#define plinth_col_B_M	(0xff773300 | render_colour_RGB)
+#define plinth_col_B_D	(0x88444400 | render_colour_RGB)
 
 /* plinth fill hilighted colour */
-#define plinth_col_FILL	(0x00008800 | render_colour_RGB)
+#define plinth_col_FILL	(0x88000000 | render_colour_RGB)
 
 /*#endif*/
 

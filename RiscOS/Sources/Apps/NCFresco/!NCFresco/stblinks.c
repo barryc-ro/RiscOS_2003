@@ -1091,6 +1091,8 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	BOOL had_caret, need_caret;
 
 	had_caret = FALSE;
+
+	/* this needs to check whether it is NUMBERS or not */
 	need_caret = (flags & be_item_info_INPUT) && 
 	    backend_read_highlight(v->displaying, &had_caret) == ti &&
 	    !had_caret;

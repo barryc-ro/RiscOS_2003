@@ -89,44 +89,21 @@ os_error *webfonts_init_font(int n)
 	e = font_find(buffer, size * 16, size * 16, 0, 0, &(item->handle));
     }
 
-#if 0
-    if (e == NULL)
-    {
-	e = font_readinfo(item->handle, &fi);
-    }
-#else
     if (e == NULL)
     {
         /* We want to make max_up and max_down depend *only* on the point
          * size, *not* on the bounding box of the font, otherwise we get
          * different answers for medium and bold fonts!
          */
-
-        int fsizeos = (size * 180 + 71)/72;         /* points to OS units */
-
-        fsizeos = (fsizeos*5)/4;                    /* fudge factor */
-
-        fi.miny = - ( fsizeos/4 );
-        fi.maxy = fi.miny + fsizeos;
-    }
-#endif
-
-    if (e == NULL)
-    {
-	int inc_up, inc_dn;
-	inc_up = config_display_leading/2;
-	inc_dn = config_display_leading - config_display_leading/2;
+	int fsizeos = (size * 180 + 71)/72;         /* points to OS units */
 
 	if (config_display_leading_percent)
-	{
-	    item->max_up = fi.maxy * (100 + inc_up) / 100;
-	    item->max_down = (-fi.miny) * (100 + inc_dn) / 100;
-	}
+	    fsizeos += fsizeos * config_display_leading / 100;
 	else
-	{
-	    item->max_up = fi.maxy + inc_up;
-	    item->max_down = (-fi.miny) + inc_dn;
-	}
+	    fsizeos += config_display_leading;
+	
+	item->max_down = fsizeos/4;
+	item->max_up = fsizeos - item->max_down;
 
 	e = font_charbbox(item->handle, 'i', font_OSCOORDS, &fi);
     }

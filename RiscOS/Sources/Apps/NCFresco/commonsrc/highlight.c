@@ -26,9 +26,15 @@
  * discontiguous in which case it should separate boxes.
  */
 
+#if 0
 #define render_colour_highlight_L	(0x33FF3300 | render_colour_RGB)
 #define render_colour_highlight_D	(0x00880000 | render_colour_RGB)
 #define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
+#else
+#define render_colour_highlight_L	plinth_col_B_L
+#define render_colour_highlight_D	plinth_col_B_D
+#define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
+#endif
 
 #if 0
 

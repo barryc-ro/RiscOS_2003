@@ -482,6 +482,7 @@ extern void rid_free_aref(rid_aref_item *p)
     }
 }
 
+#if !NEW_TEXTAREA
 extern void rid_free_textarea_lines(rid_textarea_line *p)
 {
     while (p)
@@ -494,6 +495,7 @@ extern void rid_free_textarea_lines(rid_textarea_line *p)
 	p = next;
     }
 }
+#endif
 
 extern void rid_free_select_options(rid_option_item *p)
 {
@@ -543,8 +545,13 @@ extern void rid_free_form_elements(rid_form_element *f)
 	    if (p->name)
 		mm_free(p->name);
 
+#if NEW_TEXTAREA
+	    memzone_destroy(&p->default_text);
+	    /* other zone is freed in otextarea_dispose() */
+#else
 	    rid_free_textarea_lines(p->default_lines);
 	    rid_free_textarea_lines(p->lines);
+#endif
 	    break;
 	}
 

@@ -138,6 +138,10 @@
 /* Not that this is a good excuse. */
 extern void rid_zero_widest_height_from_item(rid_text_item *item);
 
+/* and these two are here 'cos I'm lazy tonight which is worse */
+extern void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *len);
+extern void otextarea_write_to_file(rid_textarea_item *tai, FILE *f);
+
 /**********************************************************************/
 
 rid_text_item *antweb_prev_text_item(rid_text_item *ti);
@@ -1582,7 +1586,9 @@ static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *l
     char *n;
     char *s;
     char c;
+#if !NEW_TEXTAREA
     rid_textarea_line *tal;
+#endif
 
     if (tai->name == NULL)
 	return;
@@ -1601,6 +1607,9 @@ static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *l
 
     strcpy(s, "=");		/* Put termination on too */
 
+#if NEW_TEXTAREA
+    otextarea_append_to_buffer(tai, buffer, len);
+#else
     for(tal = tai->lines; tal; tal = tal->next)
     {
 	be_ensure_buffer_space(buffer, len, 3 * strlen(tal->text) + 2);
@@ -1612,6 +1621,7 @@ static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *l
 	if (tal->next)
 	    strcat(*buffer, "%0D%0A");
     }
+#endif
 }
 
 static void antweb_write_query(FILE *f, char *name, char *value, int *first)
@@ -1646,8 +1656,9 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
 {
     char *n;
     char c;
+#if !NEW_TEXTAREA
     rid_textarea_line *tal;
-
+#endif
     if (tai->name == NULL)
 	return;
 
@@ -1668,6 +1679,9 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
     }
     fputc('=', f);
 
+#if NEW_TEXTAREA
+    otextarea_write_to_file(tai, f);
+#else
     for(tal = tai->lines; tal; tal = tal->next)
     {
 	url_escape_to_file(tal->text, f);
@@ -1676,6 +1690,7 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
 	if (tal->next)
 	    fputs("%0D%0A", f);
     }
+#endif
 }
 
 #ifdef STBWEB

@@ -435,15 +435,26 @@ typedef struct rid_textarea_line {
     char *text;
 } rid_textarea_line;
 
+#define rid_ta_wrap_NONE	0 /* no wrapping (default if no WRAP specified) */
+#define rid_ta_wrap_SOFT	1 /* auto wrap text but only send new lines where entered (default if WRAP specified) */
+#define rid_ta_wrap_HARD	2 /* auto wrap text and send new lines as seen */
+
 typedef struct rid_textarea_item {
     struct rid_form_element base;
     char *name;
     SHORTISH rows, cols;
     SHORTISH cx, cy;                    /* Caret position */
     SHORTISH sx, sy;                    /* Scroll possition */
+    SHORTISH wrap;
+    SHORTISH useable_cols;
+#if NEW_TEXTAREA
+    memzone default_text;
+    memzone text;
+#else
     rid_textarea_line *default_lines, *def_last_line;
     rid_textarea_line *lines, *last_line;
     rid_textarea_line *caret_line;
+#endif
 } rid_textarea_item;
 
 typedef enum {

@@ -420,7 +420,8 @@ extern void starttextarea (SGMLCTX * context, ELEMENT * element, VALUES * attrib
 			    &attributes->value[HTML_TEXTAREA_BGCOLOR],
 			    &attributes->value[HTML_TEXTAREA_SELCOLOR],
 			    &attributes->value[HTML_TEXTAREA_CURSOR],
-			    &attributes->value[HTML_TEXTAREA_TABINDEX]);
+			    &attributes->value[HTML_TEXTAREA_TABINDEX],
+			    &attributes->value[HTML_TEXTAREA_WRAP]);
 
     ASSERT(me->last_mode == HTMLMODE_BOGUS);
 

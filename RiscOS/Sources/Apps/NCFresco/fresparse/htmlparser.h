@@ -178,7 +178,7 @@ extern void new_area_item(HTMLCTX *me,
 			  VALUE *target,
 			  VALUE *alt);
 extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE *multiple, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *nopopup);
-extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor, VALUE *tabindex);
+extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor, VALUE *tabindex, VALUE *wrap);
 extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *align,
 				 VALUE *checked,

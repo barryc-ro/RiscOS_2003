@@ -581,12 +581,14 @@ extern void dump_textarea(rid_textarea_item *ptr)
                 FIELD(ptr, cy, "%d");
                 FIELD(ptr, sx, "%d");
                 FIELD(ptr, sy, "%d");
+#if !NEW_TEXTAREA
                 FIELD(ptr, default_lines, "%d");
 #ifndef NO_PTRS
                 FIELD(ptr, def_last_line, "%p");
                 FIELD(ptr, lines, "%p");
                 FIELD(ptr, last_line, "%p");
                 FIELD(ptr, caret_line, "%p");
+#endif
 #endif
         leave();
 }
@@ -1135,9 +1137,11 @@ extern void dump_textarea_item(rid_textarea_item *ptr)
 	my_print("name %s", ptr->name);
 	my_print("size %d,%d, caret %d,%d, scroll %d,%d",
 		 ptr->rows, ptr->cols, ptr->cx, ptr->cy, ptr->sx, ptr->sy);
+#if !NEW_TEXTAREA
 	my_print("default lines %p, %p", ptr->default_lines, ptr->def_last_line);
 	my_print("lines %p, %p", ptr->lines, ptr->last_line);
 	my_print("caret line %p", ptr->caret_line);
+#endif
     leave();
 }
 
