@@ -71,9 +71,11 @@ ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.abssym
 TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
 DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglibzm
+ASMUTILS	= <Lib$Dir>.AsmUtils.o.AsmUtilszm
 
 LIBS = ${DEBUGLIB} \
-       ${TCPIPLIBS}
+       ${TCPIPLIBS} \
+       ${ASMUTILS}
 
 ROM_OBJS =	\
  o.Enumerate	\
@@ -266,8 +268,8 @@ rom_link: ${DIRS}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${EXPORTS}: h.${CMHG_HDR} h.VCAPI
-	${CP} h.VCAPI $@ ${CPFLAGS}
+${EXPORTS}: h.${CMHG_HDR} h.VideoCtrl
+	${CP} h.VideoCtrl $@ ${CPFLAGS}
 	Do ${AWK} -- "/.define ${SWI_PREFIX}\_00/,/endif/" h.${CMHG_HDR} >>$@
 
 ${MSGSF}: LocalRes:Messages LocalRes:ResList

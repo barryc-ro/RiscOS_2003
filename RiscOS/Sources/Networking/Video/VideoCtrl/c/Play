@@ -5,16 +5,19 @@
 /*                                                            */
 /* Purpose: Implement VideoControl_Play.                      */
 /*                                                            */
-/* Author : A.D.Hodgkinson. Based on URL_Fetcher source by    */
-/*          S.N.Brodie and P. Wain.                           */
+/* Author : A.D.Hodgkinson.                                   */
 /*                                                            */
 /* History: 04-Nov-1999: Created.                             */
 /**************************************************************/
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
+#include <math.h>
 
 #include <swis.h>
+#include <AsmUtils/modulefp.h>
 
 #ifdef TRACE2
   #define TRACE
@@ -26,9 +29,15 @@
 
 #include "Module.h"
 #include "MPEGCtrl.h"
+#include "Protocol.h"
 #include "Utils.h"
+#include "VideoCtrl.h"
 
 #include "Play.h"
+
+/* Local functions */
+
+static int play_find_speed (const char * rate);
 
 /**************************************************************/
 /* play_play()                                                */
@@ -43,6 +52,7 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
   client          * list = find_client(r->r[1]);
   char            * rate;
   int               or1;
+  bool              mpd_present, mpd_matters;
 
   dprintf(("", "play_play: Called for %08X\n", r->r[1]));
 
@@ -61,54 +71,154 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
     return e;
   }
 
-  /* If we aren't pausing and playback is in progress, do a */
-  /* deferred reset                                         */
+  /* Are we doing MPEG stuff at all? */
 
-  rate = (char *) r->r[3];
-  if (rate == NULL) rate = "1";
-
-  if (list->havectrl != 0 && strcmp(rate, "0") != 0)
+  if ((list->ctrl.flags & VC_ProtocolRegister_IHandleMPEG) == 0)
   {
-    _kernel_oserror * e;
-    int               type;
-    unsigned int      mpf;
+    /* Does the protocol module support reduced data rate slowmo */
+    /* forward play?                                             */
 
-    dprintf(("", "play_play: deferred reset for trick play '%s'\n", rate));
-
-    if      (!strcmp(rate, "1")) type = MPEGCtrl_MCRS_Trick_Play;
-    else if (!strcmp(rate, "0")) type = MPEGCtrl_MCRS_Trick_Freeze; /* Should never happen, but just in case. */
-
-    else if (strchr(rate,'.') != NULL)
+    if ((list->ctrl.flags & VC_ProtocolRegister_IDoReducedRateSlowmoForward) != 0)
     {
-      if (*rate == '-')          type = MPEGCtrl_MCRS_Trick_SRWD;
-      else                       type = MPEGCtrl_MCRS_Trick_SFWD;
-    }
-    else if (*rate == '-')       type = MPEGCtrl_MCRS_Trick_FRWD;
-    else                         type = MPEGCtrl_MCRS_Trick_FFWD;
+      mpd_matters = true;
 
-    mpf = MPEGCtrl_MCRS_VideoPresent |
-          MPEGCtrl_MCRS_DeferReset;
+  printf("I'm allowed reduced data rate slowmo forwards play\n");
 
-    /* If we're doing trick play, flag that that the new stream should */
-    /* be marked as such. Otherwise, flag that we expect audio data.   */
+      /* Our reset behaviour depends on MPEGDriver being here */
 
-    if (type != MPEGCtrl_MCRS_Trick_Play)
-    {
-      mpf |= MPEGCtrl_MCRS_NewIsTrickPlay;
+      if (
+           _swix(OS_Module,
+                 _INR(0,1),
+
+                 18,
+                 ReducedRateSlowmoSupportModule) /* Play.h */
+
+           != NULL
+         )
+         mpd_present = false;
+
+      else mpd_present = true;
+
+  printf("My MPD flag is %d\n",mpd_present == true ? 1 : 0);
     }
     else
     {
-      mpf |= MPEGCtrl_MCRS_AudioPresent;
+      /* Always do simple resetting */
+
+      mpd_present = mpd_matters = false;
     }
 
-    e = _swix(MPEGControl_ResetStream,
-              _INR(0,2),
+    /* If we aren't pausing and playback is in progress, do a */
+    /* deferred reset                                         */
 
-              mpf,
-              list->ctrlhand,
-              type);
+    rate = (char *) r->r[3];
+    if (rate == NULL) rate = "1";
 
-    if (e != NULL) return e;
+    if (list->havectrl != 0)
+    {
+      /* Going into a paused state - tell the MPEG system */
+
+      if (strcmp(rate, "0") == 0)
+      {
+        if (mpd_present == true && mpd_matters == true)
+        {
+          _kernel_oserror * e = _swix(MPEGControl_SetSpeed,
+                                      _INR(0,2),
+
+                                      0,
+                                      list->ctrlhand,
+                                      0);
+
+
+          if (e != NULL ) return e;
+        }
+      }
+
+      /* Going into a non-pause state - need a (deferred) reset */
+
+      else
+      {
+        _kernel_oserror * e;
+        int               type;
+        unsigned int      mpf;
+
+        dprintf(("", "play_play: deferred reset for trick play '%s'\n", rate));
+
+        if      (!strcmp(rate, "1")) type = MPEGCtrl_MCRS_Trick_Play;
+        else if (!strcmp(rate, "0")) type = MPEGCtrl_MCRS_Trick_Freeze; /* Should never happen, but just in case. */
+
+        else if (strchr(rate,'.') != NULL)
+        {
+          if (*rate == '-')          type = MPEGCtrl_MCRS_Trick_SRWD;
+          else                       type = MPEGCtrl_MCRS_Trick_SFWD;
+        }
+        else if (*rate == '-')       type = MPEGCtrl_MCRS_Trick_FRWD;
+        else                         type = MPEGCtrl_MCRS_Trick_FFWD;
+
+        /* We're going into slow motion forward play; try to map the speed */
+        /* exactly and tell MPEGControl about it                           */
+
+        if (type == MPEGCtrl_MCRS_Trick_SFWD && mpd_present == true && mpd_matters == true)
+        {
+          modulefp_buf buf;
+          int          speed;
+
+          modulefp_enable(&buf);
+          speed = play_find_speed(rate);
+          modulefp_disable(&buf);
+
+  printf("Magic says speed to be %d\n",speed);
+
+          e = _swix(MPEGControl_SetSpeed,
+                    _INR(0,2),
+
+                    MPEGCtrl_MCSS_DeferIfSlower,
+                    list->ctrlhand,
+                    speed);
+        }
+
+        /* We're going into some other play mode, so do a deferred reset */
+
+        else
+        {
+          mpf = MPEGCtrl_MCRS_VideoPresent |
+                MPEGCtrl_MCRS_DeferReset;
+
+          /* If we're doing trick play, flag that that the new stream should */
+          /* be marked as such. Otherwise, flag that we expect audio data.   */
+
+          if (type != MPEGCtrl_MCRS_Trick_Play)
+          {
+            mpf |= MPEGCtrl_MCRS_NewIsTrickPlay;
+          }
+          else
+          {
+            mpf |= MPEGCtrl_MCRS_AudioPresent;
+          }
+
+          if (mpd_present == true && mpd_matters == true)
+          {
+            e = _swix(MPEGControl_SetSpeed,
+                      _INR(0,2),
+
+                      0,
+                      list->ctrlhand,
+                      1);
+
+            if (e != NULL) return e;
+          }
+
+          e = _swix(MPEGControl_ResetStream,
+                    _INR(0,2),
+
+                    mpf,
+                    list->ctrlhand,
+                    type);
+
+          if (e != NULL) return e;
+        }
+      }
+    }
   }
 
   /* Call the protocol module SWI */
@@ -119,4 +229,30 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
   r->r[1] = or1;
 
   return e;
+}
+
+/**************************************************************/
+/* play_find_speed()                                          */
+/*                                                            */
+/* Given a string holding a decimal fraction, find the lowest */
+/* integer for 1/<that_fraction>.                             */
+/*                                                            */
+/* Must only be used after modulefp_enable has been called.   */
+/*                                                            */
+/* Parameters: Pointer to the NUL terminated rate string.     */
+/*                                                            */
+/* Returns:    Lowest int for 1/fraction.                     */
+/**************************************************************/
+
+static int play_find_speed(const char * rate)
+{
+  double d = atof(rate);
+  int    speed;
+
+  if (d == 0) d = 1;
+
+  speed = (int) floor(1 / d);
+  if (speed > MPEGCtrl_MCSS_SlowestRate) speed = MPEGCtrl_MCSS_SlowestRate;
+
+  return speed;
 }
