@@ -1,18 +1,23 @@
 -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+ btdecode.o
+ btlapm.o
+ btencode.o
+  ac00cmdt.o
+ mnp_bg.o
+ mnp_lib.o
+mnp_af.o
+ lapm_sta.o
+ lapm_lib.o
  ac00mstr.o
+  ac00cmat.o
+  ac00ptt.o
   ac00sys0.o
   ac00sys1.o
   ac00mem.o
   ac00que.o
-  ac00cmat.o
-  ac00cmdt.o
-  ac00id.o
-  ac00idat.o
+   ac00idat.o
   ac00orat.o
-  ac00pr.o
-  ac00or.o
   ac00v24.o
-  ac00an.o
   ac00pra1.o
   ac00lib1.o
   ac00lib2.o
@@ -23,10 +28,10 @@
   ac00tsrm.o
   ac00onat.o
   ac00rt.o
-  ac00hn.o
   ac00hnat.o
   ac00lib3.o
-  ac00ts.o
+  acu_tabs.o
+  acuv8v80.o
   ac00lib4.o
    ac00cman.o
   ac00cmav.o
@@ -47,8 +52,7 @@
   pr00mem.o
   pr00lib.o
   pr00at.o
-  fp00stub.o
-  ll00stub.o
+   ll00stub.o
   ds00stub.o
   ds00mem.o
   ac00as.o
@@ -68,11 +72,8 @@
   ac00fx2.o
   ac00cmfx.o
   ac00cmf1.o
-  ac00cmf2.o
-  ac00cm20.o
- 
+
  ac00vvst.o
- 
 fx00if.o
  
 f1x00pr.o
@@ -93,11 +94,9 @@ v42.o
  lapm_ctl.o
  lapm_fnc.o
  lapm_int.o
- lapm_lib.o
  lapm_que.o
  lapm_rej.o
  lapm_rx.o
- lapm_sta.o
  lapm_tab.o
  lapm_tmr.o
  lapm_tst.o
@@ -108,21 +107,16 @@ v42.o
  mnp.o
  mnp_la.o
  mnp_pack.o
- mnp_lib.o
- mnp_ln.o
+  mnp_ln.o
  mnp_lna.o
  mnp_lr.o
  mnp_lrr.o
  mnp_que.o
  mnp_comm.o
- mnp_bg.o
  mnp_lt.o
  mnp_dat.o
  mnp_ld.o
  
-btlapm.o
- btdecode.o
- btencode.o
  btinit.o
  btlz_dat.o
  btdict.o
@@ -132,7 +126,6 @@ v42_estb.o
 m10_stub.o
  
 cl5_dat.o
- mnp_af.o
  
 mt00if10.o
  mt00mn10.o
@@ -150,7 +143,6 @@ mt00if10.o
  audio_if.o
  mt00vv10.o
  mt_voice.o
- v80stub.o
  
 vc00mn.o
  vc00mem.o
@@ -162,10 +154,11 @@ vc00mn.o
  spkr_phn.o
  voc_ctls.o
  dv02cd10.o
+ v80_mn.o
+  v80_mem.o
  
  pp00stb.o
   as_stub.o
-  ac00ptt.o
   ptt00cfg.o
   dte.o
   acu.o
@@ -186,22 +179,33 @@ vc00mn.o
   faxdata.o
   faxlink.o
   faxdat.o
-  rtstand.o
+rtstand.o
   sleep.o
    parallel.o
-  pnp.o
-  pcmcia.o
   musket.o
   linev8.o
   powerup.o
   eeread.o
   eewrite.o
+  pnp.o
+  pcmcia.o
   overmgr.o
   ringint.o
   callerid.o
   dsppatch.o
-  patch_l.o
+  powerons.o
+  dlamd.o
+  dlatmel.o
+  linev80.o
+  dte_v80.o
+  print.o
+ trnpatch.o
+  compatch.o
+  datpatch.o
   vcepatch.o
-  pwronptc.o
- 
+  seramd.o
+  seratmel.o
+  mdm_56k.o
+  bootx.o
+  x2_page.o
  

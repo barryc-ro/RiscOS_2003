@@ -1,19 +1,24 @@
-
 /* ringint.c 1-24-96 */
 
-#include   <string.h>
 
 #include   "sys_def.h"
 #include   "acu_def.h"
 #include    "callerid.h"
+#include   "acu_mem.h"  /* for st_orig */
 #include    "ptt.h"
+
+extern ubyte CountryInfo;
+extern country_ring_table  PTT_Ring[7];
 
 extern ubyte  sleep_timer_val;       /* for sleep mode */
 extern ubyte line_io_enabled;
 extern void  output_info(ubyte *,ubyte);
+extern char *strcpy(char *, const char *);
+extern char *strcat(char *, const char *);
+
 
 ubyte    tembuf[4];
-ubyte    ringff;       /* for debounce ring int */
+ubyte    ring_toggle, old_value=0;
 
 uword    msec_counter = 0;
 uword    ringon_time = 0;
@@ -44,8 +49,7 @@ extern   void  set_dsp_cid(ubyte);
 extern   void  output_send_cr_lf(void);
 extern   void  init_cid(void);
 extern   ubyte get_cid_data(ubyte buf[]);
-extern   country_ring_table PTT_Ring[7];
-extern   ubyte CountryInfo;
+
 /*mrm8896*/
 extern   ubyte  caller_id_end ;
 
@@ -54,22 +58,36 @@ void    validate_ring(void);
 void    process_cadence(void);
 void    d_to_a2(ubyte val, ubyte buf[]);
 
-
+/*
+extern void  modem_dte_ri(ubyte);
+extern void  dte_ri(ubyte);
+*/
 extern ubyte vce_mode;
-#define	TRANSMIT_MODE	2
-#define	RECEIVE_MODE	3
+extern void outchar(unsigned char);
+
+#define    TRANSMIT_MODE    2
+#define    RECEIVE_MODE    3
 
 void  init_varibles()
 {
   msec_counter = 0;
+
   ringon_time = 0;
   seq = 0;
   calling = FALSE;
+
   pattern_start = FALSE;
+
+/* shujin 8/15/97 for enable RI in HMSR 
+  dte_ri(OFF);
+*/
+
   osilating = FALSE;  
   ring_on = FALSE;
   first_on = TRUE;
   sleep_timer_val = 0;       /* for sleep mode */
+  ring_toggle =0;
+  old_value=0;
 }
 
 /****************************************************************************
@@ -91,27 +109,62 @@ void  init_varibles()
 ****************************************************************************/
 void  validate_ring()
 {
+      ubyte i;
+
+  uword  min_int_period,  max_int_period;
+  uword  min_ringon_time;
+  uword  min_ringoff_time;
+
+
 /* for hardware Int bug, each int comes with 10-20 redudant ints */
   if( msec_counter == 0 ) return;
-          
-  if( ringff == 0 )  ringff = 1;
-  else { ringff = 0; return; }
-/* 5/16/96 */
 
+
+  if(( st_orig.state == ORIG_DIAL) || ( st_orig.state == PROCESS_DIAL_MOD))
+          return;  /* Don't process Ring while pulse dialing */
+      
+
+
+  min_int_period     = PTT_Ring[CountryInfo].Int_period_min;
+  max_int_period     = PTT_Ring[CountryInfo].Int_period_max;
+  min_ringon_time    = PTT_Ring[CountryInfo].Ringon_time_min;
+  min_ringoff_time   = PTT_Ring[CountryInfo].Ringoff_time_min;
+
+    
   if(pattern_start == TRUE )
   {
+
       if(osilating == TRUE)  {
 
 /* stardard ring frq 15.3 - 68, i.e. period 65.4 - 14.7 mSec */
 /* test ring frq     14.0 - 75 Hz,   period 71   - 13.3 */
 /* validate ring from period */
 
-         if(ringon_time<220 && ( msec_counter < PTT_Ring[CountryInfo].TimeMin/*14*/ || msec_counter > PTT_Ring[CountryInfo].TimeMax/*66*/) ) ;
-         else  ringon_time = ringon_time + msec_counter;
+/* to prevent first several invalid osilation */
+
+         if (!ring_toggle) {
+            ring_toggle=1;
+            old_value = msec_counter;
+         }
+         else {
+            ring_toggle=0;
+            msec_counter +=old_value;
+            outchar(msec_counter);
+
+/*
+            if(ringon_time<220 && ( msec_counter < 16 || msec_counter > 48) ) 
+               ;
+*/
+        if(ringon_time <  min_ringon_time && 
+          (msec_counter < min_int_period || msec_counter > max_int_period )) 
+               ;
+
+            else  
+               ringon_time = ringon_time + msec_counter;
+         }
       }
 
-/* osilating == FALSE */
-      else   {
+      else   {                                     /* osilating == FALSE */
 
 /* in USA, ring frequency is about 20Hz (50mSec), do related adjustment */
          ring_pattern[seq] = (msec_counter-25+50)/100; /* 0.1s unit */
@@ -119,25 +172,37 @@ void  validate_ring()
          if(voice_dist_ring_active)   {
              voice_dist_ring_time  = ring_pattern[seq];
              d_to_a2(voice_dist_ring_time,tembuf);
+/*mrm21897*/
+                     for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
 
              strcpy((char *)cidbuf,"DROF=");
              strcat((char *)cidbuf,(char *)tembuf);
 
              output_info(cidbuf,NUMERIC_FORM);  /* CR, LF after */
+                  for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
 
 /* ring off time, but not the final */
          }
-      }
-/* osilating == FALSE */
+      }                                            /* osilating == FALSE */
   }
 
-/* pattern_start == FALSE */
-  else   
+  else                              /* pattern_start == FALSE */
   {  
      if(seq != 0)  {
 
-/* for preventing wrong int */
+/* for preventing wrong int 
+
         if(msec_counter < 1000)   return;
+8/29/97
+*/
+        if ( msec_counter < min_ringoff_time )   return;
+
 
 /* ring off time, final */
         ring_pattern[seq] = (msec_counter-25+50)/100;   
@@ -145,13 +210,23 @@ void  validate_ring()
         if(voice_dist_ring_active)  {
             voice_dist_ring_time  = ring_pattern[seq];
             d_to_a2(voice_dist_ring_time,tembuf);
-
+            for (i=0 ; i< BUFLEN; i++)
+            {
+               cidbuf[i] = 0;
+            }
             strcpy((char *)cidbuf,"DROF=");
             strcat((char *)cidbuf,(char *)tembuf);
 
             if( fax_class == 8 ) strcat((char *)cidbuf,"\x0d\x0a\x10.");
 
             output_info(cidbuf,NUMERIC_FORM);  /* CR, LF after */
+
+                                for (i=0 ; i< BUFLEN; i++)
+                         {
+                              cidbuf[i] = 0;
+                         }
+
+
 /* <DLE><.>, Voice message end   */
         }
 
@@ -172,8 +247,14 @@ void  validate_ring()
 /* seq != 0  */
 
      calling = TRUE;
-     pattern_start = TRUE;
      ringon_time = 0;
+
+     pattern_start = TRUE;
+   /* shujin 8/15/97 for enable RI in HMSR
+     dte_ri(ON);
+       */
+
+
   }
 /* pattern_start == FALSE */
 
@@ -203,12 +284,28 @@ void  validate_ring()
 
 void    process_cadence()  /* be called every 10 msec */
 {
+   ubyte i;
+
+ uword   min_silent_time, max_silent_time;
+ uword   min_ringon_time, max_ringon_time;
+ uword   max_ringoff_time;
+
+
+  min_silent_time     = PTT_Ring[CountryInfo].Silent_time_min;
+  max_silent_time     = PTT_Ring[CountryInfo].Silent_time_max;
+  min_ringon_time     = PTT_Ring[CountryInfo].Ringon_time_min;
+  max_ringon_time     = PTT_Ring[CountryInfo].Ringon_time_max;
+  max_ringoff_time   = PTT_Ring[CountryInfo].Ringoff_time_max;
+
+
   if(calling == TRUE)
   {
       if(osilating == TRUE)    {
 /*consider minimum fr 15Hz, 15% error, period~=75 msec */
-/* silent time 125 - 490 msec */
+/* silent time 125 - 490 msec 
          if( msec_counter > 80 && msec_counter < 120)    {
+*/
+         if( msec_counter > 80 && msec_counter < min_silent_time)    {
              if( voice_caller_id !=0 && s[1]==1 &&
                 ((vce_mode != TRANSMIT_MODE) && 
                 (vce_mode != RECEIVE_MODE) )    )  /* ramn 4/5/96 */
@@ -219,11 +316,18 @@ void    process_cadence()  /* be called every 10 msec */
 /* move data from comram into cidbuf[] */
 /* this code is in 10msec background, will be called 5 times; */
 
-/* m sec */        
+/* m sec 
          else if( msec_counter > 120)    {
+8/29/97
+*/        
+         else if( msec_counter > min_silent_time)    {
 
-/* min and max duration */
+/* min and max duration 
               if(ringon_time > 220 && ringon_time < 4450 )     {
+8/29/97
+*/
+              if(ringon_time > min_ringon_time && 
+                  ringon_time < max_ringon_time)     {
 /*ring on time, .1s*/
                  ring_pattern[seq] = (ringon_time+25+50)/100;  
 
@@ -236,6 +340,13 @@ void    process_cadence()  /* be called every 10 msec */
                      if(cid_result == OK)
                      cid_result = callerid_msg_seg(cidbuf);
 /* move data from cidbuf[] into date[], time[], nmbr[], name[], mesg[] */
+/*mrm21897*/
+/*clear the cidbuf to make strcat function work*/
+                     for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
+
 
                      if(voice_caller_id == 1 && cid_result == OK)    {
 
@@ -247,34 +358,52 @@ void    process_cadence()  /* be called every 10 msec */
 
                         strcat((char *)cidbuf,(char *)date);
 
-                        strcat((char *)cidbuf,"\x0d\x0aTIME=");	/* ramn 6/28/96 */
+                        strcat((char *)cidbuf,"\x0d\x0aTIME=");    /* ramn 6/28/96 */
                         strcat((char *)cidbuf,(char *)time);
 
-                        strcat((char *)cidbuf,"\x0d\x0aNMBR=");	/* ramn 6/28/96 */
+                        strcat((char *)cidbuf,"\x0d\x0aNMBR=");    /* ramn 6/28/96 */
                         strcat((char *)cidbuf,(char *)nmbr);
 
+
                         if(name[0] != 0)    {  
-                           strcat((char *)cidbuf,"\x0d\x0aNAME=");	/* ramn 6/28/96 */
+                           strcat((char *)cidbuf,"\x0d\x0aNAME=");    /* ramn 6/28/96 */
                            strcat((char *)cidbuf,(char *)name);
                         }
 
+
                         if(mesg[0] != 0)    {  
-                           strcat((char *)cidbuf,"\x0d\x0aMESG=");	/* ramn 6/28/96 */
+                           strcat((char *)cidbuf,"\x0d\x0aMESG=");    /* ramn 6/28/96 */
                            strcat((char *)cidbuf,(char *)mesg);
                         }
 
+
                         if( fax_class ==8 )
-                            strcat((char *)cidbuf,"\x0d\x0a\x10.");	/* ramn 6/28/96 */
+                            strcat((char *)cidbuf,"\x0d\x0a\x10.");    /* ramn 6/28/96 */
 
                         output_info(cidbuf,VERBOSE_FORM);
+
+                                for (i=0 ; i< BUFLEN; i++)
+                         {
+                              cidbuf[i] = 0;
+                         }
+
+
+
 /*mrm8896*/
-                     		caller_id_end = 1;
-	                  }
+                             caller_id_end = 1;
+                      }
 /* if(voice_caller_id == 1 && cid_result == OK)    */
 
+
                      else if(voice_caller_id == 2 && cid_result == OK)   { 
+/*mrm21897*/
+                     for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
+
                         if( fax_class ==8 )  {
-                            strcpy((char *)cidbuf,"\x10X\x0d\x0a");	/* ramn 6/28/96 */
+                            strcpy((char *)cidbuf,"\x10X\x0d\x0a");    /* ramn 6/28/96 */
                             strcat((char *)cidbuf,"MESG=");
                         }
                         else   strcpy((char *)cidbuf,"MESG=");
@@ -282,24 +411,43 @@ void    process_cadence()  /* be called every 10 msec */
                         strcat((char *)cidbuf,(char *)mesg);
               
                         if( fax_class ==8 )
-                            strcat((char *)cidbuf,"\x0d\x0a\x10.");	/* ramn 6/28/96 */
+                            strcat((char *)cidbuf,"\x0d\x0a\x10.");    /* ramn 6/28/96 */
 
                         output_info(cidbuf,VERBOSE_FORM);
 /*mrm8896*/
-								caller_id_end = 1;
+
+
+                               for (i=0 ; i< BUFLEN; i++)
+                         {
+                              cidbuf[i] = 0;
+                         }
+
+                                caller_id_end = 1;
                      }
 
                      else if(voice_caller_id !=0 && cid_result == CID_ERROR) {
+/*mrm21897*/
+                     for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
+
                         if( fax_class ==8 )  {
-                           strcpy((char *)cidbuf,"\x10X\x0d\x0a");	/* ramn 6/28/96 */
+                           strcpy((char *)cidbuf,"\x10X\x0d\x0a");    /* ramn 6/28/96 */
                            strcat((char *)cidbuf,"ERRM=ICLID_202");
                         }
                         else    strcpy((char *)cidbuf,"ERRM=ICLID_202");
 
                         if( fax_class ==8 )
-                           strcat((char *)cidbuf,"\x0d\x0a\x10.");	/* ramn 6/28/96 */
+                           strcat((char *)cidbuf,"\x0d\x0a\x10.");    /* ramn 6/28/96 */
           
                         output_info(cidbuf,VERBOSE_FORM);
+
+                                for (i=0 ; i< BUFLEN; i++)
+                         {
+                              cidbuf[i] = 0;
+                         }
+
                      }
                      else   ;
 
@@ -307,18 +455,35 @@ void    process_cadence()  /* be called every 10 msec */
                  }
 
                  if(voice_dist_ring_active)         {
+                            for (i=0 ; i<4 ; i++)
+                     {
+                              tembuf[i] = 0;
+                     }
+
                     voice_dist_ring_time  = ring_pattern[seq];
                     d_to_a2(voice_dist_ring_time,tembuf);
+                    /*mrm21897*/
+                     for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0x00;
+                     }
+                            
 
                     if( fax_class == 8 && first_on != FALSE)    {
-                        strcpy((char *)cidbuf,"\x10X\x0d\x0a");	/* ramn 6/28/96 */
+                        strcpy((char *)cidbuf,"\x10X\x0d\x0a");    /* ramn 6/28/96 */
                         strcat((char *)cidbuf,"DRON=");
                     }
-                    else                 strcpy((char *)cidbuf,"DRON=");
+                    else   
+                              strcpy((char *)cidbuf,"DRON=");
 
                     strcat((char *)cidbuf,(char *)tembuf);
 
                     output_info(cidbuf,VERBOSE_FORM);  
+                             for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
+
 /*VERVOSE_FORM => CR,LF before & after */
 
                     first_on = FALSE;
@@ -332,14 +497,17 @@ void    process_cadence()  /* be called every 10 msec */
 /* if(ringon_time > 220 && ringon_time < 4450 ) */
 
              else init_varibles();
-         }
-         else ; /* if msec_counter > 100 */
+         }      
+         else ; /* if msec_counter > 120 */
       }
 
 /* osilating == FALSE */
       else      {
-/*max ring off time is 4450 */  
+/*max ring off time is 4450 
          if( msec_counter > 5000  )     {
+8/29/97
+*/  
+         if( msec_counter > max_ringoff_time)     {
 
             if( voice_caller_id !=0 &&
                 ( (vce_mode != TRANSMIT_MODE) &&
@@ -348,20 +516,38 @@ void    process_cadence()  /* be called every 10 msec */
                  set_dsp_cid(0);
                  set_callerid_relay( CID_RELAY_OFF);
             }
-            ring_pattern[seq] = 50;   /* 0.1 sec as unit */
+            ring_pattern[seq] = (max_ringoff_time+50)/100;   /* 0.1 sec as unit */
 /* ring off time, end */
 
 
-            if(voice_dist_ring_active)     {   
+            if(voice_dist_ring_active)     { 
+                            for (i=0 ; i<4 ; i++)
+                     {
+                              tembuf[i] = 0;
+                     }
+  
                voice_dist_ring_time  = ring_pattern[seq];
                d_to_a2(voice_dist_ring_time,tembuf);
+
+               /*mrm21897*/
+                     for (i=0 ; i< BUFLEN; i++)
+                     {
+                              cidbuf[i] = 0;
+                     }
 
                strcpy((char *)cidbuf,"DROF=");
                strcat((char *)cidbuf,(char *)tembuf);
 
-               if( fax_class == 8 )   strcat((char *)cidbuf,"\x0d\x0a\x10.");		/* ramn 6/28/96 */
+               if( fax_class == 8 )   strcat((char *)cidbuf,"\x0d\x0a\x10.");        /* ramn 6/28/96 */
 
                output_info(cidbuf,VERBOSE_FORM);  /* CR, LF after */
+
+
+                                for (i=0 ; i< BUFLEN; i++)
+                         {
+                              cidbuf[i] = 0;
+                         }
+
             }
 
             seq++;      
@@ -370,16 +556,21 @@ void    process_cadence()  /* be called every 10 msec */
         }  
 
 /* max case, 490 msec */  
-        else if(msec_counter > REPORT )   {
+        else if(msec_counter > REPORT  && ring_on == TRUE )   {
+
+/* shujin 8/15/97, generates lots of RI off if without ring_on == TRUE
+           dte_ri(OFF);
+*/
+
 
 /* 2-26-96 shujin, for callerid */
            if( voice_caller_id !=0 && s[1] == 0 && 
-	            (vce_mode != TRANSMIT_MODE) && 
+                (vce_mode != TRANSMIT_MODE) && 
                (vce_mode != RECEIVE_MODE)       )  /* ramn 4/5/96 */
            {
               set_callerid_relay( CID_RELAY_ON);
               init_cid();
-
+                                                          
 /* for prevent DCE stealing info from COMRAM, no callerid info available */       
               line_io_enabled = FALSE;
 
@@ -410,3 +601,4 @@ void d_to_a2(ubyte val, ubyte buf[])
 
   buf[i] = 0; 
 }
+

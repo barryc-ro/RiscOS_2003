@@ -45,6 +45,8 @@
 #include "mt_coext.h"
 #include "cp_dsp.h"
 #include "mt_v8v34.h"
+#include "linev80.h"
+#include "dce_line.edf"
 
 
 /***************** external procedures used locally *************************/
@@ -81,6 +83,7 @@ void line_rx_block( ubyte * ptr );
 extern void line_disable_interrupts(void);
 extern void line_enable_interrupts(void);
 
+void do_modem_config_patch1(ubyte);
 
 void line_reset(void);
 void line_setup_v23(void);
@@ -100,6 +103,9 @@ extern void modem_v8_configure(
 ubyte process_dce_bg_flag;
 ubyte wait_for_new_frame;
 
+/* void PrintIt(char *); */
+void outchar(unsigned char);
+extern ubyte    test_in_progress;
 
 /*****************************************************************************
 /
@@ -139,6 +145,7 @@ ubyte wait_for_new_frame;
 ********************************************************************/
 void line_init( ubyte init_type )
 {
+    ubyte modem_x2_status;
     line_disable_interrupts();
 
     dce_length_semaphore = 0;
@@ -159,7 +166,7 @@ void line_init( ubyte init_type )
     switch ( init_type ) {
 
     /* MNP ASYNC operation */
-        case 0:
+        case INIT_MNP_ASYNC:
 /*                  Notify v42 of mnp async operations */
                 line_type( 0 ); 
         
@@ -191,11 +198,11 @@ void line_init( ubyte init_type )
 
 /*                  Set the SCC rx and tx baud rates  */
 /*                  Don't need for Merlin       */
-
+          
                 break;
 
         /* MNP SYNC operation */
-        case 1:
+        case INIT_MNP_SYNC:
 /*        Notify v42 of sync operations */
                 line_type( 1 ); 
         
@@ -218,7 +225,7 @@ void line_init( ubyte init_type )
                 break;
 
         /* LAPM operation */
-        case 3:
+        case INIT_LAPM:
 /*                  Notify v42 of sync operations */
                 line_type( 1 ); 
         
@@ -239,8 +246,52 @@ void line_init( ubyte init_type )
 
                 break;
 
+       case INIT_V80_SAM:
+           /* set V.80 SAM flag */
+           v80_sam = TRUE;
+           sp_match = FALSE;
+           mnp_sync = FALSE;
+           lapm_sync = FALSE;
+
+           /* Initialize the dce status variables */
+           dce_tx_interrupt_expected = FALSE;
+           dce_tx_break_pending = FALSE;
+           dce_tx_count = 0;
+           dce_tx_remove = 0;
+           dce_tx_insert = 0;
+           dce_rx_suspended = FALSE;
+           dce_rx_break_running = FALSE;
+
+           /* flush the receive data buffer */
+           line_from_clear();
+
+           line_enable_interrupts();
+
+#if 1 /* line_v80_configure() already initializes this */
+           /* save the current sub mode */
+           current_sub_mode = TRANSPARENT_SUB_MODE;
+
+           /* configure DSP as a transparent sychronous controller */
+           line_port_init(BIT_SYNC_PORT);
+
+            
+#endif
+
+/* DEBUG ONLY - mlc */
+#if 0
+           /* always insert <EM><UNDER> into the rx data stream */
+           dce_rx_buffer[dce_rx_insert++] = EM_CODE;
+           dce_rx_buffer[dce_rx_insert++] = UNDER_CODE;
+           dce_rx_count += 2;
+#endif
+/* DEBUG ONLY - mlc */
+
+           /* Fake TX IE */
+           dce_tx_enabled = TRUE;
+           break;
+
         /* async SPEED MATCHING operation */
-        case 2:
+        case INIT_SP_MATCHING:
         default:
 /*                  Notify v42 of async operations */
                 line_type( ASYNC_PORT ); 
@@ -257,7 +308,9 @@ void line_init( ubyte init_type )
                 dce_tx_remove = 0;
                 dce_tx_insert = 0;
                 dce_rx_suspended = FALSE;
-          dce_rx_break_running = FALSE;
+                dce_rx_break_running = FALSE;
+                /* flush the receive data buffer */
+                line_from_clear();
                 dce_rx_count = 0;
                 dce_rx_remove = 0;
                 dce_rx_insert = 0;
@@ -273,7 +326,26 @@ void line_init( ubyte init_type )
                 break;
     } /* switch */
 
-/* Enable line_int() to call tx interrupts */
+
+
+   if(!test_in_progress)
+    {
+
+
+        dspdrv_ReadCram(ANALOG_STATUS_REG, &modem_x2_status, 1);
+        modem_x2_status &= 0x01;
+
+        if (!modem_x2_status)
+        { 
+          if (init_type == INIT_V80_SAM)
+             do_modem_config_patch1(1);
+          else
+             do_modem_config_patch1(2);
+        }
+
+    }
+
+    /* Enable line_int() to call tx interrupts */
    line_disable_interrupts();
    line_io_enabled = TRUE;
     dspdrv_ping_cram_intr();  /* kick start Merlin */
@@ -317,6 +389,8 @@ void line_init( ubyte init_type )
 void line_port_init( ubyte comm_type )
 {
     ubyte usart_data_type;
+    ubyte temp_byte;
+    ubyte buffer_type;
     
     switch (comm_type)
     {
@@ -329,8 +403,21 @@ void line_port_init( ubyte comm_type )
             break;
 
         case SYNC_PORT:
-            wait_for_new_frame = FALSE;  /* Safe place to clear flag */
-            usart_data_type = 2;
+
+            wait_for_new_frame = FALSE ; /*Safe place to clear flag*/
+#if 0
+/* TRACE */
+                outchar(trans_idle);
+                outchar(framed_idle);
+                outchar(framed_un_ov);
+                outchar(hd_auto);
+                outchar(crc_type);
+                outchar(nrzi_en);
+                outchar(syn1);
+                outchar(syn2);
+/* TRACE */
+#endif
+                usart_data_type = 2;
             break;
 
         case DETECT_PORT:
@@ -340,7 +427,67 @@ void line_port_init( ubyte comm_type )
 
     LOAD_MODEM_INIT_USART
     ack_or_response = FALSE;
-    send_pkt_to_dsp();
+
+   /* if using V80 SAM operation, set COMM-RAM V.80 extensions */
+   if(v80_sam && ((comm_type == BIT_SYNC_PORT) || (comm_type == SYNC_PORT)))
+   {
+       /* adjust the command length */
+       current_command[2] = 4;
+
+       /* setup 8/16-bit SYN and NRZI */
+       temp_byte = 0;
+       if (nrzi_en)
+           temp_byte |= NRZI_EN_BIT;
+       if (trans_idle == TIDLE_HUNT_SYN16)
+           temp_byte |= (TIDLE_HUNT_SYN16 + 1);
+       else if (trans_idle == TIDLE_HUNT_SYN8)
+           temp_byte |= (TIDLE_HUNT_SYN8 + 1);
+       else
+           temp_byte |= (TIDLE_NO_HUNT + 1);
+
+       current_command[5] = temp_byte;
+
+       /* if using TSM operation */
+       if (current_sub_mode == TRANSPARENT_SUB_MODE)
+       {
+           /* set programmable SYN1 underrun character */
+           current_command[6] = syn1;
+       }
+       /* else if using FSM operation */
+       else
+       {
+           /* if configured to tx FLAGS upon FSM tx underrun */
+           if (framed_idle == FIDLE_TX_FLAGS)
+           {
+               /* set programmable underrun character to FLAGS */
+               current_command[6] = 0x7E;
+           }
+           /* else if configured to tx MARKS upon FSM tx underrun */
+           else
+           {
+               /* set programmable underrun character to MARKS */
+               current_command[6] = 0xFF;
+           }
+
+           /* Reset */
+           v80_frame_count = 0;
+       }
+
+       /* SYN2 CHARACTER NOT SUPPORTED IN THE V.80 CP CODE */
+       current_command[7] = syn2;
+   }
+
+   send_pkt_to_dsp();
+
+  buffer_type = 1;   /* Clear RX buffer */
+  LOAD_MODEM_CLEAR_DATA_BUFFER
+  ack_or_response = ACK;
+  send_pkt_to_dsp();
+
+  buffer_type = 0;   /* Clear TX buffer */
+  LOAD_MODEM_CLEAR_DATA_BUFFER
+  ack_or_response = ACK;
+  send_pkt_to_dsp();
 
 } /* end procedure */
 
@@ -375,7 +522,12 @@ void line_port_init( ubyte comm_type )
 ************************************************************************/
 void line_port_reinit(void)
 {
-   if (mnp_sync || lapm_sync)
+   if (v80_sam)
+   {
+      /* always use Trans. Sub-Mode operation after connection */
+      line_port_init(BIT_SYNC_PORT);
+   }
+   else if (mnp_sync || lapm_sync)
       line_port_init(SYNC_PORT);
    else
       line_port_init(ASYNC_PORT); 
@@ -973,7 +1125,7 @@ void line_enable_interrupts(void)
 /    Reason:
 /
 **********************************************************************/
-void line_tx_block( ubyte *ptr ) 
+void line_tx_block( ubyte *ptr )
 {
     line_disable_interrupts();
 
@@ -1033,11 +1185,12 @@ void line_tx_block( ubyte *ptr )
 **********************************************************************/
 void line_rx_block( ubyte *ptr ) 
 {
+    PrintMsg("LineRxBlock Called");
     line_disable_interrupts();
     
 /*   No chars or errors so far */
     rx_char_count = 0;
-   rx_extra_chars = 0;
+    rx_extra_chars = 0;
     line_bg_error_flags = 0;
 
     if ( lapm_sync == TRUE )
@@ -1232,4 +1385,3 @@ void line_get_data_buffer(ubyte *data_ptr, ubyte *length, ubyte *status)
         *length = 0;
    #endif
 }
-

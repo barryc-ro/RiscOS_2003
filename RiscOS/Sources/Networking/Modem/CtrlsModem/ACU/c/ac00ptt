@@ -1,39 +1,39 @@
 /****************************************************************************
 /
-/	Copyright 1988,1989,1990,1991,1992,1993,1994. All Rights Reserved by:
-/	    Cirrus Logic, Inc.
-/	    3100 West Warren Avenue
-/	    Fremont, CA 94538
-/	    (510) 623-8300
+/    Copyright 1988,1989,1990,1991,1992,1993,1994. All Rights Reserved by:
+/        Cirrus Logic, Inc.
+/        3100 West Warren Avenue
+/        Fremont, CA 94538
+/        (510) 623-8300
 /
 /
 /   This document contains material confidential to Cirrus Logic its contents must
-/	not be revealed, used or disclosed to anyone or company with out
-/	written permission by Cirrus Logic.  The information contained herein is solely
-/	for the use of RSA.
+/    not be revealed, used or disclosed to anyone or company with out
+/    written permission by Cirrus Logic.  The information contained herein is solely
+/    for the use of RSA.
 /
-/	File:		ac00ptt.c
+/    File:        ac00ptt.c
 /
-/	Module Version: ACU
+/    Module Version: ACU
 /
-/	Function:	This file contains code for international call progress tone,
+/    Function:    This file contains code for international call progress tone,
 /               ring detection, transmission level setting, and black list
 /
-/	Product:	ACU core code
+/    Product:    ACU core code
 /
 /   History:    ac00ptt.c
 /
 /
-/		Created: 5/2/96
+/        Created: 5/2/96
 /
 /
-/		---------------------------------------------------------
-/		-			Modifications			-
-/		---------------------------------------------------------
+/        ---------------------------------------------------------
+/        -            Modifications            -
+/        ---------------------------------------------------------
 /
-/		Author & Date:	Cirrus
-/		Description:
-/		Reason:
+/        Author & Date:    Cirrus
+/        Description:
+/        Reason:
 /
 *****************************************************************************/
 #include   <string.h>
@@ -44,10 +44,18 @@
 #include "acu_pro.h"
 #include "ee_def.h"
 #include "ptt.h"
+#include "icd_msgs.h"
+#include "bldflags.h"
+#include "homolig1.h"
+
+extern ubyte dsp_response_data[];
+extern ubyte dsp_cp_packet;
 extern ubyte read_dsp_xmit_status_reg(void);
 extern ubyte voice_dist_ring_active;
 extern void  send_pkt_to_dsp(void);
 
+void BlackListInit(void);
+ubyte BlackListInProgress(void);
 void BlackListInsert(void);
 void UpdateBlackListDelayTimer(void);
 void InitiateDelayTimer(void);
@@ -55,13 +63,15 @@ void InitToneModeDetection(void);
 void ast_NC(ubyte *);
 void InitiateToneATaps(void);
 void InitiateDTMFLevel(void);
-void InitiateTransmitLevel(void);
-void InitiateCountryDependSReg(void);
+void InitiateTransmitLevel(ubyte for_dtmf_txlevel);
+void InitiateCountryDependSReg(ubyte);
 void CountryDependSRegRangeCheck(ubyte);
 void SetPulseRelay(uword);
 void SetOnHookRelay(ubyte);
 ubyte LineCurrent(void);
 void SetVORelay(ubyte);
+uword get_dsp_address(ubyte);
+
 /*mrm83196*/
 /*variable for redial the same number*/
 ubyte match_number = 0;
@@ -76,12 +86,13 @@ extern ubyte ToneStatus;
 extern ubyte DigitCode;
 extern ubyte black_size;
 extern ubyte ErrorCode;
+extern ubyte BlackListDialed;
 extern ubyte TmpPhoneCell[30];
 extern ubyte *TmpDialPtr;
 extern int OnTime;
 extern int OffTime;
-extern BlackList BlackLst[12];
-extern ToneModeEntry Tone[3];
+extern BlackList BlackLst[BLACKLIST_MAX_CELL_NUM];
+extern ToneModeEntry Tone[NoOfTonesPerCountry];
 extern country_black_list_table PTTBlackLst[7];
 extern country_tone_table PTT_Tone[7];
 extern country_ring_table PTT_Ring[7];
@@ -94,7 +105,186 @@ extern const uword S91_PTT_TransmitLevel[18];
 extern country_Make_Break_Time PTT_MakeBreak_Time[7];
 
 extern uword tempp1;
-extern ubyte busy_count;
+extern ubyte busy_count[4];
+
+/* MH120397 insert new function: ath1_problem ... */
+#include "mt_def.h"
+
+#if INTERNATIONAL_CODE == 1
+void ath1_timer_init(void);
+void ath1_timer_reset(void);
+void ath1_timer_chk(void);
+void Update_ath1_timer(void);
+ubyte ath1_timer;
+ubyte ath1_activate ;
+#endif
+
+#define  GPCR0          0xffc210   /* config reg, 0 input, 1 output */
+#define  GPR0           0xffc204   /* if as output,value reg */
+#define  HOOK_MASK        0x0080
+/****************************************************************************
+/
+/    Routine: ATH1 TIMER INIT
+/
+/    Author : CREATIX
+/
+/    Creation Date: 26.11.97
+/
+/    Description : This Routine initializes ath1-timer.
+/
+/    Users: AC00CMAT.C
+/
+/
+****************************************************************************/
+#if INTERNATIONAL_CODE == 1
+void ath1_timer_init(void)
+{
+    if (CountryInfo == USA) { return; }
+    if (CountryInfo == German)
+      {
+        /* start  ATH1-Timer ... */
+        if (ath1_activate == TRUE) { return; }
+        else
+          { ath1_activate = TRUE;    
+            ath1_timer = s[7];
+          }
+      }
+}
+#endif
+/****************************************************************************
+/
+/    Routine: RESET ATH1 TIMER
+/
+/    Author : CREATIX
+/
+/    Creation Date: 26.11.97
+/
+/    Description : This Routine resets ath1-timer.
+/
+/    Users: AC00CMAT.C
+/
+/
+****************************************************************************/
+#if INTERNATIONAL_CODE == 1
+void ath1_timer_reset(void)
+{
+    if (CountryInfo == USA) { return; }
+    if (CountryInfo == German)
+      {
+        ath1_activate = FALSE;
+        ath1_timer = 0;
+      }
+}
+#endif
+
+/****************************************************************************
+/
+/    Routine: UPDATE ATH1 TIMER
+/
+/    Author : CREATIX
+/
+/    Creation Date: 26.11.97
+/
+/    Description : This Routine is the timer
+/
+/    Users: ACU.C
+/
+/
+****************************************************************************/
+#if INTERNATIONAL_CODE == 1
+void Update_ath1_timer(void)
+{    
+    if (CountryInfo == USA) { return; }
+    if (CountryInfo == German)
+      { if (ath1_activate == FALSE) { return; }
+        else { if(ath1_timer > 0) ath1_timer--;}
+      }
+}
+#endif
+
+/*******************************/
+/*  check ath1 - timer ... !!! */
+/*******************************/
+
+#if INTERNATIONAL_CODE == 1
+void ath1_timer_chk(void)
+{
+#if 0
+    if(BlackListDialed == TRUE)
+      { 
+        ath1_timer_reset();
+        return;
+      }      
+#endif
+
+    if(ath1_activate == FALSE)
+      {
+         return;
+      }
+    else if(ath1_timer == 0)
+      {
+
+        ath1_timer_reset();
+            if (CountryInfo != USA)
+            set_loc_line_relay(OFF);    /* MH092397 */
+                set_safe1_en_relay(ACTIVATE);    /* mh103197 output = HI */
+            set_shunt_relay(ACTIVATE); /* MH112697 */
+                set_hook_relay(OFF);
+                set_speaker(OFF);
+                PrintMsg("E_RESET here");
+            build_event(E_RESET,UNUSED);
+      }    /* else if */
+}
+/* MH120397 end of change ... */
+#endif
+/****************************************************************************
+/
+/    Routine: Black List Init
+/
+/    Author : CIRRUS LOGIC
+/
+/    Creation Date: 11/09/97
+/
+/    Description : This Routine is called to reset the blacklist mechanism
+/
+/    Users: AC00MSTR.C
+/
+/
+****************************************************************************/
+void BlackListInit(void)
+{
+   int i;
+
+    for (i = 0; i < BLACKLIST_MAX_CELL_NUM; i++) {
+        BlackLst[i].status = NULL;
+        }
+   BlackListDialed = FALSE;
+}
+/****************************************************************************
+/
+/    Routine: Black List In Progres ?
+/
+/    Author : CIRRUS LOGIC
+/
+/    Creation Date: 11/09/97
+/
+/    Description : This Routine is called check if blacklist is in progress
+/
+/    Users: sleep.c
+/
+/
+****************************************************************************/
+ubyte BlackListInProgress(void)
+{
+   ubyte i, BLStatus;
+
+   BLStatus = FALSE;
+    for (i = 0; i < BLACKLIST_MAX_CELL_NUM; i++) {
+        if (BlackLst[i].status != NULL)
+           BLStatus = TRUE;
+        }
+   return(BLStatus);
+}
 /****************************************************************************
 /
 /    Routine: Black List Insert
@@ -114,24 +304,25 @@ void BlackListInsert(void){
    ubyte ix, ix1;
    TmpDialPtr = acu_dial_string_ptr;
 
-/*Clear TmpPhoneCell to stroed the current call number*/
-	ErrorCode = 0;
-	if (CountryInfo == USA){
-		return;
-		}
+   BlackListDialed = TRUE;
+
+    ErrorCode = 0;
+    if (CountryInfo == USA){
+        return;
+        }
 
    for ( ix = 0; ix < 36; ix++) {
       TmpPhoneCell[ix] = NULL;
-	   }
+       }
 
 /*Get the phone number from the command buffer*/
 
    DigitCode = *TmpDialPtr;
    if (DigitCode == 's' || DigitCode == 'S')
-		return;  /* Get the phone number after fetched from the NVRAM */
+        return;  /* Get the phone number after fetched from the NVRAM */
 
    for (ix = 0;(DigitCode = *TmpDialPtr) != NULL; TmpDialPtr++) {
-		switch (DigitCode) {
+        switch (DigitCode) {
          case '0':
          case '1':
          case '2':
@@ -142,13 +333,28 @@ void BlackListInsert(void){
          case '7':
          case '8':
          case '9':
-				TmpPhoneCell[ix] = DigitCode;
+                TmpPhoneCell[ix] = DigitCode;
             ix++;
             break;
          default:
             break;
-   	   }
-		}
+          }
+        }
+
+#if INTERNATIONAL_CODE == 1
+    if (CountryInfo == German) {
+            /* MH120397 reset ath1 - timer ... */
+            ath1_timer_reset();
+            /* this change ath1 ... */
+
+      AvailableCell = 0;
+      if (BlackLst[AvailableCell].status != NULL) {
+           ErrorCode = DelayedCall;
+      }
+      return;
+   }
+#endif
+
 
 /* Check if the number already in the Black_List*/
 /* black_size: black list size defined in the ac00mem.h -- temporarily*/
@@ -156,70 +362,70 @@ void BlackListInsert(void){
 
 /* AvailableCell equals to 255 after comparison means all the phone cell has been occupied*/
 
-	AvailableCell = 255;
-	
+    AvailableCell = 255;
+    
    black_size = PTTBlackLst[CountryInfo].MaxPhoneCell;  /* Maximum phone number can be in the black list */
 
-	for (ix = 0; ix < black_size; ix++) {
+    for (ix = 0; ix < black_size; ix++) {
 
       if (BlackLst[ix].status != NULL) {
 
-			/* Compare the current phone number with the number in the current cell*/ 
-			for ( ix1 = 0; ix1 < 30; ix1++) {
-				if ( TmpPhoneCell[ix1] != BlackLst[ix].PhoneCell[ix1]) {
-					match_number = 0;
-					break;
-					}
-				}
+            /* Compare the current phone number with the number in the current cell*/ 
+            for ( ix1 = 0; ix1 < 30; ix1++) {
+                if ( TmpPhoneCell[ix1] != BlackLst[ix].PhoneCell[ix1]) {
+                    match_number = 0;
+                    break;
+                    }
+                }
 
 
 /*mrm83196*/
 /*variable for redial the same number*/
 
-			if (ix1 == 30)
-			  	match_number = 1;
+            if (ix1 == 30)
+                  match_number = 1;
 
-			if (CountryInfo == German) 
-				ix1 = 30;
+            if (CountryInfo == German) 
+                ix1 = 30;
 
-			/* If ix1 equals to 30 that means the two number are the same */
+            /* If ix1 equals to 30 that means the two number are the same */
 
-			if (ix1 == 30) 
-			{
+            if (ix1 == 30) 
+            {
 
-				if (BlackLst[ix].DelayTimer == 0) 	
-				{
-					BlackLst[ix].RetryTimes++;
+                if (BlackLst[ix].DelayTimer == 0)     
+                {
+                    BlackLst[ix].RetryTimes++;
 
                if (BlackLst[ix].RetryTimes == PTTBlackLst[CountryInfo].MaxRetry)
-					{
-            		BlackLst[ix].status = BlackListNo;
+                    {
+                    BlackLst[ix].status = BlackListNo;
                   BlackLst[ix].DelayTimer = PTTBlackLst[CountryInfo].CycleTime;
-						AvailableCell = 255;
-						ErrorCode = DelayedCall;
-					}
-					else 
-					{
-						AvailableCell = ix;  /* For BlackListDelete purpose */
-            		BlackLst[ix].status = RedListNo;
-					}
-				}
-				else 
-				{
-					ErrorCode = DelayedCall;
-				}
+                        AvailableCell = 255;
+                        ErrorCode = DelayedCall;
+                    }
+                    else 
+                    {
+                        AvailableCell = ix;  /* For BlackListDelete purpose */
+                    BlackLst[ix].status = RedListNo;
+                    }
+                }
+                else 
+                {
+                    ErrorCode = DelayedCall;
+                }
 
-          	break;
-        	}
+              break;
+            }
       }
       else 
-		{ /* BlackLst[ix].status == NULL */
+        { /* BlackLst[ix].status == NULL */
 
-			if(match_number == 0)
-					AvailableCell = ix;
+            if(match_number == 0)
+                    AvailableCell = ix;
 
-			/* No Phone number in this cell or being deleted by BlackListDelete*/
-			/* This entry available for storing the new telephone number */
+            /* No Phone number in this cell or being deleted by BlackListDelete*/
+            /* This entry available for storing the new telephone number */
       }
 
     }
@@ -233,26 +439,27 @@ void BlackListInsert(void){
 
  /*  if ( ix == black_size) */
 
-		if ( (AvailableCell != 255) && (match_number == 0) )
-		{
-	      BlackLst[AvailableCell].RetryTimes = 0;
-   	   BlackLst[AvailableCell].status = RedListNo;
-	      BlackLst[AvailableCell].DelayTimer = 0;
-	      for ( ix = 0; ix < 30; ix++) 
-			{
-   	     BlackLst[AvailableCell].PhoneCell[ix] = TmpPhoneCell[ix];
-			}
-		}
-		else 
-		{
-			if(AvailableCell == 255)
-				ErrorCode = DelayedCall;
-		}
+        if ( (AvailableCell != 255) && (match_number == 0) )
+        {
+          BlackLst[AvailableCell].RetryTimes = 0;
+          BlackLst[AvailableCell].status = RedListNo;
+          BlackLst[AvailableCell].DelayTimer = 0;
+          BlackLst[AvailableCell].RedListTimer = PTTBlackLst[CountryInfo].CycleTime;
+          for ( ix = 0; ix < 30; ix++) 
+            {
+            BlackLst[AvailableCell].PhoneCell[ix] = TmpPhoneCell[ix];
+            }
+        }
+        else 
+        {
+            if(AvailableCell == 255)
+                ErrorCode = DelayedCall;
+        }
 
 /*mrm83196*/
 /*variable for redial the same number*/
-	
-		match_number = 0;
+    
+        match_number = 0;
 
 }
 
@@ -274,28 +481,38 @@ void BlackListInsert(void){
 void UpdateBlackListDelayTimer(void) 
 {
    ubyte ix;
-	if (CountryInfo == USA)return;
+    if (CountryInfo == USA)
+      return;
+
    black_size = PTTBlackLst[CountryInfo].MaxPhoneCell;
-	for (ix = 0; ix < black_size; ix++)	
-	{
-		if (BlackLst[ix].status != 0)
-		{
-			if (BlackLst[ix].DelayTimer != 0 && BlackLst[ix].DelayTimer != 65535) 
-			{
-				BlackLst[ix].DelayTimer--;
-			}
-			
-		}
-/*mrm83196*/
-/*clear the status if timeout*/
+    for (ix = 0; ix < black_size; ix++)    
+    {
+        if (BlackLst[ix].status != NULL)
+        {
+#if 1
+               outchar(0x88);
+               outchar(BlackLst[ix].DelayTimer);
+               outchar(0x89);
+#endif
+    
+            if (BlackLst[ix].DelayTimer != 0)
+                BlackLst[ix].DelayTimer--;
+        }
+        if ((BlackLst[ix].status == BlackListNo) && (BlackLst[ix].DelayTimer == 0))
+        {
+          BlackLst[ix].RetryTimes = 0;
+            BlackLst[ix].status = 0;
+         BlackListDialed = FALSE;
+        }
+        if ((BlackLst[ix].status == RedListNo) && (BlackLst[ix].RedListTimer != 0)) {
+         BlackLst[ix].RedListTimer--;
+         if (BlackLst[ix].RedListTimer == 0) {
+             BlackLst[ix].RetryTimes = 0;
+            BlackLst[ix].status = 0;
+         }
+      }
 
-		if ((BlackLst[ix].status == 2) && (BlackLst[ix].DelayTimer == 0))
-		{
-	      BlackLst[ix].RetryTimes = 0;
-			BlackLst[ix].status = 0;
-		}
-
-	}
+    }
 }
 
 /****************************************************************************
@@ -316,11 +533,13 @@ void UpdateBlackListDelayTimer(void)
 ****************************************************************************/
 void BlackListDelete(void) {
 
-	 if (CountryInfo == USA)
-		return;
+   if (CountryInfo == USA)
+      return;
 
     BlackLst[AvailableCell].status = 0;
-	}
+    BlackLst[AvailableCell].RetryTimes = 0;
+   BlackListDialed = FALSE;
+    }
 
 
 
@@ -342,11 +561,24 @@ void BlackListDelete(void) {
 /
 ****************************************************************************/
 void InitiateDelayTimer(void) {
-	if (CountryInfo == 0)return;
-	if (BlackLst[AvailableCell].status == RedListNo) {
+    if (CountryInfo == 0)return;
+
+   if (BlackListDialed == FALSE)   
+      return;
+
+    if (CountryInfo == German) {
+      AvailableCell = 0;
+      if (BlackLst[AvailableCell].status == NULL) {
+           BlackLst[AvailableCell].status = BlackListNo;
+           BlackLst[AvailableCell].DelayTimer = PTTBlackLst[CountryInfo].CycleTime;
+      } 
+      return;
+   }
+
+    if (BlackLst[AvailableCell].status == RedListNo) {
         BlackLst[AvailableCell].DelayTimer = PTTBlackLst[CountryInfo].DelayTimer[BlackLst[AvailableCell].RetryTimes];
-		}
-	}
+        }
+    }
 
 
 /****************************************************************************
@@ -366,43 +598,32 @@ void InitiateDelayTimer(void) {
 /
 /
 ****************************************************************************/
-	
-void InitToneModeDetection(void) {
-   Tone[0].status  = 1;                /* Look for Tone-A on condition */
-   Tone[0].tonetype= PTT_Tone[CountryInfo].dial.tonetype;
-	Tone[0].ontime= 0;
-	Tone[0].offtime= 0;
-   Tone[0].ontimemax  = PTT_Tone[CountryInfo].dial.ontimemax;
-   Tone[0].ontimemin  = PTT_Tone[CountryInfo].dial.ontimemin;
-   Tone[0].offtimemax = PTT_Tone[CountryInfo].dial.offtimemax;
-   Tone[0].offtimemin = PTT_Tone[CountryInfo].dial.offtimemin;
-   Tone[0].tonecode = PTT_Tone[CountryInfo].dial.tonecode;
+    
+void InitToneModeDetection(void) 
+{
+   ubyte ii;
 
-	Tone[1].status  = 1;
-   Tone[1].tonetype= PTT_Tone[CountryInfo].busy.tonetype;
-	Tone[1].ontime= 0;
-	Tone[1].offtime= 0;
-   Tone[1].ontimemax  = PTT_Tone[CountryInfo].busy.ontimemax;
-   Tone[1].ontimemin  = PTT_Tone[CountryInfo].busy.ontimemin;
-   Tone[1].offtimemax = PTT_Tone[CountryInfo].busy.offtimemax;
-   Tone[1].offtimemin = PTT_Tone[CountryInfo].busy.offtimemin;
-   Tone[1].tonecode = PTT_Tone[CountryInfo].busy.tonecode;
+   for(ii=0; ii < NoOfTonesPerCountry; ii++)
+   {
+    Tone[ii].status  = 1;                /* Look for Tone-A on condition */
+    Tone[ii].tonetype= PTT_Tone[CountryInfo]._tonex[ii].tonetype;
+    Tone[ii].ontime= 0;
+    Tone[ii].offtime= 0;
+    Tone[ii].ontimemax  = PTT_Tone[CountryInfo]._tonex[ii].ontimemax;
+    Tone[ii].ontimemin  = PTT_Tone[CountryInfo]._tonex[ii].ontimemin;
+    Tone[ii].offtimemax = PTT_Tone[CountryInfo]._tonex[ii].offtimemax;
+    Tone[ii].offtimemin = PTT_Tone[CountryInfo]._tonex[ii].offtimemin;
+    Tone[ii].tonecode = PTT_Tone[CountryInfo]._tonex[ii].tonecode;
+   }
 
-	Tone[2].status  = 1;
-   Tone[2].tonetype= PTT_Tone[CountryInfo].ringback.tonetype;
-	Tone[2].ontime= 0;
-	Tone[2].offtime= 0;
-   Tone[2].ontimemax  = PTT_Tone[CountryInfo].ringback.ontimemax;
-   Tone[2].ontimemin  = PTT_Tone[CountryInfo].ringback.ontimemin;
-   Tone[2].offtimemax = PTT_Tone[CountryInfo].ringback.offtimemax;
-   Tone[2].offtimemin = PTT_Tone[CountryInfo].ringback.offtimemin;
-   Tone[2].tonecode = PTT_Tone[CountryInfo].ringback.tonecode;
-	OnTime = PTT_RingBack[CountryInfo].OnTime;
-	OffTime = PTT_RingBack[CountryInfo].OffTime;
+    OnTime = PTT_RingBack[CountryInfo].OnTime;
+    OffTime = PTT_RingBack[CountryInfo].OffTime;
    ToneResult = 0;
-	busy_count = 0;
+    for(ii=0; ii<4; ii++)
+        busy_count[ii] = 0;            
    ToneModeSwitch = 1;                 /* Start Tone Mode detection */
-	}
+
+}
 
 
 
@@ -428,127 +649,208 @@ extern  ubyte  tembuf[4];
 extern  void   output_info(ubyte *,ubyte);
 void   d2_to_a2(uword val, ubyte buf[]);
 
-void ToneModeDetection(void) {
+void ToneModeDetection(void)
+{
+   ubyte *string;
 
-	ubyte ix, false_cond, false_cond1;
+    ubyte ix, false_cond, false_cond1;
 
-	ToneStatus = read_dsp_xmit_status_reg();
+    ToneStatus = read_dsp_xmit_status_reg();
+   ToneResult = UNDETERMINED;
+    
+//                      string = (ubyte *)"####";
+//                    output_info(string,VERBOSE_FORM);      /* before and after */
+//                   string = d_to_a(ix);
+//                    output_info(string,ToneStatus);      /* before and after */
+   for (ix = 0; ix < NoOfTonesPerCountry; ix++)    
+   {
+        if (Tone[ix].status == 1) 
+      { /* Look for tone A on */
+            if (ToneStatus & 0x01) 
+         {
 
-	for (ix = 0; ix < 3; ix++)	{
-		if (Tone[ix].status == 1) { /* Look for tone A on */
-			if (ToneStatus & 0x01) {
+                /* Look for tone A on, and tone A IS on */
 
-				/* Look for tone A on, and tone A IS on */
+                Tone[ix].ontime++;
+                if (Tone[ix].tonetype == 1)
+            {
+                        /* This is a continuous tone */
+                        /* Comparing the max and min of ontime */
+                    if (Tone[ix].ontime >= Tone[ix].ontimemin)    
+               {
+                        ToneResult = Tone[ix].tonecode;
+                    }
+                }
+                else 
+            {
+                    /* Do nothing */
+                }
+            }
+            else 
+         {
+                /* Look for tone A on, but tone A IS off */
+                Tone[ix].status = 0;  /* Change to look for tone A off*/
+                Tone[ix].offtime = 1; /* Initiate tone offtime */
 
-				Tone[ix].ontime++;
-				if (Tone[ix].tonetype == 1){
-						/* This is a continuous tone */
-						/* Comparing the max and min of ontime */
-					if (Tone[ix].ontime >= Tone[ix].ontimemin)	{
-						ToneResult = Tone[ix].tonecode;
-						}
-					}
-				else {
-					/* Do nothing */
-					}
-				}
-			else {
-				/* Look for tone A on, but tone A IS off */
-				Tone[ix].status = 0;  /* Change to look for tone A off*/
-				Tone[ix].offtime = 0; /* Initiate tone offtime */
+            }
+        }
+        else 
+      {
+            /* Look for tone A off */
 
-				}
-			}
-		else {
-			/* Look for tone A off */
+            if ((ToneStatus & 0x01) == 0) 
+         {
 
-			if ((ToneStatus & 0x01) == 0) {
+                /* Look for tone A off, and tone A IS off */
+                Tone[ix].offtime ++;
+            }
+            else 
+         {
 
-				/* Look for tone A off, and tone A IS off */
-				Tone[ix].offtime ++;
-				}
-			else {
+                /* Look for tone A off, but tone A IS on */
+                false_cond =  0; /* Glitch exist within Tone A on if it is TRUE*/
+                false_cond1 = 0; 
+                tempp1 = 0;
+                Tone[ix].status = 1;
 
-				/* Look for tone A off, but tone A IS on */
-				false_cond =  0; /* Glitch exist within Tone A on if it is TRUE*/
-				false_cond1 = 0; 
-				tempp1 = 0;
-				Tone[ix].status = 1;
+        /* De-glitch during the Ring back period*/
+//                if (ix == 2) 
+//            { 
+//                    if (Tone[ix].offtime < 55 && Tone[ix].offtime > 15) 
+//               {/*UK ring back has 200ms off time*/
+//                        Tone[ix].ontime += Tone[ix].offtime;
+//                        Tone[ix].offtime = 0;
+//                        false_cond = TRUE; /* Calling Tone exist with cadence ON */
+//                    }
+//
+//                    if (Tone[ix].offtime > OffTime) 
+//               {
+//                        tempp1 = Tone[ix].offtime - OffTime;
+//                        Tone[ix].offtime = OffTime;
+//
+//                        if ((OnTime - Tone[ix].ontime) > 5) 
+//                  {
+//                            Tone[ix].ontime += tempp1;
+//                            false_cond1 = TRUE; /* add to next on time */
+//                        }
+//                    }
+//                }
+        /* End of ring back De-glitch function*/
+                /* Reporting the Cadence for debugging purpose*/
+                if ((voice_dist_ring_active == 0xC7)  && (false_cond == 0))
+//                if ((voice_dist_ring_active == 0x04)  && (false_cond == 0)) 
+            {
+                    if ( /*ix == 2 || ix == 1  ix == jjjj_tmp1 */ ix == 1 ) 
+               {
+              //     string = & (tembuf[0]);
 
-		/* De-glitch during the Ring back period*/
-				if (ix == 2) { 
-					if (Tone[ix].offtime < 55 && Tone[ix].offtime > 15) {/*UK ring back has 200ms off time*/
-						Tone[ix].ontime += Tone[ix].offtime;
-						Tone[ix].offtime = 0;
-						false_cond = TRUE; /* Calling Tone exist with cadence ON */
-						}
+                      string = (ubyte *)"^^^";
+//                   string = d_to_a(ix);
+                        output_info(string,VERBOSE_FORM);      /* before and after */
+//                        output_info(string,STORED_NUM);  
+//                        output_info(string,NUMERIC_FORM);  /* CR LF after --- */
 
-					if (Tone[ix].offtime > OffTime) {
-						tempp1 = Tone[ix].offtime - OffTime;
-						Tone[ix].offtime = OffTime;
+                    d2_to_a2(Tone[ix].ontime,tembuf);
+                    strcpy((char *)cidbuf,"CADENCE_ON=");
+                    strcat((char *)cidbuf,(char *)tembuf);
+                        output_info(cidbuf,NUMERIC_FORM);  
 
-						if ((OnTime - Tone[ix].ontime) > 5) {
-							Tone[ix].ontime += tempp1;
-							false_cond1 = TRUE; /* add to next on time */
-							}
-						}
-					}
-		/* End of ring back De-glitch function*/
-				/* Reporting the Cadence for debugging purpose*/
-				if ((voice_dist_ring_active == 0xC7)  && (false_cond == 0)) {
-					if ( ix == 2 || ix == 1) {
-	            	d2_to_a2(Tone[ix].ontime,tembuf);
-   	         	strcpy((char *)cidbuf,"CADENCE_ON=");
-      	      	strcat((char *)cidbuf,(char *)tembuf);
-						output_info(cidbuf,VERBOSE_FORM);  /* CR, LF before and after */
+                    d2_to_a2(Tone[ix].offtime,tembuf);
+                    strcpy((char *)cidbuf,"CADENCE_OF=");
+                    strcat((char *)cidbuf,(char *)tembuf);
+                    output_info(cidbuf,NUMERIC_FORM);  /* CR, LF after */
 
-		            d2_to_a2(Tone[ix].offtime,tembuf);
-   		         strcpy((char *)cidbuf,"CADENCE_OF=");
-      		      strcat((char *)cidbuf,(char *)tembuf);
-         	   	output_info(cidbuf,NUMERIC_FORM);  /* CR, LF after */
-						}
-					}
+                    }
+                }
 
-				if (Tone[ix].tonetype == 2 && false_cond == 0) {	/* Two segments tone, make decision here*/
-					if (Tone[ix].ontime >= Tone[ix].ontimemin)	{
-						if (Tone[ix].ontime <= Tone[ix].ontimemax) {
-							if (Tone[ix].offtime >= Tone[ix].offtimemin) {
-								if (Tone[ix].offtime <= Tone[ix].offtimemax) {
-									if (ix == 1) {
-										if (busy_count){
-											ToneResult = Tone[ix].tonecode;
-											}
-										else {
-											busy_count++;
-											}
-										}
-									else {
-										ToneResult = Tone[ix].tonecode;
-										}
-									}
-								}
-							}	
-						}
-					}
-				if (CountryInfo == Italy){
-					if (ToneResult == 1) {
-						ToneModeSwitch = ToneModeIdle;
-						break;
-						}
-					}
+                if (Tone[ix].tonetype == 2 && false_cond == 0) 
+                {    /* Two segments tone, make decision here*/
+                    if( (Tone[ix].ontime >= Tone[ix].ontimemin)    
+                         && (Tone[ix].ontime <= Tone[ix].ontimemax) 
+                         && (Tone[ix].offtime >= Tone[ix].offtimemin) 
+                         && (Tone[ix].offtime <= Tone[ix].offtimemax) 
+                 )
+                   {
+                         if ((ix >= 1) && (ix <= 4)) 
+                        {
+                             if (busy_count[ix-1])
+                            {
+                                 ToneResult = Tone[ix].tonecode;
 
-				if (false_cond == 0) {
-					if (false_cond1 == TRUE) {
-						Tone[ix].ontime = 0;
-						}
-					else {
-						Tone[ix].ontime = tempp1; /* New on time*/
-						}
-					}
-				}
-			}
-		}
-	}
+//                                  string = (ubyte *)"R++";
+//                                   output_info(string,STORED_NUM);  /* CR, LF before */
+//                           string = d_to_a(ix);
+//                                output_info(string,STORED_NUM);  /* CR, LF before */
+//
+//                            d2_to_a2(Tone[ix].ontime,tembuf);
+//                            strcpy((char *)cidbuf,"CADENCE_ON=");
+//                            strcat((char *)cidbuf,(char *)tembuf);
+//                                output_info(cidbuf,STORED_NUM);  /* CR, LF before */
+//
+//                             d2_to_a2(Tone[ix].offtime,tembuf);
+//                             strcpy((char *)cidbuf,"CADENCE_OF=");
+//                             strcat((char *)cidbuf,(char *)tembuf);
+//                            output_info(cidbuf,STORED_NUM);  /* CR, LF after */
+//
+////                           string = d_to_a(busy_count[ix-1]);
+//                           string = d_to_a(ToneResult);
+//                            output_info(string,STORED_NUM);  /* CR, LF before */
+
+                                 Tone[ix].ontime = 1;
+                                 break;
+                                        }
+                                        else 
+                                        {
+                                            busy_count[ix-1]++;
+                                        }
+ 
+                         /*          string = (ubyte *)"R+";     */
+                              /*     output_info(string,STORED_NUM); */ /* CR, LF before */
+
+                                    }
+                                    else 
+                                      {
+
+                                        ToneResult = Tone[ix].tonecode;
+                                    }
+
+
+                    }
+               else
+               {
+                 if ((ix >= 1) && (ix <= 4))
+                    busy_count[ix-1] = 0;
+               }
+
+                }
+
+//                if (CountryInfo == Italy)
+//                {
+//                    if (ToneResult == 1) 
+//                   {
+//                        ToneModeSwitch = ToneModeIdle;
+//                        break;
+//                    }
+//                }
+
+//                if (false_cond == 0) 
+//            {
+//                    if (false_cond1 == TRUE) 
+//               {
+//                        Tone[ix].ontime = 0;
+//                    }
+//                    else 
+//               {
+//                        Tone[ix].ontime = tempp1; /* New on time*/
+//                    }
+//                }
+            Tone[ix].ontime = 1;
+
+            }
+        }
+    }
+}
+
 
 
 /****************************************************************************
@@ -572,87 +874,87 @@ void ToneModeDetection(void) {
 
 void ToneModeStateSwitch(void) {
 
-	switch (ToneModeSwitch){
-		case ToneModeIdle:
-			break;
-		case ToneModeStart:
-			ToneModeDetection();
-			break;
-		default:
-			break;
-		}
-	}
+    switch (ToneModeSwitch){
+        case ToneModeIdle:
+            break;
+        case ToneModeStart:
+            ToneModeDetection();
+            break;
+        default:
+            break;
+        }
+    }
 
 
 /*******************************************************************************
 /
-/	Routine: ast_NC
+/    Routine: ast_NC
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine change the country code
+/    Description: This routine change the country code
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: at_ast()
+/    Users: at_ast()
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
 void ast_NC(ubyte *param_ptr) {
-	if (Default_Country == 0xFF) {	/* Only when Default_Country == 0xFF*/
-		if (*param_ptr > MAX_COUNTRY_CODE) {
-   	   error_occurred = TRUE;
-			}
-		else {
-			CountryInfo = *param_ptr;
-			InitiateCountryDependSReg();
-/*			acu_load_defaults(AT_Z_COMMAND);*/
-			}
-		}
-	else {
-   	   error_occurred = TRUE;
-		}
-	}
+    if (Default_Country == 0xFF) {    /* Only when Default_Country == 0xFF*/
+        if (*param_ptr > MAX_COUNTRY_CODE) {
+          error_occurred = TRUE;
+            }
+        else {
+            CountryInfo = *param_ptr;
+            InitiateCountryDependSReg(0);
+/*            acu_load_defaults(AT_Z_COMMAND);*/
+            }
+        }
+    else {
+          error_occurred = TRUE;
+        }
+    }
 
 /*******************************************************************************
 /
-/	Routine: d2_to_a2
+/    Routine: d2_to_a2
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
@@ -677,529 +979,607 @@ void d2_to_a2(uword val, ubyte buf[])
 
 /*******************************************************************************
 /
-/	Routine: InitiateToneATaps
+/    Routine: InitiateToneATaps
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
 void InitiateToneATaps(void) {
-	ubyte *temp;
-	ONE_WORD ab[7];
+    ubyte *temp;
+    ONE_WORD ab[7];
+    uword dsp_address;
 
-	if (CountryInfo == USA)
-		return ;
+#ifdef DEBUG_PORT 
+       PrintMsg( "InitiateToneATaps");
+#endif
+    
+#if (DSP_SERIES == 700)
+   /*  programming taps not working yet */
+   return;
+#endif
+    
+//    if (CountryInfo == USA)
+//        return;
+
+
    current_command [0] = 0x0d;
-  	current_command [1] = 0x00;
-  	current_command [2] = 0x04;
+      current_command [1] = 0x00;
+      current_command [2] = 0x04;
    current_command [3] = 0x00;
-   current_command [4] = 0x4d;
-	current_command [5] = 0x00;
+   
+   dsp_address = get_dsp_address(24);
+   current_command [4] = (ubyte)(dsp_address & 0x00FF);
+   current_command [5] = (dsp_address >> 8);
+    
    current_command [6]  = 0xdf;
    current_command [7]  = 0xdf;
-	temp = (ubyte *)(COM_RAM); 
-	*temp = 0x0c0;
-  	ack_or_response = 0;
+    temp = (ubyte *)(COM_RAM); 
+    *temp = 0x0c0;
+      ack_or_response = 0;
    send_pkt_to_dsp();
-	
-	if ((CountryInfo == Japan) || (CountryInfo == UK)/* || (CountryInfo == USA)*/){
+    
+    if ((CountryInfo == Japan) || (CountryInfo == UK) || (CountryInfo == USA)){
 
-		ab[0].w = PTT_Taps[CountryInfo].b12;
-		ab[1].w = PTT_Taps[CountryInfo].b11;
-		ab[2].w = PTT_Taps[CountryInfo].b10;
-		ab[3].w = PTT_Taps[CountryInfo].a12;
-		ab[4].w = PTT_Taps[CountryInfo].a11;
-		ab[5].w = PTT_Taps[CountryInfo].b22;
-		ab[6].w = PTT_Taps[CountryInfo].b21;
-		current_command [0] = 0x0e;
-   	current_command [1] = 0x00;
-	  	current_command [2] = 0x10;
-	   current_command [3] = 0x00;
+        ab[0].w = PTT_Taps[CountryInfo].b12;
+        ab[1].w = PTT_Taps[CountryInfo].b11;
+        ab[2].w = PTT_Taps[CountryInfo].b10;
+        ab[3].w = PTT_Taps[CountryInfo].a12;
+        ab[4].w = PTT_Taps[CountryInfo].a11;
+        ab[5].w = PTT_Taps[CountryInfo].b22;
+        ab[6].w = PTT_Taps[CountryInfo].b21;
+        current_command [0] = 0x0e;
+       current_command [1] = 0x00;
+          current_command [2] = 0x10;
+       current_command [3] = 0x00;
 /* Tone A Taps CommRAM location*/
-	   current_command [4] = 0xD8;
-  		current_command [5] = 0x01;
-	   current_command [6]  = ab[0].b.b0; /* b12 */
-	   current_command [7]  = ab[0].b.b1;
-		current_command [8]  = ab[1].b.b0; /* b11 */
-		current_command [9]  = ab[1].b.b1;
-	   current_command [10] = ab[2].b.b0; /* b10 */
-   	current_command [11] = ab[2].b.b1;
-		current_command [12] = ab[3].b.b0; /* a12 */
-		current_command [13] = ab[3].b.b1;
-		current_command [14] = ab[4].b.b0; /* a11 */
-	   current_command [15] = ab[4].b.b1;
-		current_command [16] = ab[5].b.b0; /* b22 */
-		current_command [17] = ab[5].b.b1;
-   	current_command [18] = ab[6].b.b0; /* b21 */
-	   current_command [19] = ab[6].b.b1;
-		temp = (ubyte *)(COM_RAM); 
-		*temp = 0x0c0;
-   	ack_or_response = 0;
-	   send_pkt_to_dsp();
 
-		ab[0].w = PTT_Taps[CountryInfo].b20;
-		ab[1].w = PTT_Taps[CountryInfo].a22;
-		ab[2].w = PTT_Taps[CountryInfo].a21;
-	   current_command [0] = 0x0e;
-	   current_command [1] = 0x00;
-	  	current_command [2] = 0x08;
-	   current_command [3] = 0x00;
-/* Tone A Taps CommRAM location*/
-	   current_command [4] = 0xDF;
-   	current_command [5] = 0x01;
-	   current_command [6]  =ab[0].b.b0; /* b20 */
-	   current_command [7]  =ab[0].b.b1;
-	   current_command [8]  =ab[1].b.b0;	/* a22 */
-	   current_command [9]  =ab[1].b.b1;
-	   current_command [10] =ab[2].b.b0;	/* a21 */
-	   current_command [11] =ab[2].b.b1;
-		temp = (ubyte *)(COM_RAM); 
-		*temp = 0x0c0;
-		ack_or_response = 0;
-	   send_pkt_to_dsp();
-		}
-	}
+   dsp_address = get_dsp_address(48);
+   current_command [4] = (ubyte)(dsp_address & 0x00FF);
+   current_command [5] = (dsp_address >> 8);
+ 
+       current_command [6]  = ab[0].b.b0; /* b12 */
+       current_command [7]  = ab[0].b.b1;
+        current_command [8]  = ab[1].b.b0; /* b11 */
+        current_command [9]  = ab[1].b.b1;
+       current_command [10] = ab[2].b.b0; /* b10 */
+       current_command [11] = ab[2].b.b1;
+        current_command [12] = ab[3].b.b0; /* a12 */
+        current_command [13] = ab[3].b.b1;
+        current_command [14] = ab[4].b.b0; /* a11 */
+       current_command [15] = ab[4].b.b1;
+        current_command [16] = ab[5].b.b0; /* b22 */
+        current_command [17] = ab[5].b.b1;
+       current_command [18] = ab[6].b.b0; /* b21 */
+       current_command [19] = ab[6].b.b1;
+        temp = (ubyte *)(COM_RAM); 
+        *temp = 0x0c0;
+       ack_or_response = 0;
+       send_pkt_to_dsp();
+
+        ab[0].w = PTT_Taps[CountryInfo].b20;
+        ab[1].w = PTT_Taps[CountryInfo].a22;
+        ab[2].w = PTT_Taps[CountryInfo].a21;
+       current_command [0] = 0x0e;
+       current_command [1] = 0x00;
+          current_command [2] = 0x08;
+       current_command [3] = 0x00;
+       
+       /* Tone A Taps CommRAM location*/
+       dsp_address += 7;
+       current_command [4] = (ubyte)(dsp_address & 0x00FF);
+       current_command [5] = (dsp_address >> 8);
+
+       current_command [6]  =ab[0].b.b0; /* b20 */
+       current_command [7]  =ab[0].b.b1;
+       current_command [8]  =ab[1].b.b0;    /* a22 */
+       current_command [9]  =ab[1].b.b1;
+       current_command [10] =ab[2].b.b0;    /* a21 */
+       current_command [11] =ab[2].b.b1;
+        temp = (ubyte *)(COM_RAM); 
+        *temp = 0x0c0;
+        ack_or_response = 0;
+       send_pkt_to_dsp();
+        }
+    }
 
 /*******************************************************************************
 /
-/	Routine: InitiateDTMFLevel
+/    Routine: InitiateDTMFLevel
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
-void InitiateDTMFLevel(void){
-	ubyte *temp;
+void InitiateDTMFLevel(void)
+{
+   ubyte *temp;
+
+#ifdef DEBUG_PORT 
+       PrintMsg( "InitiateDTMFLevel");
+#endif
+    
    current_command [0] = 0x88;
-  	current_command [1] = 0x00;
-  	current_command [2] = 0x02;
+   current_command [1] = 0x00;
+   current_command [2] = 0x02;
    current_command [3] = 0x00;
    current_command [4] = PTT_DTMF_Level[CountryInfo].DTMF_Level.level1;
-	current_command [5] = PTT_DTMF_Level[CountryInfo].DTMF_Level.level2;
-	temp = (ubyte *)(COM_RAM); 
+   current_command [5] = PTT_DTMF_Level[CountryInfo].DTMF_Level.level2;
+   temp = (ubyte *)(COM_RAM); 
 
-/*MRM12796*/
-/*donot need to set ack if sending packets*/
-/*
-	*temp = 0x0c0;
-*/
-  	ack_or_response = 0;
+   ack_or_response = 0;
    send_pkt_to_dsp();
-	}
-
+}
 
 /*******************************************************************************
 /
-/	Routine: InitiateTransmitLevel
+/    Routine: InitiateTransmitLevel
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
-void InitiateTransmitLevel(void) {
-	ubyte *temp,s91Lvl;
-	ONE_WORD FaxLvl, DataLvl;
+void InitiateTransmitLevel(ubyte for_dtmf_txlevel)
+{
+   ONE_WORD  TxLvl;
 
-/*	if (CountryInfo == USA)	return;*/
+   /*  use the same S91_PTT_TransmitLevel table for 
+       data and fax, but index s91 for data and s92 for fax */
+   current_command[0] = PACKET_MODEM_SET_TX_LEVEL;
+   current_command[1] = 0;
+   current_command[2] = 4;
+   current_command[3] = 0;
 
-	if (fax_class != 1 && fax_class != 0) return;
-		
-	s91Lvl = s[91];
-	if (s91Lvl < PTT_SReg[CountryInfo].S91.min)
-		s91Lvl = PTT_SReg[CountryInfo].S91.min;
+   if (fax_class == 1)
+   {
+      TxLvl.w = S91_PTT_TransmitLevel[s[92]];
+         current_command[4] = TxLvl.b.b0;
+      current_command[5] = TxLvl.b.b1;
 
-	if (s91Lvl > PTT_SReg[CountryInfo].S91.max)
-		s91Lvl = PTT_SReg[CountryInfo].S91.max;
+      #ifdef DEBUG_PORT 
+      PrintOutChars("InitiateTransmitLevel for fax: ");
+      outhex(TxLvl.b.b0);
+      outchar(' ');
+      outhex(TxLvl.b.b1);
+      outchar(0x0D);
+      outchar(0x0A);
+      #endif
 
-	DataLvl.w = S91_PTT_TransmitLevel[s[91]];
-	FaxLvl.w = S91_PTT_TransmitLevel[s[91]];
+   }
+   else if (fax_class == 0)
+   {
+      if((for_dtmf_txlevel == 1) && (CUSTOMER35 == TRUE))
+          TxLvl.w = 0x2e;  // value to be fine tuned. Goaded by AIWA.
+      else
+          TxLvl.w = S91_PTT_TransmitLevel[s[91]];
 
-/*
-	if (CountryInfo == Japan){
-		DataLvl.w = S91_PTT_TransmitLevel[s[91]];
-		FaxLvl.w = S91_PTT_TransmitLevel[s[91]];
-		}
-	else {
-		DataLvl.w = PTT_TransmitLevel[CountryInfo].Data_Level;
-		FaxLvl.w = PTT_TransmitLevel[CountryInfo].Fax_Level;
-		}
-*/
-
-	current_command [0] = 0x0C;
-  	current_command [1] = 0x00;
-  	current_command [2] = 0x06;
-   current_command [3] = 0x00;
-   current_command [4] = 0x5F;
-   current_command [5] = 0x16;
-   current_command [6] = 0x00;
-   current_command [7] = 0x00;
-	if (fax_class) {
-   	current_command [8] = FaxLvl.b.b0;
-	   current_command [9] = FaxLvl.b.b1;
-		}
-	else {
-   	current_command [8] = DataLvl.b.b0;
-	   current_command [9] = DataLvl.b.b1;
- 		}
-	temp = (ubyte *)(COM_RAM); 
-	*temp = 0x0c0;
-  	ack_or_response = 0;
+      current_command[4] = TxLvl.b.b0;
+      current_command[5] = TxLvl.b.b1;
+ 
+      #ifdef DEBUG_PORT 
+      PrintOutChars( "InitiateTransmitLevel for data: ");
+      outhex(TxLvl.b.b0);
+      outchar(' ');
+      outhex(TxLvl.b.b1);
+      outchar(0x0D);
+      outchar(0x0A);
+      #endif
+  }
+   else 
+      return;
+            
+   ack_or_response = 0;
    send_pkt_to_dsp();
-	}
+}
 
 /*******************************************************************************
 /
-/	Routine: InitiateCountryDependSReg
+/    Routine: InitiateCountryDependSReg
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
-void InitiateCountryDependSReg(void) {
-	ubyte dummy;
-	dummy=0;
+void InitiateCountryDependSReg(ubyte type) {
+    ubyte dummy;
+    dummy=0;
 
-	(PTT_SReg[CountryInfo].S0.DefaultValue!=0)?s[0]=PTT_SReg[CountryInfo].S0.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S6.DefaultValue!=0)?s[6]=PTT_SReg[CountryInfo].S6.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S7.DefaultValue!=0)?s[7]=PTT_SReg[CountryInfo].S7.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S8.DefaultValue!=0)?s[8]=PTT_SReg[CountryInfo].S8.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S10.DefaultValue!=0)?s[10]=PTT_SReg[CountryInfo].S10.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S11.DefaultValue!=0)?s[11]=PTT_SReg[CountryInfo].S11.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S22.DefaultValue!=0)?s[22]=PTT_SReg[CountryInfo].S22.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S23.DefaultValue!=0)?s[23]=PTT_SReg[CountryInfo].S23.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S27.DefaultValue!=0)?s[27]=PTT_SReg[CountryInfo].S27.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S31.DefaultValue!=0)?s[31]=PTT_SReg[CountryInfo].S31.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S91.DefaultValue!=0)?s[91]=PTT_SReg[CountryInfo].S91.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S0.DefaultValue!=0)?s[0]=PTT_SReg[CountryInfo].S0.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S6.DefaultValue!=0)?s[6]=PTT_SReg[CountryInfo].S6.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S7.DefaultValue!=0)?s[7]=PTT_SReg[CountryInfo].S7.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S8.DefaultValue!=0)?s[8]=PTT_SReg[CountryInfo].S8.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S10.DefaultValue!=0)?s[10]=PTT_SReg[CountryInfo].S10.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S11.DefaultValue!=0)?s[11]=PTT_SReg[CountryInfo].S11.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S22.DefaultValue!=0)?s[22]=PTT_SReg[CountryInfo].S22.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S23.DefaultValue!=0)?s[23]=PTT_SReg[CountryInfo].S23.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S27.DefaultValue!=0)?s[27]=PTT_SReg[CountryInfo].S27.DefaultValue:dummy++;
+    (PTT_SReg[CountryInfo].S31.DefaultValue!=0)?s[31]=PTT_SReg[CountryInfo].S31.DefaultValue:dummy++;
+    
+    if (type == 0)
+    {
+       (PTT_SReg[CountryInfo].S91.DefaultValue!=0)?s[91]=PTT_SReg[CountryInfo].S91.DefaultValue:dummy++;
+       (PTT_SReg[CountryInfo].S91.DefaultValue!=0)?s[92]=PTT_SReg[CountryInfo].S91.DefaultValue:dummy++;
+    }
 
    switch (sr22.uk_hook) {
-     	case 0:
-	       make_time  = PTT_MakeBreak_Time[CountryInfo].P0_make_time;
-   	    break_time = PTT_MakeBreak_Time[CountryInfo].P0_break_time;
-			 break;
-	  	case 1: 
-	       make_time  = PTT_MakeBreak_Time[CountryInfo].P1_make_time;
-   	    break_time = PTT_MakeBreak_Time[CountryInfo].P1_break_time;
-			 break;
-	  	case 2:
-	       make_time  = PTT_MakeBreak_Time[CountryInfo].P0_make_time/2;
-	       break_time = PTT_MakeBreak_Time[CountryInfo].P0_break_time/2;
-    		 break;
-	  	case 3:
-		    make_time  = PTT_MakeBreak_Time[CountryInfo].P1_make_time/2;
-   		 break_time = PTT_MakeBreak_Time[CountryInfo].P1_break_time/2;
-			 break;
-	   }
-	}
+         case 0:
+           make_time  = PTT_MakeBreak_Time[CountryInfo].P0_make_time;
+           break_time = PTT_MakeBreak_Time[CountryInfo].P0_break_time;
+             break;
+          case 1: 
+           make_time  = PTT_MakeBreak_Time[CountryInfo].P1_make_time;
+           break_time = PTT_MakeBreak_Time[CountryInfo].P1_break_time;
+             break;
+          case 2:
+           make_time  = PTT_MakeBreak_Time[CountryInfo].P0_make_time/2;
+           break_time = PTT_MakeBreak_Time[CountryInfo].P0_break_time/2;
+             break;
+          case 3:
+            make_time  = PTT_MakeBreak_Time[CountryInfo].P1_make_time/2;
+            break_time = PTT_MakeBreak_Time[CountryInfo].P1_break_time/2;
+             break;
+       }
+    }
 
 /*******************************************************************************
 /
-/	Routine: CountryDependSRegRangeCheck
+/    Routine: CountryDependSRegRangeCheck
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
 void CountryDependSRegRangeCheck(ubyte number) {
-	ubyte max, min;
+    ubyte max, min;
 
-	switch (current_register) {
-		case 0:
-			max = PTT_SReg[CountryInfo].S0.max;
-			min = PTT_SReg[CountryInfo].S0.min;
-			break;
-		case 6:
-			max = PTT_SReg[CountryInfo].S6.max;
-			min = PTT_SReg[CountryInfo].S6.min;
-			break;
-		case 7:
-			max = PTT_SReg[CountryInfo].S7.max;
-			min = PTT_SReg[CountryInfo].S7.min;
-			break;
-		case 8:
-			max = PTT_SReg[CountryInfo].S8.max;
-			min = PTT_SReg[CountryInfo].S8.min;
-			break;
-		case 10:
-			max = PTT_SReg[CountryInfo].S10.max;
-			min = PTT_SReg[CountryInfo].S10.min;
-			break;
-		case 11:
-			max = PTT_SReg[CountryInfo].S11.max;
-			min = PTT_SReg[CountryInfo].S11.min;
-			break;
-		case 91:
-			max = PTT_SReg[CountryInfo].S91.max;
-			min = PTT_SReg[CountryInfo].S91.min;
-			break;
-		}
-	if (number >= min && number <= max) {
-		s[current_register] = number;
-		}
-	else {
-		if (number < min)	{
-			s[current_register] = min;
-			}
-		else {
-			s[current_register] = max;
-			}
-		}
-	}
+    switch (current_register) {
+        case 0:
+            max = PTT_SReg[CountryInfo].S0.max;
+            min = PTT_SReg[CountryInfo].S0.min;
+            break;
+        case 6:
+            max = PTT_SReg[CountryInfo].S6.max;
+            min = PTT_SReg[CountryInfo].S6.min;
+            break;
+        case 7:
+            max = PTT_SReg[CountryInfo].S7.max;
+            min = PTT_SReg[CountryInfo].S7.min;
+            break;
+        case 8:
+            max = PTT_SReg[CountryInfo].S8.max;
+            min = PTT_SReg[CountryInfo].S8.min;
+            break;
+        case 10:
+            max = PTT_SReg[CountryInfo].S10.max;
+            min = PTT_SReg[CountryInfo].S10.min;
+            break;
+        case 11:
+            max = PTT_SReg[CountryInfo].S11.max;
+            min = PTT_SReg[CountryInfo].S11.min;
+            break;
+        case 91:
+            max = PTT_SReg[CountryInfo].S91.max;
+            min = PTT_SReg[CountryInfo].S91.min;
+            break;
+        case 92:  /* Use 91 table */
+            max = PTT_SReg[CountryInfo].S91.max;
+            min = PTT_SReg[CountryInfo].S91.min;
+            break;
+    
+        }
+    if (number >= min && number <= max) {
+        s[current_register] = number;
+        }
+    else {
+        if (number < min)    {
+            s[current_register] = min;
+            }
+        else {
+            s[current_register] = max;
+            }
+        }
+    }
 
 
 /*******************************************************************************
 /
-/	Routine: SetPulseRelay
+/    Routine: SetPulseRelay
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
 
 void SetPulseRelay(uword status) {
-	uword *gpio;
+    uword *gpio;
 
-	gpio = (uword *) GPCR1 ;
-	*gpio = PULSE_DIAL_MASK | 0x0002 ; /* config Pulse dial bit as output */
+#if INTERNATIONAL_CODE == 1
+/*    if (CountryInfo != USA) */
+    return;    /* MH092397 */
+#endif
+    gpio = (uword *) GPCR1 ;
+    *gpio = PULSE_DIAL_MASK | 0x0002 ; /* config Pulse dial bit as output */
 
-	gpio = (uword *) GPR1 ;   
-	*gpio = PULSE_DIAL_MASK | status;  
+    gpio = (uword *) GPR1 ;   
+    *gpio = PULSE_DIAL_MASK | status;  
 /* if status =0000, output a 0, relay on -- make time */
 /* if status =0002, output a 1, relay off-- break time */
 
-	if(status == 0x0002){
-		gpio = (uword *) GPCR1 ;
-		*gpio = PULSE_DIAL_MASK | 0 ;       /* config as input */
-	}    
+    if(status == 0x0002){
+        gpio = (uword *) GPCR1 ;
+        *gpio = PULSE_DIAL_MASK | 0 ;       /* config as input */
+    }    
 /* config CID bit as input for prevent misoperation from other codes*/
 
-	}
+    }
 
 /*******************************************************************************
 /
-/	Routine: SetOnHookRelay
+/    Routine: SetOnHookRelay
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
-#define  GPCR0          0xffc210   /* config reg, 0 input, 1 output */
-#define  GPR0           0xffc204   /* if as output,value reg */
-#define  HOOK_MASK		0x0080
+void SetOnHookRelay(ubyte status)
+{
+    uword *gpio;
 
-void SetOnHookRelay(ubyte status) {
-	uword *gpio;
+    gpio = (uword *)GPCR0 ;
+    *gpio = HOOK_MASK | 0x0008 ; /* config Pulse dial bit as output */
 
-	gpio = (uword *)GPCR0 ;
-	*gpio = HOOK_MASK | 0x0008 ; /* config Pulse dial bit as output */
-
-	gpio = (uword *) GPR0 ;
-	if (status == 0){
-		*gpio = HOOK_MASK | 0x0000;  
-		}
-	else {
-		*gpio = HOOK_MASK | 0x0008;  
-		}
-	}
-
-
+    gpio = (uword *) GPR0 ;
+    if (status == 0){
+        *gpio = HOOK_MASK | 0x0000;  
+        }
+    else {
+        *gpio = HOOK_MASK | 0x0008;  
+        }
+}
 
 /*******************************************************************************
 /
-/	Routine: LineCurrent
+/    Routine: LineCurrent
 /
-/	Author : Cirrus Logic
+/    Author : Cirrus Logic
 /
-/	Creation Date: 5/8/96
+/    Creation Date: 5/8/96
 /
-/	Description: This routine shows the CADENCE timing
+/    Description: This routine shows the CADENCE timing
 /
-/	Input Parameters: None
+/    Input Parameters: None
 /
-/	Output Parameters: none
+/    Output Parameters: none
 /
-/	Global Variables Changed:  
+/    Global Variables Changed:  
 /
-/	Users: 
+/    Users: 
 /
-/	-------------------------------------------------------------
-/	-			Modifications			    -
-/	-------------------------------------------------------------
+/    -------------------------------------------------------------
+/    -            Modifications                -
+/    -------------------------------------------------------------
 /
-/	Author & Date:	Cirrus Logic
-/	Description:
-/	Reason:
+/    Author & Date:    Cirrus Logic
+/    Description:
+/    Reason:
 /
 *******************************************************************************/
-#define  LPOHD_MASK				0x0000
-#define  LPOHD_RELAY_MASK		0x8000
+#define  LPOHD_MASK                0x0000
+#define  LPOHD_RELAY_MASK        0x8000
 
 ubyte LineCurrent(void){
-	uword *gpio, temp1;
+    uword *gpio;
 
-	gpio = (uword *)GPCR0 ;
-	*gpio = LPOHD_MASK | 0x0800 ; /* config LPOHD bit as input */
+    gpio = (uword *)GPCR0 ;
+    *gpio = LPOHD_MASK | 0x0800 ; /* config LPOHD bit as input */
 
-	gpio = (uword *)GPR0;
+    gpio = (uword *)GPR0;
 
-	if (*gpio & 0x0800){
-		return 0;  
-		}
-	else {
-		return 1;  
-		}
-	}
+    if (*gpio & 0x0800){
+        return 0;  
+        }
+    else {
+        return 1;  
+        }
+    }
 
-#define VORELAY_MASK 	0x1000
+#define VORELAY_MASK     0x1000
 
 void SetVORelay(ubyte status) {
-	uword *gpio;
+    uword *gpio;
 
-	gpio = (uword *)GPCR0 ;
-	*gpio = VORELAY_MASK | 0x0100 ; /* config Pulse dial bit as output */
+    gpio = (uword *)GPCR0 ;
+    *gpio = VORELAY_MASK | 0x0100 ; /* config Pulse dial bit as output */
 
-	gpio = (uword *) GPR0 ;
-	if (status == 0){
-		*gpio = VORELAY_MASK | 0x0000;  
-		}
-	else {
-		*gpio = VORELAY_MASK | 0x0100;  
-		}
-	}
+    gpio = (uword *) GPR0 ;
+    if (status == 0){
+        *gpio = VORELAY_MASK | 0x0000;  
+        }
+    else {
+        *gpio = VORELAY_MASK | 0x0100;  
+        }
+    }
+
+uword get_dsp_address(ubyte lower_var_offset)
+{
+   uword dsp_address;
+   
+#if (DSP_SERIES == 700)
+   current_command[0] = PACKET_MODEM_GET_ADDRESS;
+   current_command[1] = 0;
+   current_command[2] = 3;
+   current_command[3] = 0;
+   current_command[4] = lower_var_offset;
+   current_command[5] = 0;
+   current_command[6] = 0;  /* P1 sublink */
+   current_command[7] = 0;
+
+   dsp_cp_packet = PACKET_DP_ADDRESS_LOC;
+   ack_or_response = 1;   /* RESPONSE */
+   send_pkt_to_dsp ();
+
+   dsp_address  = ((uword)dsp_response_data[1] << 8); 
+   dsp_address |= dsp_response_data[0];
+
+#else 
+   switch (lower_var_offset)
+   {  
+      case (48):    
+         dsp_address = 0x01D8;
+         break;
+         
+      case (24):
+         dsp_address = 0x004D; 
+         break;
+ 
+      default:
+         #ifdef DEBUG_PORT 
+         PrintMsg("FATAL - invalid variable offset selected");
+         #endif
+         break;   
+   }
+#endif
+   return (dsp_address);          
+}
+#include "ac00intl.h"
+#include "ac00intl.c"
+
+

@@ -1,638 +1,59 @@
 #
-#     Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
-#     All Rights Reserved by:
-#        RSA
-#        7701 Six Forks Road
-#        Suite 201
-#        Raleigh, NC  27615
-#        (919) 846-7171
+#   MUSKET MAKEFILE 
+#   ---------------
 #
-#    This document contains material confidential to RSA. Its contents
-#    must not be revealed, used or disclosed to anyone or company without
-#    written permission by RSA. The information contained herein is solely
-#    for the use of RSA.
-#
-#    EXAMPLE MAKE FILE FOR Musket:
-#           - V.32bis Cutlass I
-#           - V.42/V.42bis Modem
-#           - FAX Class 1, 2
-#           - ARM I/O
-#
-#    (Using OPUS MAKE and Microtec Research Inc. Software Development Tools)
-#
-#       'makel arm' to create arm.abs
+#   Copyright 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997.
+#   All Rights Reserved by:
+#   Cirrus Logic, Inc.
 #
 
+GLOBAL_HDRS = sys_def.h acu_pro.h acu_mem.h acu_def.h       \
+     mt_pro.h mt_codef.h mt_hwdef.h mt_hwpro.h              \
+     mt_copro.h as_pro.h pp_def.h pp_mem.h                  \
+     wl_pro.h wl_def.h wl_mem.h mt_coext.h eeprom.h         \
+     mod_def.h v34_rate.h par_def.h vcv_cpro.h vcv_mem.h    \
+     resp_cod.h ptt.h ee_def.h
+
+IO = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o  \
+     lineasyn.o linematc.o linedat.o lineint.o linecrc.o    \
+     linesync.o linelapm.o linedetc.o line_hw.o dsp_drv.o   \
+     acuiomem.o faxhdlc.o faxdata.o faxlink.o faxdat.o      \
+     rtstand.o sleep.o musket.o linev8.o powerup.o          \
+     eeread.o eewrite.o pnp.o pcmcia.o overmgr.o ringint.o  \
+     callerid.o dsppatch.o powerons.o seramd.o seratmel.o   \
+     dlamd.o dlatmel.o linev80.o dte_v80.o print.o          \
+     trnpatch.o compatch.o datpatch.o vcepatch.o            \
+     bootx.o mdm_56k.o x2_page.o 
+
+IO_S  = serial.o 
+
+IO_P  = parallel.o
+
+IO_VV = vcvhdlc.o vcvlink.o vcvdat.o 
 
-
-#
-# Setup flags and linker base options
-#
-
-
-
-
-
-.BEFORE .MAKE:
-        %if %make(sdbg5)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy serl_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.vv ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS =  -g -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 1"
-                %setenv C_DBG_FLAGS =  -g -errors $$*.err
-                #set    LINK_BASE = -d -base 0xa000 -data 0xff0000 -V
-                %set LINK_BASE = -d -BASE 0xa000 -DATA 0xff0000  -OV ovlymap  -V 
-                %set    TNAME = serdbg5.aof
-
-        %elseif %make(pdbg5)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy prll_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.vv ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS =  -g -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 0"
-                %setenv C_DBG_FLAGS =  -g -errors $$*.err
-                #set    LINK_BASE = -d -base 0xa000 -data 0xff0000 -V
-                %set LINK_BASE = -d -BASE 0xa000 -DATA 0xff0000  -OV ovlymap  -V 
-
-                %set    TNAME = pardbg5.aof
-
-        %elseif %make(sndb5)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy serl_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.vv ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 1"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = sndb5v.bin
-
-	%elseif %make(pndb5)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy prll_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.vv ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = pnd5v.bin
-
-        %elseif %make(sndb5i)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-		del voc_ctls.o
-
-		copy serl_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.vv ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy int_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 1"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = sndb5vi.bin
-
-	%elseif %make(pndb5i)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-		del voc_ctls.o
-
-		copy prll_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.vv ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy int_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = pndb5vi.bin
-
-       %elseif %make(sdbg5-v)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy serl_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.v42 ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS =  -g -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 1"
-                %setenv C_DBG_FLAGS =  -g -errors $$*.err
-                #set    LINK_BASE = -d -base 0xa000 -data 0xff0000 -V
-                %set LINK_BASE = -d -BASE 0xa000 -DATA 0xff0000  -OV ovlymap  -V 
-                %set    TNAME = sdb5nvv.aof
-
-        %elseif %make(pdbg5-v)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy prll_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.v42 ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-                %setenv A_DBG_FLAGS =  -g -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 0"
-                %setenv C_DBG_FLAGS =  -g -errors $$*.err
-                #set    LINK_BASE = -d -base 0xa000 -data 0xff0000 -V
-                %set LINK_BASE = -d -BASE 0xa000 -DATA 0xff0000  -OV ovlymap  -V 
-
-                %set    TNAME = pdb5nvv.aof
-
-        %elseif %make(sndb5-v)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy serl_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.v42 ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0"     -PD "SERIAL_ON SETA 1"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = sndb5nvv.bin
-
-	%elseif %make(pndb5-v)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-
-		copy prll_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.v42 ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy ext_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-	
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = pndb5nvv.bin
- 
-
-
-        %elseif %make(sndb5i-v)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-		#
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-		del voc_ctls.o
-
-		copy serl_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.v42 ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy int_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 1"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = sndb5nvi.bin
-
-	%elseif %make(pndb5i-v)
-#these are the two file that have the serial and parallel mode switch
-		del patch_l.o
-		del acu.o
-		del dte_drv.o
-		del musket.o
-		del ac00mstr.o
-		del ac00lib2.o
-
-		del powerup.o
-		del ac00idat.o
-
-		del ac00anps.o
-		del ac00orps.o
-		del ac00tsa1.o
-
-		del ac00cmat.o
-		del dsppatch.o
-		del pwronptc.o
-		del voc_ctls.o
-
-		copy prll_mod.h mod_def.h
-		copy cut_j5.h fab.h
-		copy ovlymap.v42 ovlymap		
-		copy io\patch_l5.l io\patch_l.l
-		pat2c.exe io\patch_l.l patch
-		pat2c.exe io\vcepatch.l vcepatch
-
-		copy int_dspc.h dsp_cod.h
-		copy io\pwron_j5.c io\pwronptc.c
-
-		touch io\pwronptc.c
-		touch fab.h
-		touch mod_def.h
-		touch dsp_cod.h
-
-
-                %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
-                %setenv C_DBG_FLAGS = -errors $$*.err
-                #set LINK_BASE = -base 0x0000 -bin -data 0xff0000 -V
-                %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
-                %set TNAME  = pndb5nvi.bin
- 
-        %endif
-
-
-# Global Header Files required 
-#added mt_coext.h mt_hwdef.h, mt_hwpro.h, mt_copro.h by ramn on 1/30/96
-GLOBAL_HDR_FILES = sys_def.h acu_pro.h acu_mem.h acu_def.h \
-		   mt_pro.h mt_codef.h mt_hwdef.h mt_hwpro.h \
-		   mt_copro.h as_pro.h pp_def.h pp_mem.h \
-		   wl_pro.h wl_def.h wl_mem.h mt_coext.h eeprom.h \
-		   mod_def.h v34_rate.h par_def.h vcv_cpro.h vcv_mem.h \
-		   fab.h resp_cod.h dsp_cod.h ptt.h ee_def.h
-
-# Platform I/O
-IOP =ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
-     linematc.o linedat.o lineint.o linecrc.o linesync.o \
-     linelapm.o linedetc.o line_hw.o dsp_drv.o acuiomem.o \
-     faxhdlc.o faxdata.o faxlink.o faxdat.o \
-     vcvhdlc.o vcvlink.o vcvdat.o \
-     rtstand.o sleep.o  parallel.o \
-     musket.o linev8.o powerup.o \
-     # main_dn.o m_bt_dn.o eeread.o eewrite.o pnp.o pcmcia.o \
-     eeread.o eewrite.o pnp.o pcmcia.o\
-     overmgr.o ringint.o callerid.o dsppatch.o patch_l.o vcepatch.o pwronptc.o 
-     
-
-
-IOS = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
-     linematc.o linedat.o lineint.o linecrc.o linesync.o \
-     linelapm.o linedetc.o line_hw.o dsp_drv.o acuiomem.o \
-     faxhdlc.o faxdata.o faxlink.o faxdat.o \
-     vcvhdlc.o vcvlink.o vcvdat.o \
-     rtstand.o sleep.o serial.o \
-     musket.o linev8.o powerup.o \
-     # main_dn.o m_bt_dn.o eeread.o eewrite.o  pnp.o pcmcia.o \
-     eeread.o eewrite.o  pnp.o pcmcia.o \
-     ringint.o overmgr.o callerid.o dsppatch.o patch_l.o vcepatch.o pwronptc.o 
-
-
-
-
-
-
-IOP_V = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
-     linematc.o linedat.o lineint.o linecrc.o linesync.o \
-     linelapm.o linedetc.o line_hw.o dsp_drv.o acuiomem.o \
-     faxhdlc.o faxdata.o faxlink.o faxdat.o \
-    # vcvhdlc.o vcvlink.o vcvdat.o \
-     rtstand.o sleep.o  parallel.o pnp.o pcmcia.o \
-     musket.o linev8.o powerup.o \
-     # main_dn.o m_bt_dn.o eeread.o eewrite.o \
-     eeread.o eewrite.o \
-     overmgr.o ringint.o callerid.o dsppatch.o patch_l.o vcepatch.o pwronptc.o 
-     
-
-IOS_V = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
-     linematc.o linedat.o lineint.o linecrc.o linesync.o \
-     linelapm.o linedetc.o line_hw.o dsp_drv.o acuiomem.o \
-     faxhdlc.o faxdata.o faxlink.o faxdat.o \
-    # vcvhdlc.o vcvlink.o vcvdat.o \
-     rtstand.o sleep.o serial.o \
-     musket.o linev8.o powerup.o \
-     # main_dn.o m_bt_dn.o eeread.o eewrite.o  pnp.o pcmcia.o\
-     eeread.o eewrite.o  pnp.o pcmcia.o\
-     ringint.o overmgr.o callerid.o dsppatch.o patch_l.o vcepatch.o pwronptc.o 
-
-
-
-
-
-
-# linetest.o
-#       vcvlink.o vcvdata.o vcvhdlc.o vcvdat.o
-
-# Platform Startup Control
-	   
 # Packet Protocol 
-PP    = pp00hdx.o pp00mem.o   pp00io.o
+#
+PP     = pp00hdx.o pp00mem.o pp00io.o
 PPSTUB = pp00stb.o
 
 # Hayes Autosync
+#
 AUTOSYNC = as00mem.o as00if.o as00lib1.o as00mn.o \
-		 as01dte.o as01ri.o as01line.o asio_dat.o
+           as01dte.o as01ri.o as01line.o asio_dat.o
 AUTOSYNC_STUB = as_stub.o
 
 # What to build (Platform specific)
-TARGET_OBJS_P = $(PPSTUB) $(AUTOSYNC_STUB) $(IOP)
-TARGET_OBJS_S = $(PPSTUB) $(AUTOSYNC_STUB) $(IOS)
+#
+TARGET_OBJS_P = $(PPSTUB) $(AUTOSYNC_STUB) $(IO) $(IO_P) $(IO_VV)
+TARGET_OBJS_S = $(PPSTUB) $(AUTOSYNC_STUB) $(IO) $(IO_S) $(IO_VV)
 
-TARGET_OBJS_P_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IOP_V)
-TARGET_OBJS_S_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IOS_V)
-
-#ramn 1/30/96
-#PLATFORM_OBJS = $(MODE_OBJ)
-#PAR_OBJ = parallel.o							   
+TARGET_OBJS_P_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IO) $(IO_P)
+TARGET_OBJS_S_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IO) $(IO_S)
 
 # Local Flags
-#DFLAGS  = -3/32bit
-DFLAGS  = 
-CFLAGS  = -APCS 3/NOSWST/NOFP -c -li -I.\ -Iio\ -Iv42\ -Imt_ctls1\ $(DFLAGS) $(C_DBG_FLAGS)
-#CFLAGS  = -zps1 -c -li -I.\ -Iio\ -Iv42\ -Imt_ctls1\ $(DFLAGS) $(C_DBG_FLAGS)
+#
+CFLAGS  = -APCS 3/NOSWST/NOFP -c -li -I.\ -Iio\ -Iv42\ -Imt_ctls1\ $(C_DBG_FLAGS)  
 AFLAGS  = -LI $(A_DBG_FLAGS)
-#LFLAGS  = -map -ERRORS LINK.ERR -o $(TNAME) -via link.cmd 
-#LFLAGS  = -map -ERRORS LINK.ERR -o bin  -via link.cmd 
 LFLAGS  = -map -REMOVE -ERRORS LINK.ERR -o bin -SPLIT  -via link.cmd 
 
 CC      = $(COMP_TOOL)
@@ -640,367 +61,542 @@ AS      = $(ASM_TOOL)
 LK      = $(LINK_TOOL)
 LB      = $(TDIR)\lib\armlib.32l
 
-        %setenv TDIR      = c:\arm200
-        %setenv CDIR      = $(TDIR)\dos
-        %setenv COMP_TOOL = $(CDIR)\armcc
-        %setenv ASM_TOOL  = $(CDIR)\armasm
-        %setenv LINK_TOOL = $(CDIR)\armlink
-
-
-#        %setenv TDIR      = c:\arm
-##       %setenv TDIR      = h:\arm
-#        %setenv CDIR      = $(TDIR)\pc386
-#        %setenv COMP_TOOL = $(CDIR)\armcc
-#        %setenv ASM_TOOL  = $(CDIR)\armasm
-#        %setenv LINK_TOOL = $(CDIR)\armlink
+%setenv TDIR      = c:\arm200
+%setenv CDIR      = $(TDIR)\dos
+%setenv COMP_TOOL = $(CDIR)\armcc
+%setenv ASM_TOOL  = $(CDIR)\armasm
+%setenv LINK_TOOL = $(CDIR)\armlink
 
 #
-#    HELP!
+#------------------------------------------------------------------------------
+# help section:  "make" with no argument
 #
+
 help:
-	   @@echo - - - - - - - - - MAKEFILE FOR Musket (ARM) PROJECT - - - - - - - - - -
-	   @@echo 
-	   @@echo Given below is table for building the MUSKET code with various options
-	   @@echo 
-	   @@echo sdbg5 -- Serial, with Debug, for J5, with Voice view and Ties mode
-	   @@echo sdbg6 -- Serial, with Debug, for C6, with Voice view and Ties mode
-	   @@echo sndb5 -- Serial, with No Debug, for J5, with Voice view and Ties mode
-	   @@echo sndb6 -- Serial, with NO Debug, for C6, with Voice view and Ties mode
-	   @@echo sndb5i-- Execute Internal DSP code, Serial, with No Debug, for J5, 
-	   @@echo	   with Voice view and Ties mode
-	   @@echo 
-	   @@echo pdbg5 -- Parallel, with Debug, for J5, with Voice view and Ties mode
-	   @@echo pdbg6 -- Parallel, with Debug, for C6, with Voice view and Ties mode
-	   @@echo pndb5 -- Parallel, with NO Debug, for J5, with Voice view and Ties mode
-	   @@echo pndb6 -- Parallel, with NO Debug, for C6, with Voice view and Ties mode
-	   @@echo pndb5i-- Execute Internal DSP code ,Parallel, with NO Debug, for J5, 
-	   @@echo	   with Voice view and Ties mode
-	   @@echo	
-	   @@echo 
-	   @@echo GIVEN BELOW ARE MAKE OPTIONS THAT WILL BUILD CODE WITHOUT VOICE VIEW
-	   @@echo 
-	   @@echo sdbg5-v -- Serial, with Debug, for J5, without Voice view and with Ties mode
-	   @@echo sdbg6-v -- Serial, with Debug, for C6, without Voice view and with Ties mode
-	   @@echo sndb5-v -- Serial, with No Debug, for J5, without Voice view and with Ties mode
-	   @@echo sndb6-v -- Serial, with NO Debug, for C6, without Voice view and with Ties mode
-	   @@echo sndb5i-v-- Excute Internal DSP code ,Serial, with No Debug, for J5, 
-	   @@echo	     without Voice view and with Ties mode
-	   @@echo 
-	   @@echo pdbg5-v -- Parallel, with Debug, for J5, without Voice view and with Ties mode
-	   @@echo pdbg6-v -- Parallel, with Debug, for C6, without Voice view and with Ties mode
-	   @@echo pndb5-v -- Parallel, with NO Debug, for J5, without Voice view and with Ties mode
-	   @@echo pndb6-v -- Parallel, with NO Debug, for C6, without Voice view and with Ties mode
-	   @@echo pndb5i-v-- Execute Internal DSP code, Parallel, with NO Debug, for J5, 
-	   @@echo	     without Voice view and with Ties mode
-	   @@echo 
+   
+   @@echo  MUSKET MAKEFILE
+   @@echo  --------------- 
+   @@echo   
+   @@echo  usage:  make Mxxxx {refer to makefile for available builds}
+   @@echo 
 
 #
-#    Musket w/ Cirrus Cutlass I data pump for EMULATOR No wireless code
+#------------------------------------------------------------------------------
+# makes all of the possible builds and saves results in .err file 
 #
-sdbg5:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_S) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-            make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_S:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
 
-pdbg5:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-            make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_P:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
+all:
+   del *.o
+   make -x m0010.err m0010
+   del *.o
+   make -x m0011.err m0011
+   del *.o
+   make -x m8014.err m8014
+   del *.o
+   make -x m8015.err m8015
+   del *.o
+   make -x m0015.err m0015
+   del *.o
+   make -x m0014.err m0014
+   del *.o
+   make -x m0019.err m0019
+   del *.o
+   make -x m001d.err m001d
 
-sndb5i:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_S) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-            make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_S:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    copy link.ser link.cmd	
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-sndb5:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_S) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-            make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_S:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-pndb5i:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P) $(STARTUP) $(PAR_OBJ) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-            make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_P:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    copy link.par link.cmd	
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-pndb5:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P) $(STARTUP) $(PAR_OBJ) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-            make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_P:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-sdbg5-v:  $(GLOBAL_HDR_FILES) $(TARGET_OBJS_S_V) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-           # make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_S_V:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-pdbg5-v:  $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P_V) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-           # make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-sndb5i-v:   $(GLOBAL_HDR_FILES) $(TARGET_OBJS_S_V) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-           # make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_S_V:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-	
-sndb5-v:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_S_V) $(STARTUP) $(PLATFORM_OBJS) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-           # make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_S_V:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-pndb5i-v:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-           # make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-
-pndb5-v:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
-	    make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
-	    make -f faxmf.arm hdrs fx1
-	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
-#	    make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5stub
-	    make -f mtmf.arm hdrs cutlass_1
-            make -f vcmf.arm hdrs voice
-           # make -f vcvmf.arm hdrs vcv
-	    @@ echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
-	    @@ echo $(PLATFORM_OBJS:S/.*/ &$(RETURN)/) >> link.cmd
-	    $(LK) $(LFLAGS) $(LB) > link.map
-	    copy bin\root $(TNAME)	
-
-
+# ----------------------------------------------------------------------------
+# M0010: Serial, voice, no V.80, no VoiceView, TIES, internal DSP code,
+#        and X2 resident
 #
-#    Link data that comes first
+
+before_M0010:
+
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        0 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  0 >  mod_def.h
+   %echo \#define SERIAL_MODE    1 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 1"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M0010: before_M0010 $(GLOBAL_HDRS) $(TARGET_OBJS_S_V) linktop
+
+   %set TNAME  = $@.BIN
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd file to arrange objects manually 
+   copy linknvv.ser link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo 
+   %echo   Serial, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   and X2 resident(4M)
+   %echo
+ 
+# ----------------------------------------------------------------------------
+# M0011: Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code, 
+#        and X2 resident(4M)
 #
+
+before_M0011:
+ 
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        0 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  1 >  mod_def.h
+   %echo \#define SERIAL_MODE    0 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+ 
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M0011: before_M0011 $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.par link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   and X2 resident(4M)
+   %echo
+
+# ----------------------------------------------------------------------------
+# M0011dbg: Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code, 
+#           X2 resident(4M), and ARM debugger version based on M0011
+#
+
+before_M0011dbg:
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        0 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  1 >  mod_def.h
+   %echo \#define SERIAL_MODE    0 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+ 
+    %setenv A_DBG_FLAGS = -g -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 1"
+    %setenv C_DBG_FLAGS = -g 
+    %set    LINK_BASE   = -d -BASE 0xa000 -DATA 0xff0000  -OV ovlymap  -V 
+
+M0011dbg: before_M0011dbg $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) linktop 
+
+   %set TNAME  = $@.aof
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   @@ echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+
+   %echo
+   %echo   Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   X2 resident(4M), and ARM debugger based on M0011 
+   %echo
+
+
+# ----------------------------------------------------------------------------
+# M0019: Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code, 
+#        and X2 resident(4M), and PCMCIA
+#
+
+before_M0019:
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        0 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  1 >  mod_def.h
+   %echo \#define SERIAL_MODE    0 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 1 >> mod_def.h
+ 
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M0019: before_M0019 $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.par link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   and X2 resident(4M), and PCMCIA
+   %echo
+
+
+# ----------------------------------------------------------------------------
+# M001D: Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code, 
+#        X2 downloadable(2M), and PCMCIA
+#
+
+before_M001D:
+ 
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        1 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  1 >  mod_def.h
+   %echo \#define SERIAL_MODE    0 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 1 >> mod_def.h
+ 
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M001D: before_M001D $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.par link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   X2 downloadable(2M), and PCMCIA
+   %echo
+
+# ----------------------------------------------------------------------------
+# M0015: Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code, 
+#        and X2 downloadable
+#
+# NOTE: for x2 downloadable, still need to manually change
+# io/pnp.s line 219-> 00 to 50, line 252 00->50, and line 887 94->44.
+# need to automate this process too!
+#
+
+before_M0015:
+ 
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        1 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  1 >  mod_def.h
+   %echo \#define SERIAL_MODE    0 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+ 
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M0015: before_M0015 $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.par link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Parallel, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   and X2 downloadable
+   %echo
+
+
+# ----------------------------------------------------------------------------
+# M0014: Serial, voice, no V.80, no VoiceView, TIES, internal DSP code, 
+#        and X2 downloadable
+#
+# NOTE: for x2 downloadable, still need to manually change
+# io/pnp.s line 219-> 00 to 50, line 252 00->50, and line 887 94->44.
+# need to automate this process too!
+#
+
+before_M0014:
+ 
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       0 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        1 >> bldflags.h
+   %echo \#define DSP_SERIES             408 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  0 >  mod_def.h
+   %echo \#define SERIAL_MODE    1 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+ 
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 1"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M0014: before_M0014 $(GLOBAL_HDRS) $(TARGET_OBJS_S_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_S_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.ser link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Serial, voice, no V.80, no VoiceView, TIES, internal DSP code,
+   %echo   and X2 downloadable
+   %echo
+
+
+# ----------------------------------------------------------------------------
+# M8015: Parallel, voice, no V.80, no VoiceView, TIES, external patchless
+#        DSP code, and X2 downloadable
+#
+
+before_M8015:
+ 
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       1 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        1 >> bldflags.h
+   %echo \#define DSP_SERIES             700 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  1 >  mod_def.h
+   %echo \#define SERIAL_MODE    0 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+ 
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 0" -PD "SERIAL_ON SETA 0"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M8015: before_M8015 $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_P_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.par link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Parallel, voice, no V.80, no VoiceView, TIES, 
+   %echo   external patchless DSP code, and X2 downloadable
+   %echo
+
+# ----------------------------------------------------------------------------
+# M8014: Serial, voice, no V.80, no VoiceView, TIES, external patchless
+#        DSP code, and X2 downloadable
+#
+
+before_M8014:
+ 
+   # create new bldflags.h file 
+   attrib -r bldflags.h
+   %echo \#define PATCHLESS_EXTERNAL       1 >  bldflags.h 
+   %echo \#define DNLD_X2_FROM_HOST        1 >> bldflags.h
+   %echo \#define DSP_SERIES             700 >> bldflags.h
+   %echo \#define MDM_FIRMWARE_FEATURES "$@" >> bldflags.h
+
+   # create new mod_def.h file
+   attrib -r mod_def.h
+   %echo \#define PARALLEL_MODE  0 >  mod_def.h
+   %echo \#define SERIAL_MODE    1 >> mod_def.h
+   %echo \#define PCMCIA_SPECIAL 0 >> mod_def.h
+
+   %setenv A_DBG_FLAGS = -PD "DEBUG_SUPPORT SETA 1" -PD "SERIAL_ON SETA 1"
+   %set LINK_BASE =  -BASE 0x0000 -DATA 0xff0000  -bin  -OV ovlymap  -V 
+
+M8014: before_M8014 $(GLOBAL_HDRS) $(TARGET_OBJS_S_V) linktop
+
+   %set TNAME  = $@.BIN
+   % echo $(TARGET_OBJS_S_V:S/.*/ &$(RETURN)/) >> link.cmd
+   make -f acumf.arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
+   make -f faxmf.arm hdrs fx1
+   make -f v42mf.arm hdrs v42code btlzcode etcstub m10stub cl5code
+   make -f mtmf.arm hdrs cutlass_1
+   make -f vcmf.arm hdrs voice
+   make -f v80mf.arm v80
+   # use hard-coded link.cmd to arrange objs manually instead of generated one 
+   copy linknvv.ser link.cmd
+   $(LK) $(LFLAGS) $(LB) > link.map
+   copy bin\root $(TNAME)    
+   %echo
+   %echo   Serial, voice, no V.80, no VoiceView, TIES, 
+   %echo   external patchless DSP code, and X2 downloadable
+   %echo
+
+#-----------------------------------------------------------------------------
+
 linktop:
-			 @@ echo $(LINK_BASE) > link.cmd
+   @@ echo $(LINK_BASE) > link.cmd
 
-hdrs: $(GLOBAL_HDR_FILES)
-
-#
-#    Include file dependents
-#
-sys_def.h:     sys02def.h
-		copy $< sys_def.h
-
-
-acu_pro.h:     ac00pro.h
-		copy $< acu_pro.h
-
-acu_mem.h:     ac00mem.h
-		copy $< acu_mem.h
-
-par_def.h :     pr00def.h 
-	   copy $< par_def.h 
-
-
-acu_def.h:     ac00def.h
-		copy $< acu_def.h
-
-mt_pro.h:      mt00pro.h
-		copy $< mt_pro.h
-
-mt_codef.h:    mt00cd10.h
-		copy $< mt_codef.h
-
-#added by ramn on 1/30/96
-mt_hwdef.h:     mt00hd10.h    
-		copy $< mt_hwdef.h
-
-mt_copro.h:     mt00cp10.h    
-		copy $< mt_copro.h
-
-mt_hwpro.h:     mt00hp10.h    
-		copy $< mt_hwpro.h
-#added till here by ramn 
-
-as_pro.h:      as00pro.h
-	       	 copy $< as_pro.h
-
-wl_pro.h:      wl00pro.h
-	       	 copy $< wl_pro.h
-
-wl_def.h:      wl00def.h
-	       	 copy $< wl_def.h
-
-wl_mem.h:      wl00mem.h
-	       	 copy $< wl_mem.h
-
-pp_def.h:      pp00def.h
-	       	 copy $< pp_def.h
-
-pp_mem.h:      pp00mem.h
-	         copy $< pp_mem.h
-
-#added by ramn on 1/30/96
-mt_coext.h: mt00ce10.h
-		copy $< mt_coext.h
-
-eeprom.h: eeprom.h
-		copy $< eeprom.h
-
-mod_def.h: mod_def.h
-	   copy $< mod_def.h
-
-v34_rate.h: v34_rate.h
-		copy $< v34_rate.h
-
-ee_def.h:       ee00def.h
-		copy $< ee_def.h
-
-vcv_cpro.h:  vv00cpro.h
-	   copy $< vcv_cpro.h
-
-vcv_mem.h:   vv00mem.h 
-	   copy $< vcv_mem.h
-
-vcv_def.h:      vv00def.h 
-	        copy $< vcv_def.h
-
-fab.h: fab.h
-       copy $< fab.h
-
-resp_cod.h: resp_cod.h
-	    copy $< resp_cod.h
-
-
-dsp_cod.h: dsp_cod.h
-	   copy $< dsp_cod.h
-
-
-ptt.h:     ptt00def.h
-		copy $< ptt.h
-
-
-
+hdrs: $(GLOBAL_HDRS)
 
 #
 # Assembler files
 #
-parallel.o : io\parallel.s io\parallel.h
-		$(AS) $(AFLAGS) $< -o parallel.o
 
-#powerup.o   : io\powerup.s io\pwrup_h.s
-powerup.o   : io\powerup.s io\powerup.h
-		$(AS) $(AFLAGS) $< -o powerup.o
+parallel.o : io\$*.s io\$*.h
+        $(AS) $(AFLAGS) $< -o $@
 
-rtstand.o  : io\rtstand.s 
-		$(AS) $(AFLAGS) $< -o rtstand.o
+powerup.o   : io\$*.s io\$*.h
+        $(AS) $(AFLAGS) $< -o $@
 
-main_dn.o  : io\main_dn.s io\main_dn.h
-	   	$(AS) $(AFLAGS) $< -o main_dn.o
+rtstand.o  : io\$*.s 
+        $(AS) $(AFLAGS) $< -o $@
 
-m_bt_dn.o  : io\m_bt_dn.s io\m_bt_dn.h
-	   	$(AS) $(AFLAGS) $< -o m_bt_dn.o
+main_dn.o  : io\$*.s io\$*.h
+           $(AS) $(AFLAGS) $< -o $@
 
-serial.o   : io\serial.s io\serial.h
-		$(AS) $(AFLAGS) $< -o serial.o
+m_bt_dn.o  : io\$*.s io\$*.h
+           $(AS) $(AFLAGS) $< -o $@
 
-cfg_spd.o  : io\cfg_spd.s
-		$(AS) $(AFLAGS) $< -o cfg_spd.o
+serial.o   : io\$*.s io\$*.h
+        $(AS) $(AFLAGS) $< -o $@
 
-overmgr.o  : io\overmgr.s
-		$(AS) $(AFLAGS) $< -o overmgr.o
+cfg_spd.o  : io\$*.s
+        $(AS) $(AFLAGS) $< -o $@
 
-pnp.o   : io\pnp.s io\pnp.h io\powerup.h
-		$(AS) $(AFLAGS) $< -o pnp.o
+overmgr.o  : io\$*.s
+        $(AS) $(AFLAGS) $< -o $@
 
-pcmcia.o   : io\pcmcia.s 
-		$(AS) $(AFLAGS) $< -o pcmcia.o
+pnp.o   : io\$*.s io\$*.h io\powerup.h
+        $(AS) $(AFLAGS) $< -o $@
 
+pcmcia.o   : io\$*.s 
+        $(AS) $(AFLAGS) $< -o $@
+
+dlatmel.o  : io\$*.s io\$*.h
+           $(AS) $(AFLAGS) $< -o $@
+
+dlamd.o  : io\$*.s io\$*.h
+           $(AS) $(AFLAGS) $< -o $@
+
+seratmel.o  : io\$*.s io\$*.h
+           $(AS) $(AFLAGS) $< -o $@
+
+seramd.o  : io\$*.s io\$*.h
+           $(AS) $(AFLAGS) $< -o $@
+
+# DSP PATCHES
+
+mt_ctls1\trnpatch.c: mt_ctls1\trnpatch.l
+     %chdir mt_ctls1
+     pat2c trnpatch.l training_patch
+     %chdir ..
+
+mt_ctls1\datpatch.c: mt_ctls1\datpatch.l
+     %chdir mt_ctls1
+     pat2c datpatch.l data_patch
+     %chdir ..
+
+mt_ctls1\vcepatch.c: mt_ctls1\vcepatch.l
+     %chdir mt_ctls1
+     pat2c vcepatch.l voice_patch
+     %chdir ..
+
+mt_ctls1\compatch.c: mt_ctls1\compatch.l
+     %chdir mt_ctls1
+     pat2c compatch.l common_patch
+     %chdir ..
+
+mt_ctls1\powerons.c: mt_ctls1\powerons.l
+     %chdir mt_ctls1
+     pat2c powerons.l pwr_on_patch
+     %chdir ..
+
+trnpatch.o: mt_ctls1\trnpatch.c
+
+compatch.o: mt_ctls1\compatch.c
+
+datpatch.o: mt_ctls1\datpatch.c
+
+vcepatch.o: mt_ctls1\vcepatch.c
+
+powerons.o: mt_ctls1\powerons.c
+
+io\x2_page.l: io\x2_page.zip
+           %chdir io
+           pkunzip x2_page
+           touch x2_page.l
+           %chdir ..
+
+io\x2_page.c: io\x2_page.l
+     %chdir io
+     patx2 x2_page.l x2_page_array
+     del ffile
+     %chdir ..
+
+x2_page.o: io\x2_page.c
 
 ### OPUS MKMF:  Do not remove this line!  Generated dependencies follow.
 
-#mod_def.h added by ramn on 2/6/96
-acu.o:	 acu_def.h acu_mem.h io\acuiomem.h io\dteequ.h sys_def.h mod_def.h
+acu.o:     acu_def.h acu_mem.h io\acuiomem.h io\dteequ.h sys_def.h mod_def.h
 
 acuiomem.o: io\dteequ.h sys_def.h
 
@@ -1008,13 +604,8 @@ as_stub.o: sys_def.h
 
 bd_rate.o: sys_def.h
 
-#direc.o: acu_def.h acu_mem.h io\acuiomem.h io\dteequ.h io\iohw_equ.h \
-	 mt_ctls1\dsp_drv.h sys_def.h v42\dce_line.edf v42\dte.edf
+dte.o: acu_def.h acu_mem.h io\acuiomem.h io\dteequ.h sys_def.h v42\dte.edf
 
-dte.o:	 acu_def.h acu_mem.h io\acuiomem.h io\dteequ.h sys_def.h \
-	 v42\dte.edf
-
-#mod_def.h added by ramn on 2/6/96
 dte_drv.o: io\dte_drv.h sys_def.h mod_def.h
 
 dte_stub.o: sys_def.h
@@ -1022,40 +613,40 @@ dte_stub.o: sys_def.h
 faxdat.o: io\faxequ.h sys_def.h
 
 faxdata.o: io\faxedf.h io\faxequ.h io\iohw_equ.h io\lineequ.h io\linelink.h \
-	 local.h mt_ctls1\dsp_drv.h sys_def.h
+     local.h mt_ctls1\dsp_drv.h sys_def.h
 
 faxhdlc.o: io\faxedf.h io\faxequ.h io\iohw_equ.h io\lineequ.h io\linelink.h \
-	 local.h mt_ctls1\dsp_drv.h sys_def.h
+     local.h mt_ctls1\dsp_drv.h sys_def.h
 
 faxlink.o: io\faxedf.h io\faxequ.h io\iohw_equ.h io\lineequ.h io\linelink.h \
-	 local.h mt_ctls1\dsp_drv.h icd_msgs.h mt_codef.h sys_def.h
+     local.h mt_ctls1\dsp_drv.h icd_msgs.h mt_codef.h sys_def.h
 
 lineasyn.o: io\iohw_equ.h io\lineedf.h io\lineequ.h io\linelink.h local.h \
-	 mt_ctls1\dsp_drv.h sys_def.h
+     mt_ctls1\dsp_drv.h sys_def.h
 
 linecrc.o: sys_def.h
 
 linedat.o: io\lineequ.h sys_def.h
 
 linedetc.o: io\iohw_equ.h io\lineedf.h io\lineequ.h local.h mt_ctls1\dsp_drv.h \
-	 icd_msgs.h mt_codef.h sys_def.h
+     icd_msgs.h mt_codef.h sys_def.h
 
 lineint.o: io\faxedf.h io\faxequ.h io\iohw_equ.h io\lineedf.h io\lineequ.h \
-	 mt_ctls1\dsp_drv.h mt_ctls1\mt_v8v34.h mt_coext.h sys_def.h v42\dce_line.edf \
-	 v42\dte.edf
+     mt_ctls1\dsp_drv.h mt_ctls1\mt_v8v34.h mt_coext.h sys_def.h v42\dce_line.edf \
+     v42\dte.edf
 
 linelapm.o: io\iohw_equ.h io\lineedf.h io\lineequ.h io\linelink.h local.h \
-	 mt_ctls1\dsp_drv.h sys_def.h
+     mt_ctls1\dsp_drv.h sys_def.h
 
 linelink.o: io\iohw_equ.h io\lineedf.h io\lineequ.h mt_ctls1\cp_dsp.h \
-	 mt_ctls1\dsp_drv.h mt_ctls1\mt_macro.h mt_ctls1\mt_v8v34.h mt_codef.h mt_coext.h \
-	 sys_def.h
+     mt_ctls1\dsp_drv.h mt_ctls1\mt_macro.h mt_ctls1\mt_v8v34.h mt_codef.h mt_coext.h \
+     sys_def.h
 
 linematc.o: io\iohw_equ.h io\lineedf.h io\lineequ.h io\linelink.h local.h \
-	 mt_ctls1\cp_dsp.h mt_ctls1\dsp_drv.h mt_ctls1\mt_macro.h mt_codef.h sys_def.h
+     mt_ctls1\cp_dsp.h mt_ctls1\dsp_drv.h mt_ctls1\mt_macro.h mt_codef.h sys_def.h
 
 linesync.o: io\iohw_equ.h io\lineedf.h io\lineequ.h io\linelink.h local.h \
-	 mt_ctls1\dsp_drv.h sys_def.h
+     mt_ctls1\dsp_drv.h sys_def.h
 
 pp00stb.o: sys_def.h
 
@@ -1063,20 +654,18 @@ sleep.o: sleep_if.h  acu_def.h acu_mem.h acu_pro.h sys_def.h
 
 vcvdat.o: sys_def.h vcv_def.h
 
-vcvdata.o: io\lineedf.h io\lineequ.h io\linepro.h io\vcvedf.h \
-	 sys_def.h vcv_def.h
+vcvdata.o: io\lineedf.h io\lineequ.h io\linepro.h io\vcvedf.h \ 
+           sys_def.h vcv_def.h
 
 vcvhdlc.o: io\lineedf.h io\lineequ.h io\linepro.h io\vcvedf.h sys_def.h \
-	 vcv_def.h
+     vcv_def.h
 
 vcvlink.o: io\lineedf.h io\lineequ.h io\linepro.h io\vcvedf.h sys_def.h \
-	 vcv_def.h
+     vcv_def.h
 
-#ramn added resp_cod.h dependency
-#mod_def.h added by ramn on 2/6/96
 musket.o: io\dte_drv.h mt_ctls1\cp_dsp.h mt_ctls1\mt_macro.h \
-	  mt_codef.h mt_coext.h mt_copro.h mt_hwdef.h mt_hwpro.h sys_def.h \
-	  tracemac.h resp_cod.h io\lineequ.h ee_def.h mt_ctls1\mt_gpio.h mod_def.h
+      mt_codef.h mt_coext.h mt_copro.h mt_hwdef.h mt_hwpro.h sys_def.h \
+      tracemac.h resp_cod.h io\lineequ.h ee_def.h mt_ctls1\mt_gpio.h mod_def.h
 
 eeread.o: sys_def.h eeprom.h
 
@@ -1086,15 +675,24 @@ ringint.o: callerid.h
 
 callerid.o: callerid.h
 
-dsppatch.o: sys_def.h cp_dsp.h mt_pro.h fab.h mt_macro.h mt_codef.h dsp_cod.h
-
 pnp.o: pnp.h powerup.h
-
-pwronptc.o :
-
-vcepatch.o:
 
 ac00ptt.o: ptt.h
 
 ptt00cfg.o: ptt.h
 
+linev80.o: sys_def.h iohw_equ.h lineequ.h lineedf.h linelink.h \
+       dsp_drv.h mt_macro.h mt_codef.h mt_coext.h cp_dsp.h  \
+           mt_v8v34.h linev80.h
+
+dte_v80.o: sys_def.h acuiomem.h acu_def.h acu_mem.h dteequ.h v42\dte.edf \
+           v80_pro.h
+
+print.o: sys_def.h
+
+dsppatch.o: sys_def.h mt_pro.h cp_dsp.h dsp_drv.h mt_macro.h mt_codef.h \
+            mt_coext.h dsppatch.h 
+
+bootx.o:
+
+mdm_56k.o:
