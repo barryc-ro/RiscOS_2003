@@ -83,7 +83,6 @@ rm.BASICTrans: Hdr:SWIs
 rm.BASICTrans: Hdr:CPU.Generic26
 rm.BASICTrans: Hdr:IO.GenericIO
 rm.BASICTrans: Hdr:RISCOS
-rm.BASICTrans: Hdr:CMOS
 rm.BASICTrans: Hdr:ModHand
 rm.BASICTrans: Hdr:Services
 rm.BASICTrans: Hdr:Proc
