@@ -77,7 +77,7 @@ OBJS = main.o	 \
 #
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $<
 .s.o:;      ${AS} ${ASFLAGS} $< $@
-.cmhg.o:;    ${CMHG} -d @.h.module $< $@
+.cmhg.o:;    ${CMHG} -p -d @.h.module $< $@
 
 # Specific rules
 
@@ -87,7 +87,7 @@ resources.o: Res.UK.Messages
 swi.o: module.h
 
 module.h: cmhg.Hdr
-        cmhg -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
+        cmhg -p -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
         
 #
 # Generic rules:
@@ -115,11 +115,12 @@ clean:
         ${RM} aof
         ${WIPE} linked.* ${WFLAGS}
         ${RM} linked
+        ${WIPE} rm ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 ${MODULE}: ${OBJS} ${TGRLIB}
-        ${MKDIR} tm
-        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB}
+        ${MKDIR} rm
+        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB} ${CLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
