@@ -19,6 +19,8 @@ SQ      = squeeze
 RM      = remove
 LD	= link
 TR	= translate
+GETVERS = perl bin.GetVersion
+
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
@@ -80,9 +82,9 @@ resources_base:
 	${CP} NCFrescoRORes:SpritesROM  	${RESRES}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROTransRes:Messages -o ${RESRES}.Messages ${TRFLAGS}
 	${CP} NCFrescoRORes:Res         	${RESRES}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:Welcome     	${RESRES}.Welcome  ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${RESRES}.MimeMap  ${CPFLAGS}
 	${CP} NCFrescoRORes:Config      	${RESRES}.Config   ${CPFLAGS}
+	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
@@ -114,9 +116,9 @@ install:
 	${CP} NCFrescoRORes:Sprites  		${INSTALLDIR}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLDIR}.Messages ${TRFLAGS}
 	${CP} NCFrescoRORes:Res         	${INSTALLDIR}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:Welcome     	${INSTALLDIR}.Welcome  ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${INSTALLDIR}.MimeMap  ${CPFLAGS}
 	-${CP} NCFrescoRORes:Config      	${INSTALLDIR}.Config   ${CPFLAGS}
+	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
