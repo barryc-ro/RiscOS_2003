@@ -105,6 +105,10 @@ resources:
         ${CP} LocalRes:${UserIF}.InitState ${RESDIR}.LED.InitState ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+BBETYPE = led
+bbe-led: bbe-generic-resources-get-alias
+        BBE_Export_File_In_Dir Resources.${LOCALE}.${USERIF} InitState
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
