@@ -17,6 +17,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -DDONT_BUILD_RESOURCES ${DFLAGS} ${OPTS}
@@ -33,6 +34,11 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+SOCKLIB   = TCPIPLibs:o.socklibzm
+INETLIB   = TCPIPLibs:o.inetlibzm
+UNIXLIB   = TCPIPLibs:o.unixlibzm
+LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
+LIBSD     = <Lib$Dir>.DebugLib.o.debuglibzm
 
 #
 # Include files
@@ -93,6 +99,7 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} h.HeaderMod
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -103,8 +110,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} HeaderMod.h
-        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} HeaderMod.h
+        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -115,8 +122,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${TARGETSA}: ${OBJS} ${CLIB} HeaderMod.h
-        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
+${TARGETSA}: ${OBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} HeaderMod.h
+        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
