@@ -29,7 +29,6 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
-THROWBACK = -Throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
@@ -97,7 +96,7 @@ BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  ncma_utils.o ncma_dial.o kprintf.o ncma_smurf.o \
 	  ncma_cron.o ncma_exec.o ncma_atr.o ncma_bootb.o ncma_mime.o \
 	  ncma_tags.o ncma_nvram.o ncma_cache.o ncma_uid.o ncma_net.o \
-	  usermode.o ncma_time.o areacode.o ncma_auth.o 
+	  usermode.o ncma_time.o areacode.o ncma_auth.o ncma_fx.o 
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
