@@ -90,7 +90,7 @@ rm.Peregrine.Interlace: rm.Interly
 	${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 	
-rm.STB3.Interlace: rm.Interly
+rm.STB3.Interlace: rm.Interlr
 	${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 	
