@@ -506,7 +506,7 @@ ${EXP_HDR}.SharedCLib: hdr.SharedCLib
 # exported header.  This prevents needless recompilations
 CLIB:h.swis: derived.swis
         -${DIFF} $@ derived.swis
-        If "<Sys$ReturnCode>" <> 0 Then ${CP} derived.swis $@ ${CPFLAGS}
+        If "<AMU$ReturnCode>" <> "0" Then ${CP} derived.swis $@ ${CPFLAGS}
 
 # Headers:
 CLIB:h.assert: clib.h.assert  ;   ${CP} clib.h.assert $@ ${CPFLAGS}
