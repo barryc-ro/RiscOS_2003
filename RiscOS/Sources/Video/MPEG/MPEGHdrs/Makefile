@@ -8,7 +8,6 @@
 # 14-Sep-94  JRH          Created.
 # 01-Aug-95  JRH          Changed export directory
 # 02-Aug-95  TMD	  Added Hdr:VSP
-# 07-Oct-96  TMD	  Added Hdr:Macrovisio
 #
 
 #
@@ -40,8 +39,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${EXP_HDR}.L64002 \
             ${EXP_HDR}.MPEG2Card \
             ${EXP_HDR}.DVBControl \
-            ${EXP_HDR}.VSP \
-            ${EXP_HDR}.Macrovisio
+            ${EXP_HDR}.VSP
 
 #
 # Generic rules:
@@ -61,38 +59,35 @@ clean:
 #
 # Exported interface headers
 #
-${EXP_HDR}.AV110: Hdr.AV110
-        ${CP} Hdr.AV110 $@ ${CPFLAGS}
+${EXP_HDR}.AV110: hdr.AV110
+        ${CP} hdr.AV110 $@ ${CPFLAGS}
 
-${EXP_HDR}.CL450: Hdr.CL450
-        ${CP} Hdr.CL450 $@ ${CPFLAGS}
+${EXP_HDR}.CL450: hdr.CL450
+        ${CP} hdr.CL450 $@ ${CPFLAGS}
 
-${EXP_HDR}.MPEGAudio: Hdr.MPEGAudio
-        ${CP} Hdr.MPEGAudio $@ ${CPFLAGS}
+${EXP_HDR}.MPEGAudio: hdr.MPEGAudio
+        ${CP} hdr.MPEGAudio $@ ${CPFLAGS}
 
-${EXP_HDR}.MPEGCard: Hdr.MPEGCard
-        ${CP} Hdr.MPEGCard $@ ${CPFLAGS}
+${EXP_HDR}.MPEGCard: hdr.MPEGCard
+        ${CP} hdr.MPEGCard $@ ${CPFLAGS}
 
-${EXP_HDR}.MPEGCtrl: Hdr.MPEGCtrl
-        ${CP} Hdr.MPEGCtrl $@ ${CPFLAGS}
+${EXP_HDR}.MPEGCtrl: hdr.MPEGCtrl
+        ${CP} hdr.MPEGCtrl $@ ${CPFLAGS}
 
-${EXP_HDR}.MPEGVideo: Hdr.MPEGVideo
-        ${CP} Hdr.MPEGVideo $@ ${CPFLAGS}
+${EXP_HDR}.MPEGVideo: hdr.MPEGVideo
+        ${CP} hdr.MPEGVideo $@ ${CPFLAGS}
 
-${EXP_HDR}.L64002: Hdr.L64002
-        ${CP} Hdr.L64002 $@ ${CPFLAGS}
+${EXP_HDR}.L64002: hdr.L64002
+        ${CP} hdr.L64002 $@ ${CPFLAGS}
 
-${EXP_HDR}.MPEG2Card: Hdr.MPEG2Card
-        ${CP} Hdr.MPEG2Card $@ ${CPFLAGS}
+${EXP_HDR}.MPEG2Card: hdr.MPEG2Card
+        ${CP} hdr.MPEG2Card $@ ${CPFLAGS}
 
-${EXP_HDR}.DVBControl: Hdr.DVBControl
-        ${CP} Hdr.DVBControl $@ ${CPFLAGS}
+${EXP_HDR}.DVBControl: hdr.DVBControl
+        ${CP} hdr.DVBControl $@ ${CPFLAGS}
 
-${EXP_HDR}.VSP: Hdr.VSP
-	${CP} Hdr.VSP $@ ${CPFLAGS}
-
-${EXP_HDR}.Macrovisio: Hdr.Macrovisio
-	${CP} Hdr.Macrovisio $@ ${CPFLAGS}
+${EXP_HDR}.VSP: hdr.VSP
+	${CP} hdr.VSP $@ ${CPFLAGS}
 
 
 # Dynamic dependencies:
