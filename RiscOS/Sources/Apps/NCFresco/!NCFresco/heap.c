@@ -22,6 +22,10 @@
  *           SJM 12/93: took out defaulting to alloc/free
  */
 
+#if MEMLIB
+static int heap_not_used;
+#else
+
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -322,6 +326,8 @@ void heap__dump(FILE *f)
 {
     fprintf(f, "Heap debugging not compiled in\n");
 }
+
+#endif
 
 #endif
 

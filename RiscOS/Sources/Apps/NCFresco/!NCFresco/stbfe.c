@@ -86,7 +86,9 @@
 #include "memheap.h"
 #endif
 
+#ifdef HierProf_PROFILE
 #include "hierprof/HierProf.h"
+#endif
 
 #ifndef NEW_WEBIMAGE
 #define NEW_WEBIMAGE	1
@@ -94,7 +96,7 @@
 
 #if NEW_WEBIMAGE
 #ifdef STBWEB_BUILD
-#include "libs/webimage/webimage.h"
+#include "webimage.h"
 #else
 #include "../webimage/webimage.h"
 #endif
@@ -218,8 +220,8 @@ static int user_status_open = TRUE;
 static int linedrop_time = 0;
 static int keyboard_state = fe_keyboard_ONLINE;
 
-static wimp_t on_screen_kbd = 0;
-static wimp_box on_screen_kbd_pos;
+wimp_t on_screen_kbd = 0;
+wimp_box on_screen_kbd_pos;
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -230,6 +232,8 @@ static wimp_mousestr pointer_last_pos = { 0 };
 
 void fe_pointer_mode_update(pointermode_t mode)
 {
+    STBDBGN(("ptr_mode_update: was %d now %d\n", pointer_mode, mode));
+
     switch (mode)
     {
         case pointermode_OFF:
@@ -260,8 +264,13 @@ void frontend_pointer_set_position(fe_view v, int x, int y)
     }
     
     pointer_set_position(p.x, p.y);
-    pointer_last_pos.x = p.x;
-    pointer_last_pos.y = p.y;
+    pointer_last_pos.x = p.x &~ (frontend_dx - 1);
+    pointer_last_pos.y = p.y &~ (frontend_dy - 1);
+    
+#if 0
+    _swix(OS_Mouse, _OUTR(0,1), &pointer_last_pos.x, &pointer_last_pos.y); /* re-read position because of rounding */
+    STBDBGN(("ptr_set_pos: %d,%d\n", p.x, p.y));
+#endif
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -1885,6 +1894,43 @@ static void fe_font_size_init(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
+void fe_bgsound_set(int state)
+{
+    if (state == -1)
+	config_sound_background = !config_sound_background;
+    else
+	config_sound_background = state;
+
+    /* cancel playback on all sounds */
+    if (config_sound_background)
+    {
+	backend_plugin_action(NULL, be_plugin_action_item_ALL, plugin_state_STOP);
+    }
+    else
+    {
+	backend_plugin_action(NULL, be_plugin_action_item_ALL, plugin_state_PLAY);
+    }
+}
+
+void fe_beeps_set(int state)
+{
+    int new_state = state == -1 ? !config_sound_fx : state;
+
+    /* set state in right order to ensure sound gets heard */
+    if (new_state)
+    {
+	config_sound_fx = TRUE;
+	sound_event(snd_BEEPS_ON);
+    }
+    else
+    {
+	sound_event(snd_BEEPS_OFF);
+	config_sound_fx = FALSE;
+    }
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 /* 
  * Force this window to have no horizontal scrolling
  */
@@ -2428,11 +2474,15 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
     STBDBG(( "fe_move_highlight: old_link %p old_v %p new_link %p new_v %p\n", old_link, v, new_link, new_v));
 
     /* check for moving to the status bar */
-    if (new_link == NULL && config_mode_cursor_toolbar &&/*  (flags & be_link_VERT) && */
+    if (use_toolbox && new_link == NULL && config_mode_cursor_toolbar && tb_is_status_showing() &&
 	((config_display_control_top && (flags & be_link_BACK)) || (!config_display_control_top && (flags & be_link_BACK) == 0)))
     {
+	fe_pointer_mode_update(pointermode_OFF);
+
 	if (tb_status_highlight(TRUE))
 	    return;
+
+	pointer_mode = pointermode_ON;
     }
 
     /* if we have reached top/bottom of page then scroll and try again for a highlight  */
@@ -3262,7 +3312,7 @@ static void fe_idle_handler(void)
     if (pointer_moved)
     {
 	STBDBG(( "p %d,%d w %x v %p main %p\n", m.x, m.y, m.w, v, main_view));
-	dump_views(main_view, 2);
+/* 	dump_views(main_view, 2); */
     }
 #endif
     /* are we dragging the page around? */
@@ -3328,7 +3378,7 @@ static void fe_idle_handler(void)
 	/* check if the pointer has been moved and we need to go to pointer mode    */
 	if (pointer_moved)
 	{
-	    STBDBG(( "idle: pointer moved\n"));
+	    STBDBG(( "idle: pointer moved to %d,%d\n", m.x, m.y));
 	    fe_pointer_mode_update(pointermode_ON);
 	}
         return;
@@ -5074,8 +5124,10 @@ int main(int argc, char **argv)
     disable_stack_extension = 1;
 #endif
 
+#ifdef HierProf_PROFILE
     HierProf_ProfileAllFunctions();
-    
+#endif
+
     setlocale(LC_ALL, "");
     setbuf(stderr, NULL);   /* no caching   */
 

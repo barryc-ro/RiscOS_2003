@@ -236,7 +236,7 @@ extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOO
 
 typedef int sound_event_t;
 
-#if STBWEB
+#ifdef STBWEB
 extern void sound_event(sound_event_t event_num);
 #else
 #define sound_event(e) /*NOT_USED(e)*/

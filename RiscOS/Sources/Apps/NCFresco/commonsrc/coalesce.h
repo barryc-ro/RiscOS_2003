@@ -11,7 +11,7 @@
 #include "rid.h"
 #endif
 
-void coalesce( rid_header *rh, rid_pos_item *line );
+void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont );
 void un_coalesce( rid_header *rh, rid_text_item *ti );
 
 #endif

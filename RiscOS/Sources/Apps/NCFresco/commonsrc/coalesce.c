@@ -8,6 +8,7 @@
  *
  * History:
  *      04-Mar-97 pdh Started
+ *      18-Mar-97 pdh Change to cope with coalescing unformatted streams
  *
  */
 
@@ -63,33 +64,34 @@ static int strcount( const char *s, char c )
  * it goes.
  */
 
-void coalesce( rid_header *rh, rid_pos_item *line )
+void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
 {
 #ifndef BUILDERS
-    rid_text_item_text *tit, *tit2;
-    rid_text_stream *st;
+    rid_text_item_text *tit = (rid_text_item_text*)ti, *tit2;
+/*     rid_text_stream *st;    */
+    rid_pos_item *line = ti->line;      /* May be NULL */
 
     if ( rh == NULL
-         || line == NULL
-         || (st = line->st) == NULL
-         || line->next == NULL )            /* be cautious about formatter */
+         || ti == NULL
+         || dont == NULL )
         return;
 
-    tit = (rid_text_item_text*) line->first;
+    fdebugf( stderr, "coalesce: %p - %p\n", ti, dont );
 
-    while ( tit && tit->base.line == line )
+    while ( tit && tit->base.line == line && (&tit->base) != dont )
     {
         tit2 = (rid_text_item_text*) tit->base.next;
 
         if ( tit2
-             && tit2->base.line == line )
+             && tit2->base.line == line
+             && (&tit2->base) != dont )
         {
             if ( tit->base.tag == rid_tag_TEXT
                  && tit2->base.tag == rid_tag_TEXT
                  && (tit->base.flag & ~0x2003) == (tit2->base.flag & ~0x2003)
                  && *((int*)&tit->base.st) == *((int*)&tit2->base.st)
                  && tit->base.aref == tit2->base.aref
-/*                 && (tit->base.flag & 0x10FF) == rid_flag_FVPR     * fvpr */
+                 && (tit->base.flag & 0x10FF) == rid_flag_FVPR
                  && (tit->base.flag & 0xFF) == 0
                  && (tit2->base.flag & 3) != 2
                  && tit->base.pad
@@ -136,11 +138,11 @@ void coalesce( rid_header *rh, rid_pos_item *line )
 
                     tit->base.flag |= rid_flag_COALESCED;
 
-                    if ( st->text_last == &tit2->base )
-                        st->text_last = &tit->base;
-
-                    if ( st->text_fvpr == &tit2->base )
-                        st->text_fvpr = &tit->base;
+/*                     if ( st->text_last == &tit2->base ) */
+/*                         st->text_last = &tit->base; */
+/*  */
+/*                     if ( st->text_fvpr == &tit2->base ) */
+/*                         st->text_fvpr = &tit->base; */
 
                     mm_free( tit2 );
                     tit2 = tit;
@@ -157,7 +159,7 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
 {
 #ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text*) ti;
-    rid_text_stream *st;
+/*     rid_text_stream *st; */
     rid_pos_item *line;
     int count;
     char *s;
@@ -166,6 +168,8 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
     rid_text_item_text *list = NULL, *ptr;
     BOOL bFinalSpace;
     char *from;
+
+    fdebugf( stderr, "uncoalesce: %p\n", ti );
 
     if ( rh == NULL
          || ti == NULL

@@ -161,6 +161,12 @@
 #define fevent_PRINT_LEGAL		    0x20B1
 #define fevent_OPEN_WRITEABLE		    0x20B2
 #define fevent_STOP_OR_RELOAD		    0x20B3
+#define fevent_SOUND_TOGGLE		    0x20B4
+#define fevent_SOUND_ON			    0x20B5
+#define fevent_SOUND_OFF		    0x20B6
+#define fevent_BEEPS_TOGGLE		    0x20B7
+#define fevent_BEEPS_ON			    0x20B8
+#define fevent_BEEPS_OFF		    0x20B9
 
 /* The order here must match the table in stbevent.c */
 #define fevent_CODEC_STOP		    0x20C0

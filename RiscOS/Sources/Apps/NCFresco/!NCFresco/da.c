@@ -1,6 +1,10 @@
 /* > da.c
  */
 
+#if MEMLIB
+static int da_not_used;
+#else
+
 #include "swis.h"
 
 #include "version.h"
@@ -100,5 +104,7 @@ int da_create(const char *programname, int *da_number_out, int *da_size_out, voi
     
     return e == NULL;
 }
+
+#endif
 
 /* da.c */

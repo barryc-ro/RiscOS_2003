@@ -67,7 +67,7 @@
 #endif
 
 #ifdef STBWEB_BUILD
-#  include "libs/webimage/webimage.h"
+#  include "webimage.h"
 #else
 # include "../webimage/webimage.h"
 #endif
@@ -317,8 +317,8 @@ static void free_pt(image i)
     {
 	mm_free(i->pt);
 	i->pt = NULL;
-	i->table_type = pixtrans_UNKNOWN;
     }
+    i->table_type = pixtrans_UNKNOWN;
 }
 
 static void free_area(sprite_area **anchor)

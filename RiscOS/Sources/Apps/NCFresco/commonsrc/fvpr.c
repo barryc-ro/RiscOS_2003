@@ -262,7 +262,6 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
 		
 		for (ti = stream->text_fvpr; ti != stream->text_last; ti = rid_scanf(ti))
 		{
-		    TASSERT(ti->line != NULL);
 		    set_fvpr_and_below(ti);
 		}
 		

@@ -217,6 +217,8 @@ image oimage_fetch_image(antweb_doc *doc, const char *src, BOOL need_size)
     base = BASE(doc);
     url = url_join(base, src);
 
+    IMGDBG(("oimage_fetch calls image_find, doc=%p, doc->parent=%p\n", doc, doc->parent ));
+
     imh = NULL;
     image_find(url, base, ffl,
 	       &antweb_doc_image_change, doc, render_get_colour(render_colour_BACK, doc),

@@ -584,6 +584,9 @@ int plugin_send_close(plugin pp)
 
     OBJDBG(("plugin: send close %p state %d\n", pp, pp->state));
 
+    if (!pp->instance)
+	return 0;
+
     /* Build message block */
     close->flags = 0;
 
@@ -605,6 +608,9 @@ int plugin_send_focus(plugin pp)
 
     OBJDBG(("plugin: send focus %p state %d\n", pp, pp->state));
 
+    if ((pp->opening_flags & plugin_opening_CAN_FOCUS) == 0)
+	return 0;
+    
     /* Build message block */
     focus->flags = 0;
 

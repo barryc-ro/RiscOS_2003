@@ -229,7 +229,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	draw_highlight_box = FALSE;
     }
 #endif
-    
+
     wf = &webfonts[ti->st.wf_index];
 
     if (fs->lf != wf->handle)

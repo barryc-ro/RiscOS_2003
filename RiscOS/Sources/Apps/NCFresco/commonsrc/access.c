@@ -859,13 +859,27 @@ static os_error *access_http_fetch_start(access_handle d)
     httpo.in.bname = d->data.http.body_file;
     httpo.in.flags = 0;
     if ( d->flags & access_SECURE)
+    {
 	httpo.in.flags |= http_open_flags_SECURE;
+
+	if ( d->flags & access_PROXY )
+	    httpo.in.flags |= http_open_flags_TUNNEL;
+    }
     if ( d->flags & access_PRIORITY )
         httpo.in.flags |= http_open_flags_PRIORITY;
     if ( d->flags & access_IMAGE )
         httpo.in.flags |= http_open_flags_IMAGE;
 
     ep = os_swix(HTTP_Open, (os_regset *) &httpo);
+
+#if SEND_HOST
+    /* pdh: HTTP module takes copies of these, obviously, so we can free what
+     * we just strdup'd
+     */
+    mm_free( host_hdr.value );
+    host_hdr.value = NULL;
+#endif
+
 
     if (ep == NULL)
 	d->transport_handle = httpo.out.handle;
@@ -2005,7 +2019,7 @@ static void access_copy_data(int inf, int outf, int start, int end)
 static BOOL access_file_fetch(access_handle d)
 {
     access_progress_fn progress = d->flags & access_NO_STREAM ? 0 : d->progress;
-    
+
     if ( !progress || (d->data.file.so_far + d->data.file.chunk >= d->data.file.size))
     {
 	ACCDBGN(("file_fetch(): d %p fname '%s' from %d to %d last transfer\n", d, d->data.file.fname, d->data.file.so_far, d->data.file.size));
@@ -2085,14 +2099,14 @@ static void access_file_fetch_alarm(int at, void *h)
     access_file_fetch(d);
 }
 
-static os_error *access_new_file(const char *file, int ft, char *url, access_url_flags flags, char *ofile, 
+static os_error *access_new_file(const char *file, int ft, char *url, access_url_flags flags, char *ofile,
 				 access_progress_fn progress, access_complete_fn complete,
 				 void *h, access_handle *result)
 {
     access_handle d = NULL;
     os_error *ep = NULL;
     int fh = ro_fopen(file, RO_OPEN_READ);
-    
+
     ACCDBG(("access_new_file: file %s fh %d ft %03x flags %x\n", file, fh, ft, flags));
 
     if (fh)
@@ -2107,7 +2121,7 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	    d->ofile = strdup(ofile);
 	    d->data.file.ofh = ro_fopen(ofile, RO_OPEN_WRITE);
 	    set_file_type(ofile, ft);
-	
+
 	    ACCDBG(("access_new_file: ofile %s fh %d\n", ofile, d->data.file.ofh));
 	}
 
@@ -2115,11 +2129,11 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	d->complete = complete;
 	d->h = h;
 	access_link(d);
-	    
+
 	d->data.file.fname = strdup(file);
 	d->ftype = ft;
 	d->data.file.fh = fh;
-		
+
 	d->data.file.size = ro_get_extent(fh);
 	d->data.file.last_modified = file_last_modified(file);
 
@@ -2632,6 +2646,13 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 
     if (ep && d)
     {
+	/* if this call returned a want ot use helper error then do the punt and convert to a no action */
+	if (ep->errnum == ANTWEB_ERROR_BASE + ERR_USED_HELPER)
+	{
+	    frontend_url_punt(NULL, d->url, bfile);
+	    ep = makeerror(ERR_NO_ACTION);
+	}
+	
 	ACCDBG(("access_new_internal(): error, freeing access handle %p\n", d));
 	access_unlink(d);
 	access_free_item(d);
@@ -2673,7 +2694,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
     char *cfile;
     os_error *ep = NULL;
     BOOL file_missing;
-	
+
     visdelay_begin();
 
     /* this prevents internal state flags from being passed back in from relocates (like proxy and secure flags) */
@@ -2731,6 +2752,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	{
 	    ACCDBGN(("Cache hit '%s', file missing, removing the cache entry.\n", cfile));
 	    cache->remove(url);
+	    ep = NULL;
 	}
 	else
 	{
@@ -2808,7 +2830,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    if (slash && (dot == NULL || dot < slash))
 		    {
 			*slash = 0;
-			
+
 			if (suffix_to_file_type(slash+1) == (ft = file_and_object_type(cfile, &obj_type)) )
 			    ep = NULL;
 			else
@@ -2824,7 +2846,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		if (!ep && obj_type == 3 && !frontend_can_handle_file_type(ft) && !frontend_plugin_handle_file_type(ft))
 		    ft = FILETYPE_DIRECTORY;
 	    }
-	    
+
 	    if (ep || ft == -1)
 	    {
 	    }
@@ -2870,17 +2892,17 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    {
 		char new_url[256];
 		FILE *fh;
-		
+
 		fh = fopen(cfile, "r");
 		if (fh && (fgets(new_url, sizeof(new_url), fh)))
 		{
 		    d = mm_calloc(1, sizeof(*d));
-		    
+
 		    d->access_type = access_type_FILE;
 		    d->flags = flags;
 		    d->url = strdup(url);
 		    d->ofile = strdup(ofile);
-			
+
 		    d->progress = progress;
 		    d->complete = complete;
 		    d->h = h;
@@ -2902,10 +2924,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    {
  		access_progress_flush(h, cfile, url, progress);
 		complete(h, status_COMPLETED_FILE, cfile, url);
-		    
+
 		*result = NULL;
 	    }
-	    else 
+	    else
 	    {
 		ep = access_new_file(cfile, ft, url, flags, ofile, progress, complete, h, result);
 	    }

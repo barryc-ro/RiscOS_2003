@@ -582,7 +582,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
 	int sound_val = atoi(sound);
 	nvram_op(NVRAM_SOUND_TAG, NVRAM_SOUND, 1, sound_val, TRUE);
 
-	config_sound_background = sound_val;
+	fe_bgsound_set(sound_val);
 	
 	*url = strdup("ncfrescointernal:openpanel?name=customsound");
 	generated = fe_internal_url_REDIRECT;
@@ -593,16 +593,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
 	int beeps_val = atoi(beeps);
 	nvram_op(NVRAM_BEEPS_TAG, NVRAM_BEEPS, 1, beeps_val, TRUE);
 
-	if (beeps_val)
-	{
-	    config_sound_fx = TRUE;
-	    sound_event(snd_BEEPS_ON);
-	}
-	else
-	{
-	    sound_event(snd_BEEPS_OFF);
-	    config_sound_fx = FALSE;
-	}
+	fe_beeps_set(beeps_val);
 	
 	*url = strdup("ncfrescointernal:openpanel?name=custombeeps");
 	generated = fe_internal_url_REDIRECT;
@@ -833,12 +824,12 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
 	if (config_document_handler_related && v && v->displaying)
 	{
-	    char *match;
+	    const char *match;
 
 	    STBDBG(("internal_url: related %s\n", config_document_handler_related));
 
-	    if (backend_doc_info(v->displaying, NULL, NULL, NULL, &match) == NULL &&
-		match)
+	    if ((match = backend_check_meta(v->displaying, "KEYWORDS")) != NULL ||
+		(backend_doc_info(v->displaying, NULL, NULL, NULL, (char **)&match) == NULL && match))
 	    {
 		int related_len = strlen(config_document_handler_related);
 		int total_len = related_len + 3*strlen(match) + 2;
@@ -992,7 +983,8 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
 
 	if (nocache && strcasestr(nocache, "nocache"))
 	    *flags |= access_NOCACHE;
-
+	else
+	    *flags &= ~access_NOCACHE;
     
 	*new_url = check_url_prefix(url);
 

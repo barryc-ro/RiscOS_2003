@@ -574,6 +574,9 @@ int frontend_view_margins(fe_view v, wimp_box *box)
     return 1;
 }
 
+extern wimp_t on_screen_kbd;
+extern wimp_box on_screen_kbd_pos;
+
 int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 {
     wimp_wstate state;
@@ -583,6 +586,8 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
     int need_to_set_dims = 0;
     int bbh, sbh;
 
+    STBDBGN(("ensure_visible: v %p x %d y %d-%d\n", v, x, top, bottom));
+    
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
 
@@ -593,6 +598,19 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
     bbh = - v->margin.y1;
     sbh =   v->margin.y0;
+
+    if (on_screen_kbd)
+    {
+	if (config_display_control_top)
+	{
+	    bbh += on_screen_kbd_pos.y1 - on_screen_kbd_pos.y0;
+	}
+	else
+	{
+	    sbh += on_screen_kbd_pos.y1 - on_screen_kbd_pos.y0;
+	}
+    }
+
     h = (state.o.box.y1 - bbh) - (state.o.box.y0 + sbh);    /* height of visible area (within margins)*/
     mh = h > -(v->doc_height) ? h : -(v->doc_height);       /* height of document, or visible area (+ve)*/
     w = state.o.box.x1 - state.o.box.x0;
@@ -607,16 +625,28 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
     {
         v->stretch_document = (-mh/* - sbh*/) - (top - h);
         need_to_set_dims = 1;
+
+	STBDBGN(("ensure_visible: stretch\n"));
     }
 
     if (top == bottom ||	/* Special case: force to the top is top and bottom equal */
-	top > (state.o.y - bbh) ||
-	bottom < (state.o.y + sbh - (state.o.box.y1 - state.o.box.y0)) )
+	top > (state.o.y - bbh))
     {
         state.o.y = top;
 	state.o.y += bbh;
 
 	need_to_reopen = 1;
+
+	STBDBGN(("ensure_visible: force to top top_cmp %d bot_cmp %d\n", (state.o.y - bbh), (state.o.y + sbh - (state.o.box.y1 - state.o.box.y0))));
+    }
+
+    if (bottom < (state.o.y + sbh - (state.o.box.y1 - state.o.box.y0)))
+    {
+        state.o.y = bottom - sbh + (state.o.box.y1 - state.o.box.y0);
+
+	need_to_reopen = 1;
+
+	STBDBGN(("ensure_visible: force on bottom\n"));
     }
 
     if ((x != -1) && (x < state.o.x + v->margin.x0))
@@ -624,6 +654,8 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 	/* It is off the left, put it at the left edge */
 	state.o.x = x - v->margin.x0;
 	need_to_reopen = 1;
+
+	STBDBGN(("ensure_visible: off left\n"));
     }
 
     if ((x != -1) && (x > state.o.x + w + v->margin.x1))
@@ -631,6 +663,8 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 	/* It is off the right, put it at the right */
 	state.o.x = x - w - v->margin.x1;
 	need_to_reopen = 1;
+
+	STBDBGN(("ensure_visible: off right\n"));
     }
 
     if (need_to_set_dims)

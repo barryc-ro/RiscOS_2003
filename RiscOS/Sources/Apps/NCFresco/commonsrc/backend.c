@@ -943,7 +943,7 @@ os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags)
 		{
 		    image i;
 
-		    i = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+		    i = (image) (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
 
 		    image_mark_to_flush(i, ffi);
 		}
@@ -1434,7 +1434,7 @@ static void be_ensure_buffer_space(char **buffer, int *len, int more)
     if (curlen + more >= *len)
     {
 	*len = *len + more + LEEWAY;
-	*buffer = mm_realloc(*buffer, *len);
+	*buffer = (char*) mm_realloc(*buffer, *len);
     }
 }
 
@@ -1607,7 +1607,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 	    dest = url_join(BASE(doc), form->action);
 
-	    buffer = mm_malloc(buf_size);
+	    buffer = (char*) mm_malloc(buf_size);
 	    buffer[0] = 0;
 	    for (fis = form->kids; fis; fis = fis->next)
 	    {
@@ -2107,7 +2107,7 @@ static void fudge_prev_for_floating_items(rid_text_stream *st)
 #define CLEAR	6
 #define ENDST	7
 
-#if DEBUG
+#if DEBUG >= 2
 static char *split_names[] = { "DONT", "MUST", "MAYBE" };
 static char *state_names[] = { "DONE", "MARGIN", "WORD", "TIDY",
 			       "CLEAR_L", "CLEAR_R", "CLEAR", "ENDST" };
@@ -2132,6 +2132,9 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
     int max_up=0, max_down=0;	/* Needed for float formatting even if there is no pos list */
     int prev_flags;
     BOOL bNoLinefeed = FALSE;
+/*    rid_text_item *exploded = NULL; * beginning of last un-coalesce */
+/*    rid_text_item *explode_next = NULL; * one after end of last un-coalesce */
+/*    rid_text_item *last_coalesced = NULL; * where to start coalescing next */
 
     line_first = NULL;
 
@@ -2214,10 +2217,14 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
 	FMTDBG(("Initial table proc call finished\n"));
     }
 
-    un_coalesce( rh, this_item );
-
-    if ( this_item )
-        un_coalesce( rh, this_item->next );
+/*     exploded = this_item; */
+    if ( this_item
+         && ( this_item->flag & rid_flag_COALESCED ) )
+    {
+/*     explode_next = this_item->next; */
+/*     last_coalesced = this_item; */
+        un_coalesce( rh, this_item );
+    }
 
     while (state != DONE)
     {
@@ -2468,12 +2475,23 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
 		    }
 		}
 #endif
-		this_item = next;
+                /* We'd like to do this here, but it takes too long */
+/*                 if ( !( flags & rid_fmt_BUILD_POS ) */
+/*                      && (prev_flags & rid_flag_LINE_BREAK) ) */
+/*                 { */
+/*                     coalesce( rh, last_coalesced, this_item ); */
+/*                     last_coalesced = next; */
+/*                 } */
 
-                un_coalesce( rh, this_item );
+                this_item = next;
 
-                if ( this_item )
-                    un_coalesce( rh, this_item->next );
+/*                 if ( this_item == explode_next */
+/*                      || explode_next == NULL ) */
+/*                 { */
+/*                     exploded = this_item; */
+/*                     explode_next = this_item->next; */
+                    un_coalesce( rh, this_item );
+/*                 } */
 
 		if (over)
 		    last = next;
@@ -2630,8 +2648,12 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
                  * previous one
                  */
                 if ( pos->prev
+                     && pos->prev->first
                      && pos->prev->leading == 0 )
-                    coalesce( rh, pos->prev );
+                {
+/*                     exploded = pos->first; */
+                    coalesce( rh, pos->prev->first, pos->first );
+                }
 	    }
 
 	    /* These functions clear the floating items when they have run out of length */
@@ -3023,6 +3045,8 @@ static void be_set_dimensions(be_doc doc)
     w = doc->rh->stream.widest;
     h = doc->rh->stream.height;
 
+    BEDBG((stderr, "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
+    
 #if USE_MARGINS
     w += doc->margin.x0 - doc->margin.x1;
     h -= doc->margin.y0 - doc->margin.y1;
@@ -3234,7 +3258,8 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	break;
     }
 
-    if ((doc->flags & doc_flag_DISPLAYING) == 0)
+    if ( ((doc->flags & doc_flag_DISPLAYING) == 0)
+          || doc->parent == NULL )
     {
 	be_update_image_size(doc, i);
 	return;
@@ -4529,8 +4554,10 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     /* new: add the url here */
 /*     new->url = strdup(url); */
 
+    BEDBG((stderr, "backend_open_url: url '%s' checklist: add %p document_list %p next %p\n",
+	   strsafe(url), new, document_list, document_list ? document_list->next : NULL));
+
     /* add to list of documents, must do now in case we dispose of doc before returning from access_url */
-    BEDBG((stderr, "backend_open_url: checklist: add %p document_list %p next %p\n", new, document_list, document_list ? document_list->next : NULL));
     new->next = document_list;
     document_list = new;
 
@@ -5058,7 +5085,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 	    }
 	}
     }
-    
+
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
 	BOOL item_changed = item != ti && (item == NULL || item->aref != ti->aref);
@@ -5315,11 +5342,10 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
     }
 }
 
-extern void backend_plugin_action(be_doc doc, be_item item, int action)
+#ifndef BUILDERS
+static void be__plugin_abort_or_action(be_item item, int action)
 {
     plugin pp = NULL;
-
-#ifndef BUILDERS
 
     if (item && item->tag == rid_tag_OBJECT)
     {
@@ -5329,15 +5355,35 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action)
 	if (obj->type == rid_object_type_PLUGIN)
 	    pp = obj->state.plugin.pp;
     }
-
-    if (action != -1)
-	plugin_send_action(pp, action);
-    else
+    
+    if (action == be_plugin_action_ABORT)
 	plugin_send_abort(pp);
-
+    else
+	plugin_send_action(pp, action);
+}
 #endif
 
-    NOT_USED(doc);
+extern void backend_plugin_action(be_doc doc, be_item item, int action)
+{
+#ifndef BUILDERS
+    if (item == be_plugin_action_item_HELPERS)
+    {
+	be__plugin_abort_or_action(NULL, action);
+    }
+    else if (item == be_plugin_action_item_ALL)
+    {
+	be_item ti = doc->rh->stream.text_list;
+	while (ti)
+	{
+	    be__plugin_abort_or_action(ti, action);
+	    ti = rid_scan(ti, SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_OBJECT);
+	}
+    }
+    else
+    {
+	be__plugin_abort_or_action(item, action);
+    }
+#endif
 }
 
 extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)

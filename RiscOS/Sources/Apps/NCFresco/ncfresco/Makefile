@@ -81,6 +81,7 @@ attrparse.o:	../parser/sgmlimp.h
 attrparse.o:	../parser/sgmlloc.h
 attrparse.o:	../fresparse/htmleprocs.h
 attrparse.o:	../parser/sgmlparser.h
+attrparse.o:	../commonsrc/gbf.h
 chopper.o:	../parser/chopper.c
 chopper.o:	../parser/sgmlparser.h
 chopper.o:	../../../../Export/Lib/CLib/stdio.h
@@ -231,6 +232,7 @@ support.o:	../parser/sgmlimp.h
 support.o:	../parser/sgmlloc.h
 support.o:	../fresparse/htmleprocs.h
 support.o:	../parser/sgmlparser.h
+support.o:	../commonsrc/gbf.h
 support.o:	../commonsrc/webfonts.h
 support.o:	../../../../Export/Lib/RISC_OSLib/font.h
 support.o:	../../../../Export/Lib/CLib/stddef.h
@@ -869,6 +871,7 @@ attrparse.o:	../parser/sgmlimp.h
 attrparse.o:	../parser/sgmlloc.h
 attrparse.o:	../fresparse/htmleprocs.h
 attrparse.o:	../parser/sgmlparser.h
+attrparse.o:	../commonsrc/gbf.h
 chopper.o:	../parser/chopper.c
 chopper.o:	../parser/sgmlparser.h
 chopper.o:	../../../../Export/Lib/CLib/stdio.h
@@ -1019,6 +1022,7 @@ support.o:	../parser/sgmlimp.h
 support.o:	../parser/sgmlloc.h
 support.o:	../fresparse/htmleprocs.h
 support.o:	../parser/sgmlparser.h
+support.o:	../commonsrc/gbf.h
 support.o:	../commonsrc/webfonts.h
 support.o:	../../../../Export/Lib/RISC_OSLib/font.h
 support.o:	../../../../Export/Lib/CLib/stddef.h
@@ -1251,7 +1255,7 @@ stbfe.o:	../../../../Export/Lib/CLib/swis.h
 stbfe.o:	../!NCFresco/alarm.h
 stbfe.o:	../../../../Export/Lib/CLib/kernel.h
 stbfe.o:	../commonsrc/flexwrap.h
-stbfe.o:	../../../../Export/Lib/MemLib/memflex.h
+stbfe.o:	../!NCFresco/flex.h
 stbfe.o:	../!NCFresco/heap.h
 stbfe.o:	../../../../Export/Lib/RISC_OSLib/colourtran.h
 stbfe.o:	../../../../Export/Lib/RISC_OSLib/visdelay.h
@@ -1303,9 +1307,10 @@ stbfe.o:	../commonsrc/licence.h
 stbfe.o:	../commonsrc/plugin.h
 stbfe.o:	../../../../Export/Lib/CLib/time.h
 stbfe.o:	../../../../Export/Lib/RISC_OSLib/print.h
-stbfe.o:	../!NCFresco/../http/httppub.h
-stbfe.o:	../!NCFresco/../http/pads.h
+stbfe.o:	../../../../Export/C/http.h
+stbfe.o:	../commonsrc/pads.h
 stbfe.o:	../commonsrc/cookie.h
+stbfe.o:	../commonsrc/gbf.h
 stbfe.o:	../!NCFresco/clipboard.h
 stbfe.o:	../commonsrc/printing.h
 stbfe.o:	../fresparse/htmlparser.h
@@ -1321,11 +1326,10 @@ stbfe.o:	../!NCFresco/stbtb.h
 stbfe.o:	../!NCFresco/stbfe.h
 stbfe.o:	../!NCFresco/stbopen.h
 stbfe.o:	../!NCFresco/fevents.h
-stbfe.o:	../../../../Export/Lib/MemLib/memheap.h
 stbfe.o:	../hierprof/HierProf.h
 stbfe.o:	../../../../Export/Lib/CLib/stdio.h
 stbfe.o:	../../../../Export/Lib/CLib/stdarg.h
-stbfe.o:	../!NCFresco/../webimage/webimage.h
+stbfe.o:	../../../../Export/Lib/WebImage/webimage.h
 stbhist.o:	../!NCFresco/stbhist.c
 stbhist.o:	../../../../Export/Lib/CLib/stdio.h
 stbhist.o:	../../../../Export/Lib/CLib/string.h
@@ -1396,6 +1400,8 @@ stbkeys.o:	../../../../Export/Lib/RISC_OSLib/coords.h
 stbkeys.o:	../!NCFresco/stbmenu.h
 stbkeys.o:	../!NCFresco/stbtb.h
 stbkeys.o:	../!NCFresco/fevents.h
+stbkeys.o:	../commonsrc/util.h
+stbkeys.o:	../../../../Export/Lib/CLib/stdlib.h
 stbmap.o:	../!NCFresco/stbmap.c
 stbmap.o:	../../../../Export/Lib/CLib/math.h
 stbmap.o:	../../../../Export/Lib/CLib/stddef.h

@@ -264,6 +264,9 @@ void oobject_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     switch (obj->type)
     {
     case rid_object_type_IMAGE:
+
+        IMGDBG(("oobject_dispose calls image_lose, doc=%p, doc->parent=%p\n", doc, doc->parent ));
+
 	image_loose((image) obj->state.image.im, &antweb_doc_image_change, doc);
 	break;
 
@@ -355,7 +358,8 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 	/* This is received when the highlight is moved to the plugin and enter pressed */
 #ifndef BUILDERS
     case rid_object_type_PLUGIN:
-	plugin_send_focus(obj->state.plugin.pp);
+	if (!plugin_send_focus(obj->state.plugin.pp))
+	    sound_event(snd_WARN_BAD_KEY);
 	break;
 #endif /* BUILDERS */
 

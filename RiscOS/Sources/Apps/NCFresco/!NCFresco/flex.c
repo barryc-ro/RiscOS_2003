@@ -20,6 +20,10 @@
  *		        removed flex_budge cos I'm never going to use it.
  */
 
+#if MEMLIB
+static int flex_not_used;
+#else
+
 #define BOOL int
 #define TRUE 1
 #define FALSE 0
@@ -665,5 +669,7 @@ void flexmem_shift(void)
 }
 
 /* ------------------------------------------------------------------------- */
+
+#endif
 
 /* eof flex.c */

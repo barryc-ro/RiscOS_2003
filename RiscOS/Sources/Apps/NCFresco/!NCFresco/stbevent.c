@@ -289,6 +289,30 @@ static void misc_event_handler(int event, fe_view v)
 	else
 	    frontend_complain(fe_reload(v));
 	break;
+
+    case fevent_SOUND_TOGGLE:
+	fe_bgsound_set(-1);
+	break;
+
+    case fevent_SOUND_OFF:
+	fe_bgsound_set(0);
+	break;
+
+    case fevent_SOUND_ON:
+	fe_bgsound_set(1);
+	break;
+
+    case fevent_BEEPS_TOGGLE:
+	fe_beeps_set(-1);
+	break;
+
+    case fevent_BEEPS_OFF:
+	fe_beeps_set(0);
+	break;
+
+    case fevent_BEEPS_ON:
+	fe_beeps_set(1);
+	break;
     }
 }
 
@@ -504,7 +528,7 @@ static void codec_event_handler(int event, fe_view v)
     int action = event - fevent_CODEC_STOP;
     if (action < sizeof(codec_actions)/sizeof(codec_actions[0]))
     {
-	be_item item = NULL;
+	be_item item = be_plugin_action_item_HELPERS;
 
 	if (v && v->displaying)
 	    item = v->current_link;
@@ -517,12 +541,12 @@ static void codec_event_handler(int event, fe_view v)
     }
     else if (event == fevent_CODEC_CLOSE)
     {
-	be_item item = NULL;
+	be_item item = be_plugin_action_item_HELPERS;
 
 	if (v && v->displaying)
 	    item = v->current_link;
 
-	backend_plugin_action(v->displaying, item, -1);
+	backend_plugin_action(v->displaying, item, be_plugin_action_ABORT);
     }
 }
 

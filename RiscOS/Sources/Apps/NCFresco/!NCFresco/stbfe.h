@@ -133,6 +133,8 @@ extern void fe_plugin_event_handler(int event, fe_view v);
 
 extern void fe_font_size_set(int value, BOOL absolute);
 extern BOOL fe_font_size_set_possible(int value, BOOL absolute);
+extern void fe_beeps_set(int state);
+extern void fe_bgsound_set(int state);
 
 extern void fe_force_fit(fe_view v, BOOL force);
 

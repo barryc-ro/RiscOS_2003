@@ -487,6 +487,9 @@ extern void backend_doc_set_scaling(be_doc doc, int scale_value);
 
 extern BOOL backend_submit_form(be_doc doc, const char *id, int right);
 
+#define be_plugin_action_ABORT		(-1)
+#define be_plugin_action_item_HELPERS	((be_item)-1)
+#define be_plugin_action_item_ALL	((be_item)0)
 extern void backend_plugin_action(be_doc doc, be_item item, int action);
 
 #define be_plugin_BUSY		0x0001

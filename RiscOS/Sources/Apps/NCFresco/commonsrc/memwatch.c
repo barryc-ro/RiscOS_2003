@@ -104,7 +104,7 @@ extern int mm_can_we_recover(int abort)
     if (r == 0 && antweb_doc_abort_all())
 	r = 2;			/* recovered through abort transfers */
 #endif
-    
+
     if (r == 0)			/* if can't recover any memory */
     {
 #ifdef STBWEB
@@ -187,7 +187,7 @@ static void mm_unlink(mm_chain *m)
 
 void *mm_malloc(size_t x)
 {
-    mm_chain *new;
+    mm_chain *newptr;
     mm_tail *tail;
 
     num_malloc++;
@@ -197,39 +197,39 @@ void *mm_malloc(size_t x)
 	fprintf(stderr, "mm_malloc: item size 0x%x '%s' '%s'", x, caller(1), caller(2));
 #endif
 
-    new = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
+    newptr = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
 
 #if MEMWATCH >= 3
     if (x >= MEMWATCH_MIN_INTEREST)
-	fprintf(stderr, " = %p\n", new ? new - 1 : NULL);
+	fprintf(stderr, " = %p\n", newptr ? newptr - 1 : NULL);
 #endif
 
-    if (new == NULL)
+    if (newptr == NULL)
     {
 	mm_can_we_recover(TRUE);
-	new = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
+	newptr = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
 
-	if (new == NULL)
+	if (newptr == NULL)
 	    mm_no_more_memory();
     }
 
-    new->size = x;
-    new->magic = MM_MAGIC_HEAD;
+    newptr->size = x;
+    newptr->magic = MM_MAGIC_HEAD;
 #if MEMWATCH >= 4 && 0
     fprintf(stderr, "about to call caller()\n");
 #endif
-    new->caller = caller(1);
-    new->caller2 = caller(2);
+    newptr->caller = caller(1);
+    newptr->caller2 = caller(2);
 
 #if MEMWATCH >= 4 && 0
     fprintf(stderr, "caller() called\n");
 #endif
-    tail = MM_TAIL(new);
+    tail = MM_TAIL(newptr);
     tail->magic = MM_MAGIC_TAIL;
 
-    mm_link(new);
+    mm_link(newptr);
 
-    return (void*)(new+1);
+    return (void*)(newptr+1);
 }
 
 void *mm_calloc(size_t x, size_t y)

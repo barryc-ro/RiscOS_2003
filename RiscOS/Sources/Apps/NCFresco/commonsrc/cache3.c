@@ -21,6 +21,7 @@
 #include "makeerror.h"
 #include "util.h"
 #include "verstring.h"
+#include "subflex.h"
 
 #include "config.h"
 
@@ -44,7 +45,7 @@ static void cache_dump_dir_write(int dir);
 
 typedef struct
 {
-    char *url;
+    int urloffset;
 
     char file_num;
     cache_flags flags;
@@ -69,6 +70,8 @@ typedef struct
 } cache_dir;
 
 static cache_dir *cache;
+
+static char *urlblock = NULL;
 
 #ifndef MONOTIME
 #define MONOTIME		(*(unsigned int *)0x10C) /* RISC OS runery! */
@@ -158,7 +161,7 @@ static BOOL cache_scan_for_url(cache_dir *dir, cache_item *item, int n, void *ha
     unsigned int *vars = handle;
     unsigned int h = vars[0];
     char *url = (char *)vars[1];
-    return item->hash == h && strcmp(item->url, url) == 0;
+    return item->hash == h && strcmp(urlblock + item->urloffset, url) == 0;
 }
 
 static BOOL cache_scan_for_oldest(cache_dir *dir, cache_item *cc, int n, void *handle)
@@ -190,10 +193,10 @@ static BOOL cache_scan_for_oldest(cache_dir *dir, cache_item *cc, int n, void *h
 
 static BOOL is_older(const cache_item *oldest_item, const cache_item *item)
 {
-    if (oldest_item->url == NULL)
+    if (oldest_item->urloffset == NULL)
         return TRUE;
 
-    if (item->url &&
+    if (item->urloffset &&
         ((item->keep_count < oldest_item->keep_count) ||
         (item->keep_count == oldest_item->keep_count && item->last_used < oldest_item->last_used) ) )
         return TRUE;
@@ -277,7 +280,7 @@ static cache_item *cache_ptr_from_url(char *url, cache_dir **dir_out)
         cache_item *item = dirp->items;
         if (item) for (i = 0; i < N_FILES_PER_DIR; i++, item++, n++)
         {
-            if (item->hash == h && strcmp(item->url, url) == 0)
+            if (item->hash == h && strcmp(urlblock + item->urloffset, url) == 0)
             {
                 if (dir_out)
                     *dir_out = dirp;
@@ -326,7 +329,7 @@ static cache_item *cache_ptr_from_file(char *file, cache_dir **dir_out)
 
 static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 {
-    if (cc == NULL || cc->url == NULL)
+    if (cc == NULL || cc->urloffset == 0)
 	return TRUE;
 
     if (cc->flags & cache_flag_OURS)
@@ -335,7 +338,7 @@ static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 	{
 	    char *cfile = index_file_name(dir->dir_num, cc->file_num);
 
-	    ACCDBG(("cache_remove_file: '%s' '%s'\n", cc->url, cfile));
+	    ACCDBG(("cache_remove_file: '%s' '%s'\n", urlblock + cc->urloffset, cfile));
 
 	    if (remove(cfile))
 	    {
@@ -354,8 +357,7 @@ static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 
     cache_data_size -= cc->size;
 
-    mm_free(cc->url);
-    cc->url = NULL;
+    SubFlex_Free( &cc->urloffset, &urlblock );
 
     cc->file_num = NO_FILE;
     cc->hash = 0;
@@ -378,6 +380,9 @@ static char *cache_lookup(char *url, int check_expire)
 {
     cache_dir *dir;
     cache_item *cc = cache_ptr_from_url(url, &dir);
+
+    ACCDBG(("Cache check for %s: %s\n", url, cc ? "hit" : "MISS" ));
+
     if (cc)
     {
 	if (check_expire)
@@ -439,7 +444,7 @@ static void cache_make_room(int size)
 	    for (i = 0; i < cache_size; i++)
 	    {
 	        cache_item *cc = cache_item_ptr(i);
-		if (cc == NULL || cc->url == NULL)
+		if (cc == NULL || cc->urloffset == NULL)
 		{
 		    continue;
 		}
@@ -462,8 +467,15 @@ static void cache_make_room(int size)
 
 static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int file_num, cache_flags flags, int size)
 {
+    int len = strlen(url)+1;
+
     cc->hash = string_hash(url);
-    cc->url = strdup(url);
+
+    ACCDBGN(("cache3: inserting %s\n", url));
+
+    SubFlex_Alloc( &cc->urloffset, len, &urlblock );
+
+    memcpy( urlblock + cc->urloffset, url, len );
 
     if (cc->file_num != file_num)
     {
@@ -485,6 +497,7 @@ static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int fil
 
 static void cache_optimise( void )
 {
+#if 0
     int i;
 
     if ( cache )
@@ -496,6 +509,7 @@ static void cache_optimise( void )
             cc->url = optimise_string( cc->url );
         }
     }
+#endif
 }
 
 static void cache_insert(char *url, char *file, cache_flags flags)
@@ -645,6 +659,8 @@ static void cache_dump_dir_read(int dir)
     sprintf(scrap_leaf_ptr, "%02d./cachedump", dir);
     fh = fopen(scrapname, "r");
 
+    ACCDBG(("Reading cache dump %s\n", scrapname ));
+
     if (fh)
     {
         int sizes[75];
@@ -777,16 +793,16 @@ static void cache_dump_dir_write(int dir)
 
 	for (i = 0; i < N_FILES_PER_DIR; i++, cc++)
 	{
-	    if (cc->url && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
+	    if (cc->urloffset && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
 	    {
 #if CACHE_FORMAT == 1
 		fprintf(fh, "%02d" "\t%d" "\t%x" "\t%d" "\t%d" "\t%s" "\n",
-			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, cc->url);
+			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, urlblock + cc->urloffset);
 #elif CACHE_FORMAT == 2
 		fprintf(fh, "%02d" "\t%x" "\t%x" "\t%x" "\t%s" "\n",
 			cc->file_num,
 			cc->header.date, cc->header.last_modified, cc->header.expires,
-			cc->url);
+			urlblock + cc->urloffset);
 #else
 #error "unknown cache format"
 #endif
@@ -824,8 +840,8 @@ static void cache_dump_dir_wipe(int dir)
     {
 	for (i = 0; i < N_FILES_PER_DIR; i++, cc++)
 	{
-	    ACCDBG(("dump_dir_wipe: cc->url %p\n", cc->url));
-	    mm_free(cc->url);
+	    ACCDBG(("dump_dir_wipe: cc->url %p\n", urlblock + cc->urloffset));
+	    SubFlex_Free( &cc->urloffset, &urlblock );
 	}
 
 	ACCDBG(("dump_dir_wipe: dp items %p\n", dp->items));
@@ -1035,7 +1051,7 @@ static int cache_test(char *url)
 
     if (filewatcher_handle)
     {
-	type = item->url ? 1 : 0;
+	type = item->urloffset ? 1 : 0;
     }
     else
     {
@@ -1062,23 +1078,21 @@ static void cache_free_mem(void)
 	cache_dir *dp = &cache[dir];
 	if (dp->items)
 	{
-	    cache_item *cc = dp->items;
-	    for (file = 0; file < N_FILES_PER_DIR; file++, cc++)
-	    {
-		mm_free(cc->url);
-	    }
-
 	    mm_free(dp->items);
 	}
     }
 
     mm_free(cache);
     cache = NULL;
+
+    MemFlex_Free( &urlblock );
 }
 
 static os_error *cache_init(int size)
 {
     os_error *e;
+
+    ACCDBG(("cache3 initialising\n"));
 
     MemCheck_RegisterMiscBlock((void *)0x10c, 4);
 
@@ -1095,7 +1109,10 @@ static os_error *cache_init(int size)
 
     cache = (cache_dir *)mm_calloc(cache_ndirs, sizeof(cache_dir));
 
-    e = scrapfile_init();
+    e = SubFlex_Initialise( &urlblock );
+
+    if (!e)
+        e = scrapfile_init();
     if (!e) filewatcher_init();
 
     return e;
@@ -1125,7 +1142,7 @@ static void cache_tidyup(void)
 		for (i = 0; i < cache_size; i++)
 		{
 		    cache_item *cc = cache_item_ptr(i);
-		    if (cc->url)
+		    if (cc->urloffset)
 			cache_remove_file(cc, cache_dir_ptr(i));
 		}
 	    }

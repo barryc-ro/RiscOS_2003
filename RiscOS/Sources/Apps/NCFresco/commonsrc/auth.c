@@ -374,7 +374,7 @@ char *auth_lookup_string(char *url)
     switch (type)
     {
     case auth_type_BASIC:
-	buffer = mm_malloc(UU_BUFFER_SIZE);
+	buffer = (char*) mm_malloc(UU_BUFFER_SIZE);
 	sprintf(temp, "%s:%s", user, passwd);
 	strcpy(buffer, "Basic ");
 	uuencode(temp, buffer+6, UU_BUFFER_SIZE-6);

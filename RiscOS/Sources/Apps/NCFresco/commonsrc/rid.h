@@ -636,6 +636,9 @@ struct rid_width_info
 
 */
 
+/* Stop compiler warnings about C++ reserved word "class" */
+#define class class__not
+
 struct rid_table_colgroup
 {
         rid_table_props         *props;         /* Associated properties */

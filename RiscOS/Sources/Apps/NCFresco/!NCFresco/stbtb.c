@@ -577,6 +577,7 @@ static os_error *setfocus(int obj)
     return wimp_set_caret_pos(&cs);
 }
 
+
 #if 0
 static os_error *toolactionsetpair(int obj, int cmp, const char *off, const char *on)
 {
@@ -616,7 +617,8 @@ static void tb_bar_set_highlight(tb_bar_info *tbi, int index)
 	wimp_get_wind_state(tbi->window_handle, &state);
 	coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
 
-	frontend_pointer_set_position(NULL, (box.x0 + box.x1)/2, (box.y0 + box.y1)/2);
+	if (pointer_mode == pointermode_OFF)
+	    frontend_pointer_set_position(NULL, (box.x0 + box.x1)/2, (box.y0 + box.y1)/2);
     }
 }
 
@@ -628,6 +630,28 @@ static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
 	if (but->cmp == cmp)
 	    return i;
     return -1;
+}
+
+static BOOL havefocus(tb_bar_info *tbi)
+{
+    wimp_caretstr cs;
+    wimp_get_caret_pos(&cs);
+    return cs.w == tbi->window_handle;
+}
+
+static void return_highlight(fe_view v, tb_bar_info *tbi, int flags)
+{
+    int cmp = tbi->buttons[tbi->highlight].cmp;
+    wimp_box box;
+    wimp_wstate state;
+
+    _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, cmp, &box);
+    wimp_get_wind_state(tbi->window_handle, &state);
+    coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
+
+    setstate(tbi->object_handle, cmp, 0);
+
+    fe_move_highlight_xy(v, &box, flags | be_link_XY);
 }
 
 /* --------------------------------------------------------------------------*/
@@ -1528,10 +1552,15 @@ void tb_status_hide(int only_if_small)
 
     if ((status_state != status_CLOSED && !only_if_small) || status_state == status_OPEN_SMALL)
     {
+	BOOL focus = havefocus(bar_list);
+	
 	sound_event(snd_TOOLBAR_HIDE);
 
         frontend_complain((os_error *)_swix(Toolbox_HideObject, _INR(0,1), 0, bar_list->object_handle));
         status_state = status_CLOSED;
+
+	if (focus)
+	    return_highlight(NULL, bar_list, 0);
     }
 }
 
@@ -2153,21 +2182,6 @@ void tb_events(int *event, fe_view v)
                 fevent_handler(e->action_no, v);
             break;
     }
-}
-
-static void return_highlight(fe_view v, tb_bar_info *tbi, int flags)
-{
-    int cmp = tbi->buttons[tbi->highlight].cmp;
-    wimp_box box;
-    wimp_wstate state;
-
-    _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, cmp, &box);
-    wimp_get_wind_state(tbi->window_handle, &state);
-    coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
-
-    setstate(tbi->object_handle, cmp, 0);
-
-    fe_move_highlight_xy(v, &box, flags | be_link_XY);
 }
 
 void tb_event_handler(int event, fe_view v)
