@@ -103,6 +103,7 @@ rm.FilterMgr: s.MsgTrans
 rm.FilterMgr: s.PreFilter
 rm.FilterMgr: s.RectFilter
 rm.FilterMgr: s.PoRtFilter
+rm.FilterMgr: s.PoIcFilter
 rm.FilterMgr: s.CopyFilter
 rm.FilterMgr: s.PostFilter
 rm.FilterMgr: s.Tail
