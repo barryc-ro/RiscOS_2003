@@ -75,7 +75,11 @@ Date		Who	Change
 /* Includes */
 /************/
 
+#include <stdlib.h>
 #include <stdio.h>
+#ifdef GENERIC
+#include <string.h>
+#endif
 #include "kernel.h"
 #include "swis.h"
 
@@ -87,7 +91,14 @@ Date		Who	Change
 #include "MPEG/MPEGCtrl.h"
 #include "MPEG/MPEGVideo.h"
 #include "MPEG/UpCallMPEG.h"
+#ifdef GENERIC
+#include "PRISM/PRISM.h"
+#endif
 #include "NVRAM.h"
+
+#ifdef GENERIC
+#include "VersionNum"
+#endif
 
 #include "Defs.h"
 #include "IRQ.h"
@@ -95,9 +106,13 @@ Date		Who	Change
 #include "MiscAsm.h"
 #include "ModHdr.h"
 #include "Module.h"
+#ifdef GENERIC
+#include "PCompos.h"
+#endif
 #include "Registers.h"
 #include "STi3520L.h"
 #include "Stuffing.h"
+#include "Sync.h"
 #include "Types.h"
 #include "Video.h"
 #include "WSS.h"
@@ -116,10 +131,14 @@ Date		Who	Change
 /* Private prototypes */
 /**********************/
 
+#ifdef GENERIC
+static PRISM_DECLARE_FUNCTION_2(_kernel_oserror *, static_ComponentInfo, uint32_t /*tag*/, uintptr_t */*result*/)
+static PRISM_DECLARE_FUNCTION_2(_kernel_oserror *, static_SpeedChange, uint32_t /*flags*/, stream_handle_t /*decoder_handle*/)
+#endif
 static _kernel_oserror *static_VideoStart (void);
 static unsigned int static_VideoStop (bool play_out);
 static void static_CompleteScalingTypeParameters (bool recache);
-static _kernel_oserror *static_CheckHandle (stream_handle_t vsh);
+static _kernel_oserror *static_CheckHandle (mpeg_stream_handle_t vsh);
 
 /********************/
 /* Public variables */
@@ -129,6 +148,15 @@ static _kernel_oserror *static_CheckHandle (stream_handle_t vsh);
 /* Private variables */
 /*********************/
 
+#ifdef GENERIC
+static struct
+{
+  PRISM_VENEER_POINTER(static_ComponentInfo);
+  PRISM_VENEER_POINTER(static_SpeedChange);
+}
+*static_Veneers;
+#endif
+
 /*********************/
 /* Private constants */
 /*********************/
@@ -137,9 +165,155 @@ static _kernel_oserror *static_CheckHandle (stream_handle_t vsh);
 #define ErrorNumber_BuffOverflow 0x1E5
 #endif
 
+#ifdef GENERIC
+#define ST3520Video_PRISMID 0x03009001
+#endif
+
 /********************/
 /* Public functions */
 /********************/
+
+#ifdef GENERIC
+
+/******	Video_Initialise() *************************************************
+
+Purpose:	Check whether any hardware we support is present or not, and
+		initialise it if so
+Out:		Error pointer if something prevented us from detecting hardware,
+		or something preventable went wrong in initialising it
+		(ie no error is produced if hardware is just not detected)
+
+***************************************************************************/
+
+_kernel_oserror *Video_Initialise (void)
+{
+  _kernel_oserror *e = NULL;
+  e = STi3520L_HardReset ();
+  if (!e)
+  {
+    e = WSS_Initialise ();
+  }
+  if (!e && Module_UseGenericAudio)
+  {
+    static const struct
+    {
+      void (*function)(void);
+      uint32_t stack_words;
+    }
+    function_descriptor_table[] =
+    {
+      PRISM_FUNCTION_DESCRIPTOR(static_ComponentInfo),
+      PRISM_FUNCTION_DESCRIPTOR(static_SpeedChange)
+    };
+    PCompos_Register (ST3520Video_PRISMID, function_descriptor_table, sizeof(function_descriptor_table) / sizeof(*function_descriptor_table), (void (*const **)()) &static_Veneers);
+  }
+  return e;
+}
+
+/******	Video_Finalise() ***************************************************
+
+Purpose:	Return hardware to state before module initialised
+Out:		Error pointer if hardware cannot currently be restored
+
+***************************************************************************/
+
+_kernel_oserror *Video_Finalise (void)
+{
+  return NULL;
+}
+
+/******	static_ComponentInfo() *********************************************
+
+Purpose:	Return stream-agnostic information
+In:		Tag word
+Out:		Error pointer; value associated with tag
+
+***************************************************************************/
+
+static _kernel_oserror *static_ComponentInfo (uint32_t tag, uintptr_t *result)
+{
+  _kernel_oserror *e = NULL;
+  static bool info_contstructed = false;
+  static bool L_not_A;
+  static uint8_t revision;
+  static char *hardware_name;
+  if (!info_contstructed++)
+  {
+    revision = VID_REV;
+    uint8_t second_read = VID_REV;
+    L_not_A = (revision != second_read);
+    char *hardware_prototype = "STi3520%c MPEG video decoder (revision %02X)";
+    hardware_name = malloc (strlen (hardware_prototype));
+    if (hardware_name == NULL)
+    {
+      hardware_name = "Error";
+    }
+    else
+    {
+      sprintf (hardware_name, hardware_prototype, L_not_A ? 'L' : 'A', revision);
+    }
+  }
+  switch (tag)
+  {
+    case 0:
+      *result = (uintptr_t) hardware_name;
+      break;
+    case 1:
+      *result = (L_not_A << 8) | revision;
+      break;
+    case 2:
+      *result = (uintptr_t) Module_ComponentName " " Module_HelpVersion;
+      break;
+    case 3:
+      *result = Module_Version;
+      break;
+    case 4:
+    {
+      static char string[80];
+      if (string[0] == 0)
+      {
+        char year[5];
+        sscanf (Module_Date, "%*u %*s %4s", year);
+        sprintf (string, "© %s Pace Micro Technology PLC", year);
+      }
+      *result = (uintptr_t) string;
+      break;
+    }
+    case 5:
+    {
+      static char string[80];
+      if (string[0] == 0)
+      {
+        char year[5];
+        sscanf (Module_Date, "%*u %*s %4s", year);
+        sprintf (string, "3520 Video Driver " Module_HelpVersion " © Pace %s", year);
+      }
+      *result = (uintptr_t) string;
+      break;
+    }
+    default:
+      e = Mess_GenerateError ("Err_UkTag", errno_UK_TAG, 0);
+      break;
+  }
+  return e;
+}
+
+/******	static_SpeedChange() ***********************************************
+
+Purpose:	PFCClock is notifying us that the stream speed has changed
+In:		Flags; our handle
+Out:		Error pointer; value associated with tag
+
+***************************************************************************/
+
+static _kernel_oserror *static_SpeedChange (uint32_t flags, stream_handle_t decoder_handle)
+{
+  IGNORE (flags);
+  IGNORE (decoder_handle);
+  return NULL;
+}
+
+#endif
 
 /******	Video_SWIOpenStream() **********************************************
 
@@ -150,10 +324,12 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, video_parameters_structure_t *vps, stream_handle_t *return_vsh)
+_kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, video_parameters_structure_t *vps, mpeg_stream_handle_t *return_vsh)
 {
   _kernel_oserror *e = NULL;
+#ifndef GENERIC
   bool old_audio_present_flag;
+#endif
   dprintf (("Video", "SWIOpenStream\n"));
 #if Debugging==1
   DWrite_Init();
@@ -179,10 +355,14 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   
   /* Cache StreamFlags (other than our copies of the video_present and audio_present flags), ControlStreamHandle and VideoParametersStructure */
   /* This way we can cope with the sequence MPEGVideo_OpenStream, MPEGAudio_OpenStream (returning an error), then MPEGVideo_CloseStream */
+#ifndef GENERIC
   old_audio_present_flag = Stream.s_flags.audio_present;
+#endif
   Stream.s_flags = *flags;
+#ifndef GENERIC
   Stream.s_flags.video_present = true;
   Stream.s_flags.audio_present = old_audio_present_flag;
+#endif
   Stream.csh = csh;
   Stream.video_parms = *vps;
   if (!Stream.video_parms.scaling_type_present)
@@ -196,34 +376,63 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   }
   static_CompleteScalingTypeParameters (true);
   
-  /* Initialise various variables */
-  Stream.rs_flags.video_present = Stream.s_flags.video_present;
-  Stream.rs_flags.audio_present = Stream.s_flags.audio_present;
-  Stream.rs_flags.trick_play_mode = false;
-  Stream.video.since_open.amount_received.lsw = Stream.video.since_open.amount_received.msw = 0;
-  Stream.video.since_open.amount_sent.lsw = Stream.video.since_open.amount_sent.msw = 0;
-  Stream.video.since_open.PES_packets_sent = 0;
-  Stream.video.since_open.PTSs_in = 0;
-  Stream.video.since_open.PTSs_out = 0;
-  Stream.video.since_open.slows = 0;
-  Stream.video.since_open.fasts = 0;
-  Stream.video.since_open.stalls = 0;
-  Stream.video.since_open.picture_decode_errors = 0;
-  Stream.video.since_open.severe_errors = 0;
-  Stream.video.since_open.pipeline_errors = 0;
-  Stream.video.since_open.seqhdr_errors = 0;
-  Stream.video.since_open.internal_resets = 0;
-  Stream.video.since_open.underruns = 0;
-  
-#if Debugging==1 && DebugProfiling==1
-  IRQ_ProfileInit ();
-  _swix (OS_CallEvery, _INR(0,2), 99, irq_profile_callevery, Module_PrivateWord);
-  /* If profiling audio-only streams matters, this needs doing conditionally in Audio.c too */
+#ifdef GENERIC
+  if (Module_UseGenericAudio)
+  {
+    /* Start up the sync system */
+    e = Sync_Open (Stream.csh, Stream.s_flags.sync_to_stream, &Stream.clock_handle);
+    if (!e)
+    {
+      e = Sync_Start (Stream.clock_handle);
+    }
+    if (!e)
+    {
+      /* Register the video decoder with PFCClock */
+      static bool my_table_initialised = false;
+      static prism_function_table_clock_to_decoder_t my_table;
+      if (!my_table_initialised++)
+      {
+//        my_table =
+//        {
+//          .SpeedChange = static_Veneers->static_SpeedChange
+//        }
+        my_table.SpeedChange = static_Veneers->static_SpeedChange;
+      }
+      _swix (PFCClock_DecoderRegister, _INR(0,5)|_OUT(3), 0, ST3520Video_PRISMID, &Stream, Stream.clock_handle, &my_table, 0, &Stream.clock);
+    }
+  }
+  if (!e)
 #endif
-  
-  /* Initialise the new stream */
-  Stream.vid_flags.internal_reset = false;
-  e = static_VideoStart ();
+  {
+    /* Initialise various variables */
+    Stream.rs_flags.video_present = Stream.s_flags.video_present;
+    Stream.rs_flags.audio_present = Stream.s_flags.audio_present;
+    Stream.rs_flags.trick_play_mode = false;
+    Stream.video.since_open.amount_received.lsw = Stream.video.since_open.amount_received.msw = 0;
+    Stream.video.since_open.amount_sent.lsw = Stream.video.since_open.amount_sent.msw = 0;
+    Stream.video.since_open.PES_packets_sent = 0;
+    Stream.video.since_open.PTSs_in = 0;
+    Stream.video.since_open.PTSs_out = 0;
+    Stream.video.since_open.slows = 0;
+    Stream.video.since_open.fasts = 0;
+    Stream.video.since_open.stalls = 0;
+    Stream.video.since_open.picture_decode_errors = 0;
+    Stream.video.since_open.severe_errors = 0;
+    Stream.video.since_open.pipeline_errors = 0;
+    Stream.video.since_open.seqhdr_errors = 0;
+    Stream.video.since_open.internal_resets = 0;
+    Stream.video.since_open.underruns = 0;
+    
+#if Debugging==1 && DebugProfiling==1
+    IRQ_ProfileInit ();
+    _swix (OS_CallEvery, _INR(0,2), 99, irq_profile_callevery, Module_PrivateWord);
+    /* If profiling audio-only streams matters, this needs doing conditionally in Audio.c too */
+#endif
+    
+    /* Initialise the new stream */
+    Stream.vid_flags.internal_reset = false;
+    e = static_VideoStart ();
+  }
   if (!e)
   {
     
@@ -246,7 +455,7 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
     /* We no longer reprogram the palette */
     
     /* Return a pointer to Stream as the video stream handle */
-    *return_vsh = (stream_handle_t) &Stream;
+    *return_vsh = (mpeg_stream_handle_t) &Stream;
   }
   return e;
 }
@@ -259,7 +468,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWIFullPackets (unsigned int flags, stream_handle_t vsh, bitstream_packet_t *packets)
+_kernel_oserror *Video_SWIFullPackets (unsigned int flags, mpeg_stream_handle_t vsh, bitstream_packet_t *packets)
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
@@ -422,7 +631,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
+_kernel_oserror *Video_SWICloseStream (unsigned int flags, mpeg_stream_handle_t vsh)
 {
   _kernel_oserror *e = NULL;
   unsigned char group_settings [4] = { 0, 0xFF, 0xFF, 0xFF };
@@ -442,6 +651,26 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
     Stream.vid_flags.internal_reset = false;
     static_VideoStop (Stream.video.speed_indicator == 1 && Stream.video.state == stream_open && !Stream.rs_flags.trick_play_mode);
     
+#ifdef GENERIC
+    if (Module_UseGenericAudio)
+    {
+      /* Deregister video decoder from PFCClock */
+      union
+      {
+        program_element_structure_t *stream;
+        stream_handle_t handle;
+      } work_round_not_being_able_to_cast_from_address_of_struct_to_struct
+      = { &Stream };
+      Stream.clock->Deregister (0, ST3520Video_PRISMID, work_round_not_being_able_to_cast_from_address_of_struct_to_struct.handle, Stream.clock_handle);
+      /* Shut down the sync system, if necessary */
+      if (!Stream.s_flags.audio_present)
+      {
+        Sync_Stop (Stream.clock_handle);
+        Sync_Close (Stream.clock_handle);
+      }
+    }
+#endif
+    
     if (flags & CloseStreamFlags_BlankVideo)
     {
       /* We now only blank the video output on CloseStream, not on ResetStream */
@@ -452,7 +681,9 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
     WSS_SetSCART (NULL, NULL, NULL, &scart_setting);
     WSS_Set (group_settings, true, NULL, NULL);
     
+#ifndef GENERIC
     Stream.s_flags.video_present = false;
+#endif
     
 #if Debugging==1 && DebugProfiling==1
     _swix (OS_RemoveTickerEvent, _INR(0,1), irq_profile_callevery, Module_PrivateWord);
@@ -470,7 +701,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWIPlay (unsigned int flags, stream_handle_t vsh)
+_kernel_oserror *Video_SWIPlay (unsigned int flags, mpeg_stream_handle_t vsh)
 {
   _kernel_oserror *e = NULL;
   e = static_CheckHandle (vsh);
@@ -506,7 +737,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, unsigned int speed)
+_kernel_oserror *Video_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t vsh, unsigned int speed)
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
@@ -728,7 +959,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWIResetStream (reset_stream_flags_t *flags, stream_handle_t vsh, unsigned int *return_discarded_data_size)
+_kernel_oserror *Video_SWIResetStream (reset_stream_flags_t *flags, mpeg_stream_handle_t vsh, unsigned int *return_discarded_data_size)
 {
   _kernel_oserror *e = NULL;
   e = static_CheckHandle (vsh);
@@ -740,6 +971,22 @@ _kernel_oserror *Video_SWIResetStream (reset_stream_flags_t *flags, stream_handl
     Stream.rs_flags = *flags;
     if (Stream.s_flags.video_present == false) Stream.rs_flags.video_present = false;
     if (Stream.s_flags.audio_present == false) Stream.rs_flags.audio_present = false;
+    
+#ifdef GENERIC
+    if (Module_UseGenericAudio)
+    {
+      /* Stop and start the sync system */
+      /* This isnt ideal, as we shouldn't restart it until the decoders have deregistered, but it's the best we can do */
+      e = Sync_Stop (Stream.clock_handle);
+      if (!e)
+      {
+        e = Sync_Start (Stream.clock_handle);
+      }
+    }
+  }
+  if (!e)
+  {
+#endif
     
     /* Read audio and video buffer fullnesses */
     *return_discarded_data_size = (VID_VBL & 0x3FFF) * 256; /* 3520 rounds buffer fullness to 256 byte boundaries */
@@ -770,7 +1017,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWIStats (unsigned int flags, stream_handle_t vsh, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
+_kernel_oserror *Video_SWIStats (unsigned int flags, mpeg_stream_handle_t vsh, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
 {
   _kernel_oserror *e = NULL;
   unsigned int tag;
@@ -923,7 +1170,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWISetVideoParameters0 (stream_handle_t vsh, scaling_type_block_t *block_in_out)
+_kernel_oserror *Video_SWISetVideoParameters0 (mpeg_stream_handle_t vsh, scaling_type_block_t *block_in_out)
 {
   _kernel_oserror *e = NULL;
   scaling_type_block_t temp_scaling_type_block;
@@ -1031,7 +1278,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWIGetSprite (unsigned int flags, stream_handle_t vsh, void *sprite_area, const char *sprite_name)
+_kernel_oserror *Video_SWIGetSprite (unsigned int flags, mpeg_stream_handle_t vsh, void *sprite_area, const char *sprite_name)
 {
   _kernel_oserror *e = NULL;
   unsigned int DA_number;
@@ -1333,11 +1580,31 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.old_displayed_active_centre_x = Stream.old_displayed_active_centre_y = 0;
   Stream.old_displayed_active_width = Stream.old_displayed_active_height = 0;
   WRITE_VID_VBT(0);
-  if (!Stream.rs_flags.audio_present) Stream.aud_flags.first_header_received = false; /* don't offer audio headers in *VideoInfo */
+#ifdef GENERIC
+  if (!Module_UseGenericAudio && !Stream.rs_flags.audio_present)
+#else
+  if (!Stream.rs_flags.audio_present)
+#endif
+  {
+    Stream.aud_flags.first_header_received = false; /* don't offer audio headers in *VideoInfo */
+  }
   
   /* Claim interrupts */
   IRQ_EnableCommonIRQs ();
   IRQ_EnableVideoPrefillIRQs ();
+  
+#ifdef GENERIC
+  if (Module_UseGenericAudio)
+  {
+    union
+    {
+      program_element_structure_t *stream;
+      stream_handle_t handle;
+    } work_round_not_being_able_to_cast_from_address_of_struct_to_struct
+    = { &Stream };
+    e = Stream.clock->BeginSession (1, ST3520Video_PRISMID, work_round_not_being_able_to_cast_from_address_of_struct_to_struct.handle, Stream.clock_handle, 0 /* should be vbv_delay!!! */);
+  }
+#endif
   
   return e;
 }
@@ -1389,6 +1656,19 @@ static unsigned int static_VideoStop (bool play_out)
       Stuffing_FreePacket (&Stream.video);
     }
   }
+  
+#ifdef GENERIC
+  if (Module_UseGenericAudio)
+  {
+    union
+    {
+      program_element_structure_t *stream;
+      stream_handle_t handle;
+    } work_round_not_being_able_to_cast_from_address_of_struct_to_struct
+    = { &Stream };
+    Stream.clock->EndSession (0, ST3520Video_PRISMID, work_round_not_being_able_to_cast_from_address_of_struct_to_struct.handle, Stream.clock_handle);
+  }
+#endif
   
   /* Clear closed caption overlays */
   if (!Stream.vid_flags.internal_reset)
@@ -1460,9 +1740,9 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-static _kernel_oserror *static_CheckHandle (stream_handle_t vsh)
+static _kernel_oserror *static_CheckHandle (mpeg_stream_handle_t vsh)
 {
-  if (vsh == (stream_handle_t) &Stream)
+  if (vsh == (mpeg_stream_handle_t) &Stream)
   {
     return NULL;
   }

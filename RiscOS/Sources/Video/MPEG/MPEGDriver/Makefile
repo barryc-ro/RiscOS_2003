@@ -48,12 +48,12 @@ C_ABSSYM = RISC_OSLib:o.c_abssym
 LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
 UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
-RAMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module     o.RecogAC3  o.RecogMPA o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS  o.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
-ROMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM  o.RecogAC3  o.RecogMPA            o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS  o.Zoran o.ZoranPara o.ZoranUcode o.ModHdr
-SOBJS    =  s.AudGeneric  s.Audio  s.CLI                                s.IRQ  s.Mess                      s.Module     s.RecogAC3  s.RecogMPA            s.Service  s.STi3520L  s.Stuffing  s.Video  s.WSS  s.Zoran                       o.ModHdr
-IOBJS    =  i.AudGeneric  i.Audio  i.CLI                                i.IRQ  i.Mess                      i.Module     i.RecogAC3  i.RecogMPA            i.Service  i.STi3520L  i.Stuffing  i.Video  i.WSS  i.Zoran                          o.ModHdr
-IOOBJS   = io.AudGeneric io.Audio io.CLI o.Clk o.Co o.DivRem64 o.Fixed io.IRQ io.Mess o.MiscAsm o.ModHdr2 io.Module    io.RecogAC3 io.RecogMPA o.ResMess io.Service io.STi3520L io.Stuffing io.Video io.WSS io.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
-DOOBJS   = do.AudGeneric do.Audio do.CLI o.Clk o.Co o.DivRem64 o.Fixed do.IRQ do.Mess o.MiscAsm o.ModHdr2 do.Module    do.RecogAC3 do.RecogMPA o.ResMess do.Service do.STi3520L do.Stuffing do.Video do.WSS do.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
+RAMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module     o.PCompos  o.RecogAC3  o.RecogMPA o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Sync  o.Video  o.WSS  o.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
+ROMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM  o.PCompos  o.RecogAC3  o.RecogMPA            o.Service  o.STi3520L  o.Stuffing  o.Sync  o.Video  o.WSS  o.Zoran o.ZoranPara o.ZoranUcode o.ModHdr
+SOBJS    =  s.AudGeneric  s.Audio  s.CLI                                s.IRQ  s.Mess                      s.Module     s.PCompos  s.RecogAC3  s.RecogMPA            s.Service  s.STi3520L  s.Stuffing  s.Sync  s.Video  s.WSS  s.Zoran    o.ModHdr
+IOBJS    =  i.AudGeneric  i.Audio  i.CLI                                i.IRQ  i.Mess                      i.Module     i.PCompos  i.RecogAC3  i.RecogMPA            i.Service  i.STi3520L  i.Stuffing  i.Sync  i.Video  i.WSS  i.Zoran                          o.ModHdr
+IOOBJS   = io.AudGeneric io.Audio io.CLI o.Clk o.Co o.DivRem64 o.Fixed io.IRQ io.Mess o.MiscAsm o.ModHdr2 io.Module    io.PCompos io.RecogAC3 io.RecogMPA o.ResMess io.Service io.STi3520L io.Stuffing io.Sync io.Video io.WSS io.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
+DOOBJS   = do.AudGeneric do.Audio do.CLI o.Clk o.Co o.DivRem64 o.Fixed do.IRQ do.Mess o.MiscAsm o.ModHdr2 do.Module    do.PCompos do.RecogAC3 do.RecogMPA o.ResMess do.Service do.STi3520L do.Stuffing do.Sync do.Video do.WSS do.Zoran o.ZoranPara o.ZoranUcode o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
 
 
 #
@@ -126,7 +126,7 @@ mccabe: irm ${IOOBJS} io o messages-${CMDHELP} ${LIBSD} ${CLIB} ${UNIXLIB}
 
 debug: drm ${DOOBJS} do o h.Debug h.Registers messages-${CMDHELP} ${LIBSD} ${CLIB}
         ${LD} -o drm.${COMPONENT} -rmf ${DOOBJS} ${LIBSD} ${CLIB}
-        ${ATTR} -files +or +ow +wr -ww $@
+        ${ATTR} -files +or +ow +wr -ww drm.${COMPONENT}
         ${RM} Messages
         @echo ${COMPONENT}: Debug module built (RAM)
 
@@ -187,7 +187,7 @@ o:
 	${MKDIR} o
 
 messages-:
-        /Tools.FAppend Messages LocalRes:Messages LocalRes:CmdHelp
+        FAppend Messages LocalRes:Messages LocalRes:CmdHelp
 
 messages-None:
         ${CP} LocalRes:Messages Messages ${CPFLAGS}

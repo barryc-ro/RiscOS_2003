@@ -36,6 +36,7 @@ Date		Who	Change
 #include "DebugLib/DebugLib.h"
 #include "MPEG/MPEGAudio.h"
 #include "MPEG/MPEGCtrl.h"
+#include "PRISM/PRISM.h"
 
 #include "AudGeneric.h"
 #include "Defs.h"
@@ -47,6 +48,7 @@ Date		Who	Change
 #include "RecogMPA.h"
 #include "Registers.h"
 #include "Stuffing.h"
+#include "Sync.h"
 #include "Types.h"
 
 #include "ZoranPara.h"
@@ -72,6 +74,7 @@ typedef struct
   unsigned int magic;
   
   control_stream_handle_t csh;
+  stream_handle_t clock_handle;
   stream_flags_t s_flags;
   reset_stream_flags_t rs_flags;
   audio_parameters_structure_t audio_parms;
@@ -602,7 +605,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, audio_parameters_structure_t *aps, stream_handle_t *return_ash)
+_kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream_handle_t csh, audio_parameters_structure_t *aps, mpeg_stream_handle_t *return_ash)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream;
@@ -627,6 +630,23 @@ _kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream
       stream->audio_parms.specifier = dc_both; /* default to playing both dual-channels unless otherwise specified */
     }
     
+    /* Start up the sync system if necessary */
+    if (stream->s_flags.video_present)
+    {
+      e = Sync_GetHandleFromCSH (stream->csh, &stream->clock_handle);
+    }
+    else
+    {
+      e = Sync_Open (stream->csh, stream->s_flags.sync_to_stream, &stream->clock_handle);
+      if (!e)
+      {
+        e = Sync_Start (stream->clock_handle);
+      }
+    }
+  }
+  
+  if (!e)
+  {
     /* Initialise various variables */
     stream->rs_flags.video_present = stream->s_flags.video_present;
     stream->rs_flags.audio_present = stream->s_flags.audio_present;
@@ -658,7 +678,7 @@ _kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream
   if (!e)
   {
     /* Return a pointer to the audio_structure_t as the audio stream handle */
-    *return_ash = (stream_handle_t) stream;
+    *return_ash = (mpeg_stream_handle_t) stream;
   }
   return e;
 }
@@ -672,7 +692,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flags, stream_handle_t ash, bitstream_packet_t *packets)
+_kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flags, mpeg_stream_handle_t ash, bitstream_packet_t *packets)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -706,7 +726,7 @@ _kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flag
       }
       for (; !e && decoder_index < decoder_index_max; decoder_index++)
       {
-        e = decoder->protocol_module->establish (0, stream, &stream->decoder_session_id);
+        e = decoder->protocol_module->establish (0, stream, stream->clock_handle, &stream->decoder_session_id);
         if (!e)
         {
           /* Success! */
@@ -818,7 +838,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, stream_handle_t ash)
+_kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, mpeg_stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -839,8 +859,16 @@ _kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, stream_handle_t 
   
   if (!e)
   {
-//    stream->s_flags.audio_present = false;
-    
+    /* Shut down the sync system */
+    e = Sync_Stop (stream->clock_handle);
+  }
+  if (!e)
+  {
+    e = Sync_Close (stream->clock_handle);
+  }
+  
+  if (!e)
+  {
     stream->magic = 0;
     free (stream);
   }
@@ -855,7 +883,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWIPlay (unsigned int flags, stream_handle_t ash)
+_kernel_oserror *AudGeneric_SWIPlay (unsigned int flags, mpeg_stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -915,7 +943,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWISetSpeed (unsigned int flags, stream_handle_t ash, unsigned int speed)
+_kernel_oserror *AudGeneric_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t ash, unsigned int speed)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -940,7 +968,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWIResetStream (reset_stream_flags_t *flags, stream_handle_t ash, unsigned int *return_discarded_data_size)
+_kernel_oserror *AudGeneric_SWIResetStream (reset_stream_flags_t *flags, mpeg_stream_handle_t ash, unsigned int *return_discarded_data_size)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -953,6 +981,19 @@ _kernel_oserror *AudGeneric_SWIResetStream (reset_stream_flags_t *flags, stream_
     stream->rs_flags = *flags;
     if (stream->s_flags.video_present == false) stream->rs_flags.video_present = false;
     if (stream->s_flags.audio_present == false) stream->rs_flags.audio_present = false;
+    
+    /* Stop and start the sync system, if necessary */
+    if (!stream->s_flags.video_present)
+    {
+      e = Sync_Stop (stream->clock_handle);
+      if (!e)
+      {
+        e = Sync_Start (stream->clock_handle);
+      }
+    }
+  }
+  if (!e)
+  {
     
     /* Read audio buffer fullnesses */
     if (stream->discarded_audio_bit_buffer_data == -1)
@@ -981,7 +1022,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWIMuteSound (unsigned int flags, stream_handle_t ash)
+_kernel_oserror *AudGeneric_SWIMuteSound (unsigned int flags, mpeg_stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -1005,7 +1046,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWISoundVolume (unsigned int flags, stream_handle_t ash, int volume, int *return_old_volume)
+_kernel_oserror *AudGeneric_SWISoundVolume (unsigned int flags, mpeg_stream_handle_t ash, int volume, int *return_old_volume)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -1041,7 +1082,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWIStats (unsigned int flags, stream_handle_t ash, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
+_kernel_oserror *AudGeneric_SWIStats (unsigned int flags, mpeg_stream_handle_t ash, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
 {
   _kernel_oserror *e = NULL;
   IGNORE(flags);
@@ -1061,7 +1102,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWISetAudioParameters0 (stream_handle_t ash, int new_state, int *return_old_state)
+_kernel_oserror *AudGeneric_SWISetAudioParameters0 (mpeg_stream_handle_t ash, int new_state, int *return_old_state)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -1090,7 +1131,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWISetAudioParameters1 (stream_handle_t ash, dual_channel_specifier new_state, dual_channel_specifier *return_old_state, audio_channel_type *return_channel_type)
+_kernel_oserror *AudGeneric_SWISetAudioParameters1 (mpeg_stream_handle_t ash, dual_channel_specifier new_state, dual_channel_specifier *return_old_state, audio_channel_type *return_channel_type)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
@@ -1143,7 +1184,7 @@ Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *AudGeneric_SWISetAudioParameters2 (stream_handle_t ash, int new_state, int *return_old_state)
+_kernel_oserror *AudGeneric_SWISetAudioParameters2 (mpeg_stream_handle_t ash, int new_state, int *return_old_state)
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;

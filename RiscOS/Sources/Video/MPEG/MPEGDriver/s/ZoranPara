@@ -42,18 +42,6 @@
         GET     VersionASM
 
 
-                GBLL    Microcode
-Microcode       SETL    {TRUE}
-
-                GBLA    PCB
-PCB             SETA    4       ; 1 = slow data / no VCXO, 2 = no I²C, 3 = main board I²C, 4 = PS2 I²C
-
-                GBLL    RnW
-RnW             SETL    {TRUE}
-
-                GBLL    SwitchPins
-SwitchPins      SETL    {TRUE}
-
 
         MACRO
 $l      ToggleLED
@@ -70,20 +58,12 @@ $l      ToggleLED
         MEND
 
 
- [ PCB >= 3
-
 ; I²C address of Zoran chip
 
 zr38601_i2c_addr *      &30
 
- ]
-
 ; FIFO size
- [ Microcode
 fifo_size       *       256
- |
-fifo_size       *       1
- ]
 
 ; Address of IRQ semaphore
 IRQsema         *       &108
@@ -120,6 +100,8 @@ Interface_Buffer        #       4
 Interface_Scheduler     #       4
 Interface_Presentation  #       4
 Interface_TopLevelHandle #      4
+Interface_Clock         #       4
+Interface_ClockHandle   #       4
 Interface_Characteriser #       4
 Interface_CharacteriserHandle # 4
 Interface_Link          #       4
@@ -128,11 +110,16 @@ Interface_GiveMeData    #       4
 Interface_Flags         #       4
 Interface_BlockQueueHead #      4
 Interface_BlockQueueTail #      4
+Interface_PRISMID       #       4
+Interface_FunctionDescriptorTable # 4
+Interface_FunctionDescriptorTableSize # 4
+Interface_Veneers       #       4
 Interface_HWInfoPrototype #     4
 Interface_HWInfo        #       4
 Interface_RomVersion    #       4
 Interface_DriverInfoPrototype # 4
 Interface_DriverInfo    #       4
+Interface_ShortInfo     #       4
 InterfaceSize           *       :INDEX: @
 
 InterfaceFlags_AC3NotMPA                        *       1 :SHL: 0
@@ -155,12 +142,17 @@ Buffer_GiveMeData       #       4
         IMPORT  Mess_GenerateError
         IMPORT  Zoran_Init
         IMPORT  Zoran_Final
+        IMPORT  Zoran_ComponentInfo
+        IMPORT  Zoran_ClockCorrection
+        IMPORT  Zoran_SpeedChange
+        IMPORT  Zoran_ActivateSyncControl
+        IMPORT  Zoran_GetBufferLength
+        IMPORT  Zoran_AdjustRate
         IMPORT  Zoran_EstablishMPA
         IMPORT  Zoran_EstablishAC3
         IMPORT  Zoran_Annul
         IMPORT  Zoran_Commence
         IMPORT  Zoran_Discontinue
-        IMPORT  Zoran_ReadSystemInfo
         IMPORT  Zoran_DataAvailable
         IMPORT  Zoran_ConsumeData
         IMPORT  Zoran_ReadFullness
@@ -191,11 +183,11 @@ Buffer_GiveMeData       #       4
 ; These are the protocol_fns_t structs that we register with AudGeneric
 
 ProtocolFunctions_MPEG
+        DCD     ZoranPara_ComponentInfo
         DCD     ZoranPara_EstablishMPA
         DCD     ZoranPara_Annul
         DCD     Zoran_Commence
         DCD     ZoranPara_Discontinue
-        DCD     ZoranPara_ReadSystemInfo
         DCD     Zoran_DataAvailable
         DCD     ZoranPara_ConsumeData
         DCD     Zoran_ReadFullness
@@ -213,11 +205,11 @@ ProtocolFunctions_MPEG
         DCD     Zoran_ReadStreamInfo
 
 ProtocolFunctions_AC3
+        DCD     ZoranPara_ComponentInfo
         DCD     ZoranPara_EstablishAC3
         DCD     ZoranPara_Annul
         DCD     Zoran_Commence
         DCD     ZoranPara_Discontinue
-        DCD     ZoranPara_ReadSystemInfo
         DCD     Zoran_DataAvailable
         DCD     ZoranPara_ConsumeData
         DCD     Zoran_ReadFullness
@@ -253,7 +245,6 @@ ZoranPara_Init
         MOV     a1, #0
         STRVar  a1, ip, InUseSemaphore, lr
 
-      [ PCB = 4
         ; Internationalise the IIC NoAck message
         SUB     sp, sp, #4*4
         MOV     r0, sp
@@ -268,7 +259,6 @@ ZoranPara_Init
         MOV     r0, sp
         SWI     XMessageTrans_CloseFile
         ADD     sp, sp, #4*4
-      ]
 
         ; Cache parallel hardware address, so we don't have to do a SWI each time we need it
         SWI     XParallel_HardwareAddress
@@ -290,7 +280,6 @@ ZoranPara_Init
         LDRB    a2, [a4, #IOMD_KBDCR]
         AND     a2, a2, #IOMD_KBDCR_Enable    ; no way to read the state of the other control bits
         STRVar  a2, ip, OldKeyboardEnable, a1 ; so just assume they were clear
-      [ PCB = 4
         MOV     a1, #0                  ; clear state machine
         STRB    a1, [a4, #IOMD_KBDCR]
         MOV     a1, #2                  ; wait for state tick
@@ -311,20 +300,11 @@ ZoranPara_Init
         MOVNE   a1, #0                  ; no, so exit without error, without registering
         BNE     %FT96
         MOV     a1, #0                  ; start in printer mode, I²C data high
-      |
-      [ PCB = 2 :LOR: PCB = 3
-        MOV     a1, #0                  ; clock line must start high (not pulled low)
-        STRVar  a1, ip, SoftCopyKBDCR, lr
-      |
-        MOV     a1, #IOMD_KBDCR_Nclock
-      ]
-      ]
         STRB    a1, [a4, #IOMD_KBDCR]
 
         ; Set up interfaces so we can talk to the Zoran chip
         BL      ActivateDongle
         TEQ     a1, #0
-      [ PCB = 4
         BEQ     %FT30
         ADRVar  a2, ip, IICNoAckError
         TEQ     a1, a2                  ; if Zoran not detected,
@@ -333,40 +313,21 @@ ZoranPara_Init
 30      MOV     a1, #InterfaceFlags_DongleFitted
         ADRVar  a2, ip, Interface
         STR     a1, [a2, #Interface_Flags]
-      |
-        Return  "v1,v2",, NE
-      ]
 
         ; Reset the Zoran chip
-      [ PCB >= 2
         MOV     a1, #0                  ; data lines must start all zero
         STRVar  a1, ip, SoftCopyData, lr
-      ]
-      [ PCB = 4
         LDRVar  v2, ip, SoftCopyCtrl
         BIC     a2, v2, #pp_ctrl_irqen :OR: pp_ctrl_init
-       ]
         LDR     lr, ParallelHardwareAddress_Indirect
         LDR     ip, [ip, lr]            ; ip = ParallelHardwareAddress
-      [ PCB >= 2
         STRB    a1, [ip, #pp_data]
-      ]
-      [ PCB <= 3
-        MOV     a2, #pp_ctrl_slctin
-      ]
         STRB    a2, [ip, #pp_ctrl]
         MOV     a1, #26                 ; 160 ticks of 12.288 MHz clock = 13 µs
         BL      WaitSemimicroseconds
-      [ PCB = 4
         STRB    v2, [ip, #pp_ctrl]
-      |
-        MOV     a2, #pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init
-        STRB    a2, [ip, #pp_ctrl]
-      ]
         MOV     a1, #3
         BL      WaitSemimicroseconds    ; 16 ticks of 12.288 MHz clock = 1.5 µs
-
- [ PCB >= 3
 
         ; Set up the PLLs in the Zoran- assume 48kHz sampling
         LDR     a1, =(6:SHL:10) :OR: (&18:SHL:5) :OR: (0:SHL:0)
@@ -403,117 +364,6 @@ PLLCFG_Params2
         DCB     0
         ALIGN
 00
-
- |
-
-        MOV     a2, #pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_strobe
-        STRB    a2, [ip, #pp_ctrl]
-      [ RnW
-        MOV     a1, #16
-        BL      WaitSemimicroseconds
-        MOV     a2, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    a2, [ip, #pp_ctrl]
-        MOV     a1, #16
-        BL      WaitSemimicroseconds
-      ]
-
-        ; Set up the PLLs in the Zoran - assume 48kHz sampling until we know otherwise
-        ; Very slowly now, we don't want to confuse the poor thing
-        MOV     a1, #&98                ; PLLTAB
-        BL      WriteByteSlowly
-        MOV     a1, #0                  ; AUDD[12:8]
-        BL      WriteByteSlowly
-        MOV     a1, #2                  ; AUDD[7:0]
-        BL      WriteByteSlowly
-        MOV     a1, #0                  ; AUDM[12:8]
-        BL      WriteByteSlowly
-      [ PCB >= 2
-        MOV     a1, #1                  ; AUDM[7:0]
-      |
-        MOV     a1, #3                  ; AUDM[7:0]
-      ]
-        BL      WriteByteSlowly
-
-
-; 33MHz
-;        MOV a1, #26
-;        BL      WriteByteSlowly
-;        MOV a1, #35
-;        BL      WriteByteSlowly
-; 66MHz
-;        MOV a1, #13
-;        BL      WriteByteSlowly
-;        MOV a1, #35
-;        BL      WriteByteSlowly
-
-; 90MHz
-        MOV     a1, #9                  ; DSPD
-        BL      WriteByteSlowly
-      [ PCB >= 2
-        MOV     a1, #33                 ; DSPM
-      |
-        MOV     a1, #66                 ; DSPM
-      ]
-        BL      WriteByteSlowly
-
-; 100MHz
-;        MOV a1, #16
-;        BL      WriteByteSlowly
-;        MOV a1, #65
-;        BL      WriteByteSlowly
-
-; 110MHz
-;        MOV a1, #13
-;        BL      WriteByteSlowly
-;        MOV a1, #58
-;        BL      WriteByteSlowly
-
-
-
-        MOV     a1, #0                  ; READ
-        BL      WriteByteSlowly
-        BL      ReadByteSlowly
-; BREG a1, "PLLTAB:", cc
-        MOV     a1, #&99                ; PLLCFG
-        BL      WriteByteSlowly
-        MOV     a1, #&03                ; Parameter 1
-        BL      WriteByteSlowly
-        MOV     a1, #0                  ; READ
-        BL      WriteByteSlowly
-        BL      ReadByteSlowly
-; BREG a1, " PLLCFG:", cc
-; MOV a1, #0
-; BL WriteByteSlowly
-; BL ReadByteSlowly
-; BREG a1, " ", cc
-        ; Wait for the PLLs to lock
-        ; Each time round the loop takes ~100µs, so 1000 times is a 0.1s timeout
-        MOV     v2, #1000
-80      MOV     a1, #&99                ; PLLCFG
-        BL      WriteByteSlowly
-        MOV     a1, #&00                ; Parameter 1
-        BL      WriteByteSlowly
-        MOV     a1, #0                  ; READ
-        BL      WriteByteSlowly
-        BL      ReadByteSlowly
-; Push "a1"
-; BREG a1, " ", cc
-; MOV a1, #0
-; BL WriteByteSlowly
-; BL ReadByteSlowly
-; BREG a1, " ", cc
-; Pull "a1"
-        AND     a1, a1, #3
-        TEQ     a1, #3
-        SUBNES  v2, v2, #1
-        BNE     %BT80
-        TEQ     v2, #0
-        BEQ     %FT90                   ; timed out
-
-        MOV     a1, #pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init
-        STRB    a1, [ip, #pp_ctrl]
-
- ]
 
         MOV     a1, #100
         BL      WaitSemimicroseconds
@@ -576,54 +426,6 @@ WaitSemimicroseconds
         BPL     %BT01
         EXIT
 
- [ PCB <= 2
-WriteByteSlowly
-        ; In: a1 = byte to write
-        ;     ip = parallel hardware address
-        ; Out: a1-a4 corrupted
-        Entry
-        STRB    a1, [ip, #pp_data]
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-        MOV     a1, #pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_strobe
-        STRB    a1, [ip, #pp_ctrl]
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-        MOV     a1, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    a1, [ip, #pp_ctrl]
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-        EXIT
-
-ReadByteSlowly
-        ; In: ip = parallel hardware address
-        ; Out: a1 = byte result
-        ;      a2-a4 corrupted
-        Entry   "v1"
-      [ RnW
-        MOV     a1, #pp_ctrl_dir :OR: pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    a1, [ip, #pp_ctrl]
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-      |
-        MOV     a1, #pp_ctrl_dir :OR: pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_autofd
-        STRB    a1, [ip, #pp_ctrl]
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-      ]
-        LDRB    v1, [ip, #pp_data]
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-        MOV     a1, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    a1, [ip, #pp_ctrl]
-      [ {TRUE};:LNOT: RnW
-        MOV     a1, #128;64;32;16
-        BL      WaitSemimicroseconds
-      ]
-        MOV     a1, v1
-        EXIT
- ]
-
 
 ; _kernel_oserror *ZoranPara_Final (void);
 
@@ -666,7 +468,6 @@ ZoranPara_Final
 
 ActivateDongle
         Entry   "a2-a4"
-      [ PCB = 4
         ; Set up everything needed in case we have to bail out (so that caller can safely call DeactivateDongle)
         MOV     a3, #IOMD_Base
         LDRB    a2, [a3, #IOCIRQMSKA]
@@ -675,7 +476,6 @@ ActivateDongle
         LDRVar  a1, ip, ParallelHardwareAddress
         LDRB    a2, [a1, #pp_ctrl]
         STRVar  a2, ip, OldParallelCtrl, lr
-      ]
 
         ; Check parallel port isn't in use
         MOV     a1, #OSFind_OpenOut :OR: open_mustopen :OR: open_nodir
@@ -698,15 +498,9 @@ ActivateDongle
         STRVar  a2, ip, OldParallelIRQBit, a1
 
         LDRVar  a1, ip, ParallelHardwareAddress
-      [ PCB = 4
         LDRVar  a2, ip, OldParallelCtrl
         BIC     a2, a2, #pp_ctrl_irqen :OR: pp_ctrl_slctin      ; I²C clock starts high, leave other lines the same until we're sure dongle is present
         STRVar  a2, ip, SoftCopyCtrl, lr        ; we need this so we can tentatively drive the slctin line without affecting any others
-      |
-        LDRB    a2, [a1, #pp_ctrl]
-        STRVar  a2, ip, OldParallelCtrl, lr
-        BIC     a2, a2, #pp_ctrl_irqen
-      ]
         STRB    a2, [a1, #pp_ctrl]
 
         MOV     a1, #IOMDr_PrinterIRQ_DevNo
@@ -717,20 +511,9 @@ ActivateDongle
 
         ; Enable printer and audio bypass lines in PS/2 interface
         MOV     a3, #IOMD_Base
-      [ PCB = 4
         MOV     a1, #IOMD_KBDCR_Ndata   ; go to audio mode, I²C data high
-      |
-      [ PCB >= 2
-        LDRVar  a1, ip, SoftCopyKBDCR
-        ORR     a1, a1, #IOMD_KBDCR_Ndata
-        STRVar  a1, ip, SoftCopyKBDCR, lr
-      |
-        MOV     a1, #IOMD_KBDCR_Ndata
-      ]
-      ]
         STRB    a1, [a3, #IOMD_KBDCR]
 
-      [ PCB = 4
         MSR     CPSR_c, a4              ; restore IRQs
 
         ; Check for Zoran's acknowledge on I²C bus
@@ -739,23 +522,13 @@ ActivateDongle
         MOV     a3, #0
         BL      IIC_Op
         EXIT    VS
-      ]
 
-      [ PCB >= 3
         ; Initialise parallel control lines (older code would do this by virtue of sending a command)
-      [ PCB = 4
         MOV     a2, #pp_ctrl_irqen :OR: pp_ctrl_init
         STRVar  a2, ip, SoftCopyCtrl, lr; byte toggle starts high, but strobe is inverting
-      |
-        MOV     a2, #pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init
-      ]
         LDRVar  a1, ip, ParallelHardwareAddress
         STRB    a2, [a1, #pp_ctrl]
-      ]
 
-      [ PCB < 4
-        MSR     CPSR_c, a4              ; restore IRQs
-      ]
         MOV     a1, #0
         EXIT
 
@@ -779,17 +552,7 @@ DeactivateDongle
 
         ; Disable printer and audio bypass lines in PS/2 interface
         MOV     a3, #IOMD_Base
-      [ PCB = 4
         MOV     a1, #0                  ; go to printer mode, I²C data high
-      |
-      [ PCB >= 2
-        LDRVar  a1, ip, SoftCopyKBDCR
-        BIC     a1, a1, #IOMD_KBDCR_Ndata
-        STRVar  a1, ip, SoftCopyKBDCR, lr
-      |
-        MOV     a1, #IOMD_KBDCR_Nclock
-      ]
-      ]
         STRB    a1, [a3, #IOMD_KBDCR]
 
         ; Hand back the parallel port
@@ -816,12 +579,8 @@ DeactivateDongle
         ; Release filing system lock
         MOV     a1, #0
         LDRVar  a2, ip, ParallelFileHandle
-      [ PCB = 4
         TEQ     a2, #0                  ; has it been initialised?
         SWINE   XOS_Find
-      |
-        SWI     XOS_Find
-      ]
         EXIT
 
 
@@ -847,32 +606,71 @@ RestoreKeyboardPort
         EXIT
 
 
-; _kernel_oserror *ZoranPara_Peek (const char *arg_string);
+; _kernel_oserror * (*componentinfo) (uint32_t tag, uintptr_t *result);
+
+ZoranPara_ComponentInfo
+        StaticBaseFromSL ip
+        ADRVar  a3, ip, Interface       ; set up necessary extra parameter
+        B       Zoran_ComponentInfo
+
+
+; _kernel_oserror *(*clockcorrection)(uint32_t flags, uint32_t decoder_handle);
+
+ZoranPara_ClockCorrection
+        StaticBaseFromSL ip
+        ADRVar  a3, ip, Interface       ; set up necessary extra parameter
+        B       Zoran_ClockCorrection
+
+
+; _kernel_oserror *(*speedchange)(uint32_t flags, uint32_t decoder_handle);
+
+ZoranPara_SpeedChange
+        StaticBaseFromSL ip
+        ADRVar  a3, ip, Interface       ; set up necessary extra parameter
+        B       Zoran_SpeedChange
+
+
+; _kernel_oserror *(*activatesynccontrol)(uint32_t flags, uint32_t decoder_handle);
+
+ZoranPara_ActivateSyncControl
+        StaticBaseFromSL ip
+        ADRVar  a3, ip, Interface       ; set up necessary extra parameter
+        B       Zoran_ActivateSyncControl
+
+
+; _kernel_oserror *(*getbufferlength)(uint32_t flags, uint32_t decoder_handle, uint32_t *length);
+
+ZoranPara_GetBufferLength
+        StaticBaseFromSL ip
+        ADRVar  a4, ip, Interface       ; set up necessary extra parameter
+        B       Zoran_GetBufferLength
+
+
+; _kernel_oserror *(*adjustrate)(uint32_t flags, uint32_t decoder_handle);
+
+ZoranPara_AdjustRate
+        StaticBaseFromSL ip
+        ADRVar  a3, ip, Interface       ; set up necessary extra parameter
+        B       Zoran_AdjustRate
+
 
         EXPORT  ZoranPara_Peek
 ZoranPara_Peek
         FunctionEntry "a1,v1"
         StaticBaseFromSL ip
-      [ PCB = 4
         ADRVar  a1, ip, Interface
         LDR     a1, [a1, #Interface_Flags]
         TST     a1, #InterfaceFlags_DongleFitted
         BEQ     StarCommandWithNoDongle
-      ]
         LDRVar  v1, ip, InUseSemaphore
         TEQ     v1, #0
         BNE     %FT01
         BL      ActivateDongle
         TEQ     a1, #0
-      [ PCB = 4
         BEQ     %FT01
         BL      DeactivateDongle
         ADD     sp, sp, #4
         Return  "v1"
-      |
-        ADDNE   sp, sp, #4
-        Return  "v1",, NE
-      ]
 01
         StaticBaseFromSL ip
         LDR     a1, [sp]
@@ -903,26 +701,19 @@ DongleNotFittedToken
 ZoranPara_Poke
         FunctionEntry "a1,v1"
         StaticBaseFromSL ip
-      [ PCB = 4
         ADRVar  a1, ip, Interface
         LDR     a1, [a1, #Interface_Flags]
         TST     a1, #InterfaceFlags_DongleFitted
         BEQ     StarCommandWithNoDongle
-      ]
         LDRVar  v1, ip, InUseSemaphore
         TEQ     v1, #0
         BNE     %FT01
         BL      ActivateDongle
         TEQ     a1, #0
-      [ PCB = 4
         BEQ     %FT01
         BL      DeactivateDongle
         ADD     sp, sp, #4
         Return  "v1"
-      |
-        ADDNE   sp, sp, #4
-        Return  "v1",, NE
-      ]
 01
         StaticBaseFromSL ip
         LDR     a1, [sp]
@@ -941,26 +732,19 @@ ZoranPara_Poke
 ZoranPara_VCXO
         FunctionEntry "a1,v1"
         StaticBaseFromSL ip
-      [ PCB = 4
         ADRVar  a1, ip, Interface
         LDR     a1, [a1, #Interface_Flags]
         TST     a1, #InterfaceFlags_DongleFitted
         BEQ     StarCommandWithNoDongle
-      ]
         LDRVar  v1, ip, InUseSemaphore
         TEQ     v1, #0
         BNE     %FT01
         BL      ActivateDongle
         TEQ     a1, #0
-      [ PCB = 4
         BEQ     %FT01
         BL      DeactivateDongle
         ADD     sp, sp, #4
         Return  "v1"
-      |
-        ADDNE   sp, sp, #4
-        Return  "v1",, NE
-      ]
 01
         StaticBaseFromSL ip
         LDR     a1, [sp]
@@ -974,7 +758,7 @@ ZoranPara_VCXO
 
 
 
-; _kernel_oserror * (*establish) (unsigned int flags, void *handle, void **session_id);
+; _kernel_oserror * (*establish) (unsigned int flags, void *handle, stream_handle_t clock_handle, void **session_id);
 
 ZoranPara_EstablishMPA
         FunctionEntry "v1"
@@ -985,8 +769,8 @@ ZoranPara_EstablishAC3
         LDR     v1, =Zoran_EstablishAC3
 10
         StaticBaseFromSL ip
-        LDRVar  a4, ip, InUseSemaphore
-        TEQ     a4, #0                  ; already in use?
+        LDRVar  lr, ip, InUseSemaphore
+        TEQ     lr, #0                  ; already in use?
         ADRNE   a1, InUseError
         Return  "v1",, NE               ; exit if so
 
@@ -994,25 +778,21 @@ ZoranPara_EstablishAC3
         Push    "a1"
         BL      ActivateDongle
         TEQ     a1, #0
-      [ PCB = 4
         BEQ     %FT20
         BL      DeactivateDongle
         ADD     sp, sp, #4
         Return  "v1"                     ; pass back any error
 20
-      |
-        ADDNE   sp, sp, #1*4
-        Return  "v1",, NE                ; pass back any error
-      ]
 
         ; Exchange handles
-        ADRVar  a4, ip, Interface
-        STR     a2, [a4, #Interface_TopLevelHandle]
-        STR     a4, [a3]
+        ADRVar  lr, ip, Interface
+        STR     a2, [lr, #Interface_TopLevelHandle]
+        STR     lr, [a4]
 
         ; Call generic code
         Pull    "a1"
-        MOV     a2, a4
+        MOV     a2, a3
+        MOV     a3, lr
         MOV     lr, pc
         MOV     pc, v1                  ; call Zoran_EstablishMPA or Zoran_EstablishAC3
         StaticBaseFromSL ip
@@ -1070,26 +850,8 @@ ZoranPara_Discontinue
         STRB    a2, [a3, #IOCIRQMSKA]
         MSR     CPSR_c, a4              ; restore IRQs and FIQs
 
- [ :LNOT: Microcode
-        ; Release TickerV
-        StaticBaseFromSL ip
-        MOV     a1, #TickerV
-        ADR     a2, TickerHandler
-        LDRVar  a3, ip, Module_PrivateWord
-        LDR     a3, [a3]
-        SWI     XOS_Release
- ]
-
         MOV     a1, #0
         Return                          ; exit with a1=0
-
-
-; _kernel_oserror * (*readsysteminfo) (unsigned int tag, unsigned int *result);
-
-ZoranPara_ReadSystemInfo
-        StaticBaseFromSL ip
-        ADRVar  a3, ip, Interface       ; set up necessary extra parameter
-        B       Zoran_ReadSystemInfo
 
 
 ; _kernel_oserror * (*consumedata) (unsigned int flags, void *session_id, unsigned char *start, unsigned int length, unsigned int *not_consumed);
@@ -1100,7 +862,6 @@ ZoranPara_ConsumeData
         BNE     %FT50
 
         ; Normal decoding case: send to hardware
- [ PCB >= 2
         FunctionEntry
         StaticBaseFromSL ip
         LDRVar  a2, ip, StuffingBytesRemaining
@@ -1115,48 +876,6 @@ ZoranPara_ConsumeData
         BLNE    IntConsumeData
         MOV     a1, #0                  ; no error
         Return
- |
-        FunctionEntry "v1,v2,v3,v4,v6,sl,fp"
-        StaticBaseFromSL v6             ; R9 = static base
-        LDRVar  sl, v6, ParallelHardwareAddress ; R10 = parallel base
-        LDRVar  a1, v6, StuffingBytesRemaining
-        SUBS    v4, a4, a1
-        MOVMI   v4, #0                  ; v4 = amount available that won't fit into fifo
-        SUBS    a1, a4, v4              ; R0 = bytes we're actually going to transfer
-        BEQ     %FT49
-        MOV     a2, a3                  ; R1 = address pointer
-        MOV     a3, #0
-        STRVar  a3, v6, Aborted, lr     ; clear aborted flag
-
-        LDR     v1, ParallelSemaphore_Indirect
-        MRS     v2, CPSR
-        MOV     v3, a4                  ; keep original length in case we're aborted
-        ORR     lr, v2, #I32_bit
-        MSR     CPSR_c, lr              ; IRQs off
-        ADR     lr, SendBlock_return_address
-        STR     lr, [v6, v1]            ; set the semaphore
-        B       SendBlock               ; do the transfer
-SendBlock_return_address
-        MOV     a1, #0
-        STR     a1, [v6, v1]            ; clear the semaphore
-        MSR     CPSR_c, v2
-        LDRVar  a1, v6, Aborted
-        LDR     lr, [sp, #8*4]          ; retrieve not_consumed pointer
-        TEQ     a1, #0
-        STRNE   v3, [lr]
-        STREQ   v4, [lr]
-        LDRVar  a1, v6, StuffingBytesRemaining, EQ
-        SUBEQ   a1, a1, v3 ; take off the amount available
-        ADDEQ   a1, a1, v4 ; put back the amount available that won't fit (not using SUBS above allows us to keep using condition flags)
-        STRVar  a1, v6, StuffingBytesRemaining, lr, EQ
-        MOV     a1, #0                  ; no error
-        Return  "v1,v2,v3,v4,v6,sl,fp"
-
-49      LDR     lr, [sp, #8*4]          ; retrieve not_consumed pointer
-        STR     a4, [lr]                ; nothing consumed (either length or StuffingBytesRemaining was 0)
-        MOV     a1, #0                  ; no error
-        Return  "v1,v2,v3,v4,v6,sl,fp"
- ]
 
 50      ; Normal characterising case: send to recogniser via the generic Zoran code
         TST     ip, #InterfaceFlags_Characterising
@@ -1177,11 +896,7 @@ ZoranPara_UnmaskStuffingIRQ
         StaticBaseFromSL ip
 
         ; State initialisation
- [ Microcode
         MOV     a1, #0                  ; don't send anything before the first interrupt
- |
-        MOV     a1, #fifo_size          ; FIFO is initially empty and must be serviced from TickerV
- ]
         STRVar  a1, ip, StuffingBytesRemaining, lr
 
         ; Unmask parallel IRQs
@@ -1194,15 +909,6 @@ ZoranPara_UnmaskStuffingIRQ
         STRB    a2, [a3, #IOCIRQMSKA]
         MSR     CPSR_c, a4              ; restore IRQs and FIQs
 
- [ :LNOT: Microcode
-        ; Claim TickerV
-        MOV     a1, #TickerV
-        ADR     a2, TickerHandler
-        LDRVar  a3, ip, Module_PrivateWord
-        LDR     a3, [a3]
-        SWI     XOS_Claim
- ]
-
      Push "r0,r1"
      MOV     r0, #IOMD_Base
      MOV     r1, #IOMDr_printer_IRQ_bit
@@ -1212,7 +918,6 @@ ZoranPara_UnmaskStuffingIRQ
        Return
 
 
- [ Microcode
 
         ; IRQs are disabled on entry to ParallelIRQHandler
 ParallelIRQHandler
@@ -1301,117 +1006,6 @@ ParallelIRQHandler
         RestPSR r1              ; back to original processor mode
         EXIT
 
- |
-
-        ; IRQs are disabled on entry to both TickerHandler and ParallelIRQHandler
-TickerHandler
-        Entry   "r0-r1, r9"
-        StaticBaseFromWP r9, r12
-        ; Set and check semaphore, exit if set
-        ADRVar  r1, r9, StuffingSemaphore
-        MOV     r0, #1
-        SWP     r0, r0, [r1]
-        TEQ     r0, #0
-        EXIT    NE
-        ; We can write the remaining part of the FIFO, if any
-        LDRVar  r0, r9, StuffingBytesRemaining
-        TEQ     r0, #0
-        MOVEQ   r0, #fifo_size
-        STRVar  r0, r9, StuffingBytesRemaining, lr, EQ
-        B       CommonStuffingCode
-TickerHandler_Abort
-        MOV     r0, #0
-        STRVar  r0, r9, StuffingSemaphore, lr
-        EXIT
-
-ParallelIRQHandler
-        ALTENTRY
-        StaticBaseFromWP r9, r12
-        ; Always acknowledge the interrupt
-        MOV     r0, #IOMD_Base
-        MOV     r1, #IOMDr_printer_IRQ_bit
-        STRB    r1, [r0, #IOCIRQCLRA]
-        ; Set and check semaphore, exit if set
-        ADRVar  r1, r9, StuffingSemaphore
-        MOV     r0, #1
-        SWP     r0, r0, [r1]
-        TEQ     r0, #0
-        EXIT    NE
-        ; We can write a whole FIFO full
-        MOV     r0, #fifo_size
-        STRVar  r0, r9, StuffingBytesRemaining, lr
-        ; drop through...
-CommonStuffingCode
-        ; Drop into SVC mode and set up APCS module environment
-        WritePSRc I_bit+SVC_mode, lr,, r1
-        Push    "r1-r8, r10-r11, lr_svc"
-        MOV     sl, sp, LSR #20
-        MOV     sl, sl, LSL #20
-        LDMIA   sl, {v1, v2}
-        Push    "v1, v2"
-        LDMIB   r12, {v1, v2}
-        STMIA   sl, {v1, v2}
-        ADD     sl, sl, #540
-        MOV     fp, #0
-
-        MOV     v5, r0                  ; amount left in fifo
-
-        MOV     a1, #0
-        BL      ZoranPara_CompleteInterruptedOp
-
-        LDRVar  v1, v6, ParallelHardwareAddress
-        ADRVar  v2, v6, Interface
-        LDR     v3, [v2, #Interface_TopLevelHandle]
-        ; Check some data is available
-        SUB     sp, sp, #4
-        MOV     a1, #0
-        MOV     a2, v3
-        MOV     a3, #fifo_size
-        MOV     a4, sp
-        MOV     lr, pc
-        LDR     pc, [v2, #Interface_HowMuchData]
-        Pull    "v4"                    ; v4 = amount available to be stuffed
-        TEQ     v4, #0
-        BEQ     %FT90
-01
-        CMP     v5, v4
-        MOVHI   v5, v4                  ; v5 = amount that will be stuffed this time round loop
-        ; Fetch some data
-        MOV     a1, #1                  ; wrap in PES packets
-        MOV     a2, v3
-        MOV     lr, pc
-        LDR     pc, [v2, #Interface_GiveMeData] ; call the appropriate givemedata()
-
-        ; Read IRQ status line (actually active high, rather than combo chip's rising edge)
-        LDRB    lr, [v1, #pp_stat]
-        ADDS    lr, lr, #pp_stat_ack    ; toggle ack bit and clear C flag
-        TST     lr, #pp_stat_ack        ; EQ => interrupting
-        ; If line still asserted, then ack IRQ again in case it wiggled since last time
-        MOVEQ   a2, #IOMD_Base
-        MOVEQ   a3, #IOMDr_printer_IRQ_bit
-        STREQB  a3, [a2, #IOCIRQCLRA]
-        ; If line still asserted *and* givemedata() was successful *and* data still available to be stuffed, then loop
-        TEQEQ   a1, #0                  ; no error?
-        SUBEQS  v4, v4, v5              ; see how much data is left available to stuff
-        MOVHI   v5, #fifo_size          ; HI = C set and Z clear (C set => SUBEQS was executed)
-        STRVar  v5, v6, StuffingBytesRemaining, lr, HI
-        BHI     %BT01
-
-90      ; Clear semaphore
-        MOV     a1, #0
-        STRVar  a1, v6, StuffingSemaphore, lr
-        ; Tidy up and exit
-        Pull    "v1, v2"
-        SUB     sl, sl, #540
-        STMIA   sl, {v1, v2}
-        Pull    "r1-r8, r10-r11, lr_svc"
-        RestPSR r1              ; back to original processor mode
-        EXIT
-
- ]
-
-
- [ Microcode
 
 ; Internal APCS routine to send data unconditionally
 
@@ -1420,18 +1014,13 @@ CommonStuffingCode
 ; Out: a1 nonzero => aborted
 
 IntConsumeData
- [ PCB >= 2
         TEQ     a1, #0
         MOVEQ   pc, lr
         FunctionEntry "v1,v2"
         StaticBaseFromSL ip
 ; ToggleLED
         LDRVar  a3, ip, SoftCopyData
-      [ PCB = 4
         LDRVar  a4, ip, SoftCopyCtrl
-      |
-        LDRVar  a4, ip, SoftCopyKBDCR
-      ]
         LDRVar  v1, ip, ParallelHardwareAddress
         MOV     ip, #IOMD_Base
         TST     a1, #1
@@ -1442,80 +1031,27 @@ IntConsumeData
 ; MOV lr, #&42
         TEQ     lr, a3
 ;  TEQ r0,r0
-      [ PCB = 4
-      [ SwitchPins
         EOREQ   a4, a4, #pp_ctrl_strobe
-      |
-        EOREQ   a4, a4, #pp_ctrl_slctin
-      ]
         STREQB  a4, [v1, #pp_ctrl]
         STRNEB  lr, [v1, #pp_data]
-      |
-        EOREQ   a4, a4, #IOMD_KBDCR_Nclock
-        STREQB  a4, [ip, #IOMD_KBDCR]           ; if byte repeat, toggle PS/2 clock line
-;        EOREQ   v2, a4, #IOMD_KBDCR_Nclock      ; invert bit to make conditionals work!
-;        TSTEQ   v2, #IOMD_KBDCR_Nclock          ; if PS/2 line now open drain (not forced low) we need to insert a dummy B-cycle to allow it to rise
-;        STRNE   lr, [v1, #pp_data]              ; if a different byte, then write it; if a dummy B-cycle then write unchanged value to the data register
-      STR   lr, [v1, #pp_data]              ; if a different byte, then write it; if a dummy B-cycle then write unchanged value to the data register
-      ]
 15
         LDRB    a3, [a2], #1
 ; MOV a3, #&42
         TEQ     a3, lr
 ;  TEQ r0,r0
-      [ PCB = 4
-      [ SwitchPins
         EOREQ   a4, a4, #pp_ctrl_strobe
-      |
-        EOREQ   a4, a4, #pp_ctrl_slctin
-      ]
         STREQB  a4, [v1, #pp_ctrl]
         STRNEB  a3, [v1, #pp_data]
-      |
-        EOREQ   a4, a4, #IOMD_KBDCR_Nclock
-        STREQB  a4, [ip, #IOMD_KBDCR]           ; if byte repeat, toggle PS/2 clock line
-;        EOREQ   v2, a4, #IOMD_KBDCR_Nclock      ; invert bit to make conditionals work!
-;        TSTEQ   v2, #IOMD_KBDCR_Nclock          ; if PS/2 line now open drain (not forced low) we need to insert a dummy B-cycle to allow it to rise
-;        STRNE   a3, [v1, #pp_data]              ; if a different byte, then write it; if a dummy B-cycle then write unchanged value to the data register
-      STR   a3, [v1, #pp_data]              ; if a different byte, then write it; if a dummy B-cycle then write unchanged value to the data register
-      ]
 
         SUBS    a1, a1, #2
         BGT     %BT10
 20
         StaticBaseFromSL ip
         STRVar  a3, ip, SoftCopyData, lr
-      [ PCB = 4
         STRVar  a4, ip, SoftCopyCtrl, lr
-      |
-        STRVar  a4, ip, SoftCopyKBDCR, lr
-      ]
 ; ToggleLED
         MOV     a1, #0
         Return  "v1,v2"
- |
-        FunctionEntry "v1,v2,v6,sl,fp"
-        StaticBaseFromSL v6             ; R9 = static base
-        LDRVar  sl, v6, ParallelHardwareAddress ; R10 = parallel base
-        MOV     a3, #0
-        STRVar  a3, v6, Aborted, lr     ; clear aborted flag
-
-        LDR     v1, ParallelSemaphore_Indirect
-        MRS     v2, CPSR
-        ORR     lr, v2, #I32_bit
-        MSR     CPSR_c, lr              ; IRQs off
-        ADR     lr, SendBlock_IntConsumeData_return_address
-        STR     lr, [v6, v1]
-
-        B       SendBlock               ; do the transfer
-SendBlock_IntConsumeData_return_address
-        MOV     a1, #0
-        STR     a1, [v6, v1]            ; clear the semaphore
-        MSR     CPSR_c, v2
-        LDRVar  a1, v6, Aborted
-        Return  "v1,v2,v6,sl,fp"
- ]
- ]
 
 
 ; extern void ZoranPara_Command (unsigned int flags, const char *parameters, char *response);
@@ -1526,8 +1062,6 @@ SendBlock_IntConsumeData_return_address
 ; Executes for the most part in the same IRQ disable state as is set on entry
 
 ZoranPara_Command
- [ PCB >= 3
-   [ {TRUE}
         FunctionEntry
         MOV     lr, a1
         AND     a4, lr, #&1F
@@ -1551,115 +1085,6 @@ ZoranPara_Command
         BL      IIC_OpV
         ADD     sp, sp, #4*13
         Return
-   |
-        FunctionEntry "a2-a3"
-
-        MOV     a4, a1
-        MOV     lr, #&1F
-        AND     a1, lr, a4, LSR #5
-        ADD     a1, a1, #&80
-        Push    "a1"
-        MOV     r0, #zr38601_i2c_addr
-        MOV     r1, sp
-        MOV     r2, #1
-      [ PCB = 4
-        BL      IIC_Op
-      |
-        SWI     XIIC_Control
-      ]
-        ADD     sp, sp, #4
-
-        MOV     r0, #zr38601_i2c_addr
-        Pull    "r1"
-        MOV     r2, a4, LSR #10
-      [ PCB = 4
-        BL      IIC_Op
-      |
-        SWI     XIIC_Control
-      ]
-
-        SUB     sp, sp, #4
-        MOV     r0, #zr38601_i2c_addr :OR: 1
-        MOV     r1, sp
-        MOV     r2, #2
-      [ PCB = 4
-        BL      IIC_Op
-      |
-        SWI     XIIC_Control
-      ]
-        ADD     sp, sp, #4
-
-        MOV     r0, #zr38601_i2c_addr :OR: 1
-        Pull    "r1"
-        AND     r2, a4, #&1F
-      [ PCB = 4
-        BL      IIC_Op
-      |
-        SWI     XIIC_Control
-      ]
-
-        Return
-   ]
- |
-        FunctionEntry "v1,v2,v6,sl,fp"
-        StaticBaseFromSL v6             ; R9 = static base
-
- Push "a1-a4,v1,v2,ip"
- MOV a2, #&1F
- AND a1, a2, a1, LSR #5
- ADD a1, a1, #&80
- IMPORT DWrite_WriteHex2
- BL DWrite_WriteHex2
- LDMIA sp, {a1-a4}
- MOV v1, a2
- MOV v2, a1, LSR #10
- TEQ v2, #0
- BEQ %FT02
- ADD v2, v1, v2
-01
- LDRB a1, [v1], #1
- BL DWrite_WriteHex2
- CMP v1, v2
- BLT %BT01
-02
- LDMIA sp,{a1-a4,v1,v2,ip}
-
-        MOV     ip, a1                  ; R12 = flags
-        LDRVar  sl, v6, ParallelHardwareAddress ; R10 = parallel base
-
-        LDR     v1, ParallelSemaphore_Indirect
-        MRS     v2, CPSR
-        ORR     lr, v2, #I32_bit
-        MSR     CPSR_c, lr              ; IRQs off
-        ADR     lr, Command_return_address
-        STR     lr, [v6, v1]            ; set the semaphore
-
-        B       Command
-Command_return_address
-        MOV     a1, #0
-        STR     a1, [v6, v1]            ; clear the semaphore
-        MSR     CPSR_c, v2
-
- LDMIA sp,{a1-a4,v1,v2,ip}
- LDR sl, [sp, #4*10]
- MOV v1, a3
- AND v2, a1, #&1F
- TEQ v2, #0
- BEQ %FT02
- ADD v2, v1, v2
-01
- LDRB a1, [v1], #1
- BL DWrite_WriteHex2
- CMP v1, v2
- BLT %BT01
-02
- MOV a1, #'.'
- IMPORT DWrite_WriteC
- BL DWrite_WriteC
- Pull "a1-a4,v1,v2,ip"
-
-        Return  "v1,v2,v6,sl,fp"
- ]
 
 
 ; extern void ZoranPara_CompleteInterruptedOp (bool abort);
@@ -1669,238 +1094,10 @@ Command_return_address
 ; ** For God's sake remember to change this if you change the register list in Kernel.s.NewIRQs!
 
 ZoranPara_CompleteInterruptedOp
- [ PCB >= 3
         MOV     pc, lr
- |
-        FunctionEntry "v1,v6"
-        StaticBaseFromSL v6             ; R9 = static base
-        MOV     ip, a1
-
-        ; Check our semaphore
-        LDR     v1, ParallelSemaphore_Indirect
-        MRS     a4, CPSR
-        ORR     a3, a4, #I32_bit :OR: 1:SHL:4 ; IRQs off and force 32-bit mode
-        MSR     CPSR_c, a3
-        LDR     a1, [v6, v1]
-        TEQ     a1, #0                  ; semaphore set?
-01      MSREQ   CPSR_c, a4              ; no, so quick exit
-        Return  "v1,v6",, EQ
-
-; Push "a1-a4,ip,lr"
-; MOV a1, #'x'
-; IMPORT DWrite_WriteC
-; BL DWrite_WriteC
-; Pull "a1-a4,ip,lr"
-        ; Locate interrupted code on IRQ stack
-        MOV     a3, #IRQsema
-02      LDR     a3, [a3]
-        TEQ     a3, #0
-        BEQ     %BT01                   ; shouldn't happen, but if we can't find code, exit
-        LDR     a2, [a3, #4*8]          ; interrupted PC
-        RSB     lr, pc, a2
-        CMP     lr, #interrupt_protected_end - 4 - CompleteInterruptedOp_pc_reference
-CompleteInterruptedOp_pc_reference      ; must be 8 bytes after the RSB lr,pc,a2
-        RSBLES  lr, lr, #interrupt_protected_start - CompleteInterruptedOp_pc_reference
-        BGT     %BT02
-
-        ; Mark the foreground operation as complete, then actually complete it
-        Push    "a4,v2,sl,fp"
-        ADR     lr, CompleteInterruptedOp_return_address
-        STR     lr, [v6, v1]            ; set up our own semaphore, in case another interrupt happens
-        STR     a1, [a3, #4*8]          ; poke IRQ stack so as to return to old semaphore
-        LDR     a1, [a3, #4*6]          ; get interrupted CPSR
-        TST     a4, #I32_bit            ; if IRQs were off on entry to CompleteInterruptedOp
-        ORRNE   a1, a1, #I32_bit        ;   then don't open an interrupt hole
-        MSR     SPSR_cxsf, a1           ; stick it in SPSR (okay, because IRQs are off)
-        MOV     a1, #I32_bit :OR: SVC32_mode ; (SVC32 is available on all processors)
-        STR     a1, [a3, #4*6]          ; ensure IRQs are off when we return to foreground
-        MOV     v2, a2                  ; move interrupted PC to a safe register
-        TEQ     ip, #0                  ; are we aborting?
-        LDREQ   a1, [a3, #4*7]          ; retrieve interrupted R0 if not
-        MOVNE   a1, #0                  ; else zero R0
-        LDMIB   a3, {a2-a4, fp, ip}     ; retrieve interrupted R1-R3, R11, R12
-        LDRVar  sl, v6, ParallelHardwareAddress ; R10 = parallel base
-        MOVS    pc, v2                  ; copy SPSR to CPSR and jump back to interrupted code
-CompleteInterruptedOp_return_address
-        MOV     a1, #0
-        Pull    "a4,v2,sl,fp"
-        MSR     CPSR_c, a4              ; restore entry IRQ disable state and 26/32-bitness
-        Return  "v1,v6"
- ]
-
-
- [ PCB <= 2
-interrupt_protected_start
-
-        MACRO
-        Rpt     $instruction, $times
-        LCLA    Times
-      [ "$times" = ""
-Times   SETA    1
-      |
-Times   SETA    $times
-      ]
-        WHILE   Times > 0
-        $instruction
-Times   SETA    Times - 1
-        WEND
-        MEND
-
-; Command - execute a Zoran command
-;
-;   On entry:
-;               R1 -> parameters
-;               R2 -> response buffer
-;               R5 = CPSR to execute routine with
-;               R9 = static base
-;               R10 = parallel base
-;               R12 = flags
-;               R14 = return address (not including any PSR bits)
-;               SVC mode, IRQs disabled
-;   During routine:
-;               R1, R2, R3, R11, R12 are the only available general-purpose registers
-;               R9, R10 must not be modified (may randomly be reset to static and parallel bases)
-;               R14 always contains the return address, though it may change during the function
-;               CPSR flag bits are not volatile
-;               Other registers are volatile and must not be used (no stack is available)
-;   On exit:
-;               Must exit in SVC32 mode with IRQs disabled
-;               Registers ignored
-
-Command ROUT
-        MSR     CPSR_c, R5
-
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    R11, [R10, #pp_ctrl]
-
-        ; Write opcode byte
-        MOV     R3, #&1F
-        AND     R3, R3, R12, LSR #5     ; extract opcode bits
-        ADD     R3, R3, #&80
-        STRB    R3, [R10, #pp_data]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_strobe
-        STRB    R11, [R10, #pp_ctrl]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    R11, [R10, #pp_ctrl]
-        STRB    R11, [R10, #pp_ctrl]
-        STRB    R11, [R10, #pp_ctrl]
-;      MOV R3, #2400 ; 1ms
-;00    STRB R11, [R10, #pp_ctrl]
-;      SUBS R3, R3, #1
-;      BNE %BT00
-
-        ; Write parameter bytes
-01      SUBS    R12, R12, #1 :SHL: 10
-        BCC     %FT02
-        LDRB    R3, [R1], #1
-        STRB    R3, [R10, #pp_data]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_strobe
-        STRB    R11, [R10, #pp_ctrl]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    R11, [R10, #pp_ctrl]
-        STRB    R11, [R10, #pp_ctrl]
-        STRB    R11, [R10, #pp_ctrl]
-;      MOV R3, #2400 ; 1ms
-;00    STRB R11, [R10, #pp_ctrl]
-;      SUBS R3, R3, #1
-;      BNE %BT00
-        B       %BT01
-02      MOV     R12, R12, LSL #27
-
-        ; Write READ command bytes and read response bytes
-        MOV     R1, #0
-03      SUBS    R12, R12, #1 :SHL: 27
-        BCC     %FT04
-        STRB    R1, [R10, #pp_data]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_strobe
-        STRB    R11, [R10, #pp_ctrl]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    R11, [R10, #pp_ctrl]
-        STRB    R11, [R10, #pp_ctrl]
-        STRB    R11, [R10, #pp_ctrl]
-;      MOV R3, #2400 ; 1ms
-;00    STRB R11, [R10, #pp_ctrl]
-;      SUBS R3, R3, #1
-;      BNE %BT00
-
-      [ RnW
-        MOV     R11, #pp_ctrl_dir :OR: pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    R11, [R10, #pp_ctrl]
-      |
-        MOV     R11, #pp_ctrl_dir :OR: pp_ctrl_irqen :OR: pp_ctrl_init :OR: pp_ctrl_autofd
-        STRB    R11, [R10, #pp_ctrl]
-      ]
-        LDRB    R3, [R10, #pp_data]
-  LDRB    R3, [R10, #pp_data]
-  LDRB    R3, [R10, #pp_data]
-        STRB    R3, [R2], #1
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_init
-        STRB    R11, [R10, #pp_ctrl]
-        B       %BT03
-
-
-04
-      [ PCB = 2
-        LDRVar  R11, R9, SoftCopyData
-        STRB    R11, [R10, #pp_data]
-      ]
-        MOV     R11, #pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init
-        MOV     R1, #240;;;;;;;;;;;;;;;;;;24                 ; we need 10µs delay between commands, so insert an extra 23 B-cycles
-05      STRB    R11, [R10, #pp_ctrl]
-        SUBS    R1, R1, #1
-        BNE     %BT05
-
-        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
-        MOV     PC, R14
- ]
-
-
- [ PCB = 1
-; SendBlock - send contiguous block of data to the Zoran data port
-;
-;   On entry:
-;               R0 = maximum number of transfers to attempt
-;               R1 = pointer to byte to start from
-;               R5 = CPSR to execute routine with
-;               R9 = static base
-;               R10 = parallel base
-;               R14 = return address (not including any PSR bits)
-;               SVC mode, IRQs disabled
-;   During routine:
-;               R0 = remaining number of transfers to attempt (may be zeroed in the background if
-;                 the operation is aborted)
-;               R1, R2, R3, R11, R12 are the only available general-purpose registers
-;               R9, R10 must not be modified (may randomly be reset to static and parallel bases)
-;               R14 always contains the return address, though it may change during the function
-;               CPSR flag bits are not volatile
-;               Other registers are volatile and must not be used (no stack is available)
-;   On exit:
-;               Must exit in SVC32 mode with IRQs disabled
-;               Registers ignored
-
-SendBlock ROUT
-        MSR     CPSR_c, R5
-
-10      LDRB    R3, [R1], #1
-        STRB    R3, [R10, #pp_data]
-        MOV     R3, #pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init :OR: pp_ctrl_strobe
-        STRB    R3, [R10, #pp_ctrl]
-        MOV     R3, #pp_ctrl_irqen :OR: pp_ctrl_slctin :OR: pp_ctrl_init
-        STRB    R3, [R10, #pp_ctrl]
-        SUBS    R0, R0, #1
-        BGT     %BT10
-
-        MSR     CPSR_c, #I32_bit :OR: SVC32_mode
-        MOV     PC, R14
- ]
-
- [ PCB <= 2
-interrupt_protected_end
- ]
 
 
 
- [ PCB = 4
 ; IIC code shamelessly copied from HAL (Kernel-5_35-4_79_2_47)
 
 
@@ -2225,9 +1422,7 @@ IICDoOp ROUT
 
 80
      iicBL      Stop
-      [ PCB = 4
         ADRVar  R0, R9, IICNoAckError   ; don't internationalise here for MessageTrans re-entrancy reasons
-      ]
         SETV
         ADD     iicsp, iicsp, #8        ; skip junk on stack
      iicPull    "pc"
@@ -2256,13 +1451,8 @@ SetC1C0 ROUT
         MSR     CPSR_c, r8
         TST     r1, #1          ; clock high?
         LDRVar  r1, r9, SoftCopyCtrl
-      [ SwitchPins
         ORREQ   r1, r1, #pp_ctrl_slctin
         BICNE   r1, r1, #pp_ctrl_slctin
-      |
-        ORREQ   r1, r1, #pp_ctrl_strobe
-        BICNE   r1, r1, #pp_ctrl_strobe
-      ]
         STRB    r1, [r0, #pp_ctrl]
         STRVar  r1, r9, SoftCopyCtrl, r3
         MSR     CPSR_c, r7
@@ -2597,8 +1787,6 @@ RXByte	ROUT
 interrupt_protected_end
 
 
- ] ; PCB = 4 (IIC code)
-
 
 ; Static variable indirection table
 ; ---------------------------------
@@ -2609,27 +1797,27 @@ interrupt_protected_end
         LocalVar ParallelHardwareAddress
         LocalVar OldKeyboardIRQBits
         LocalVar OldKeyboardEnable
- [ PCB = 2 :LOR: PCB = 3
-        LocalVar SoftCopyKBDCR
- ]
- [ PCB = 4
         LocalVar SoftCopyCtrl
- ]
- [ PCB >= 2
         LocalVar SoftCopyData
- ]
         LocalVar ParallelFileHandle
         LocalVar OldParallelIRQBit
         LocalVar OldParallelCtrl
         LocalVar ParallelSemaphore
         LocalVar Aborted
- [ :LNOT: Microcode
-        LocalVar StuffingSemaphore
- ]
         LocalVar StuffingBytesRemaining
- [ PCB = 4
         LocalVar IICNoAckError
- ]
+
+
+; Some const strings
+; ------------------
+
+HWInfoPrototype                         ; printf format
+        =       "Zoran ZR38601 (ROM %08X) parallel port dongle", 0
+DriverInfoPrototype
+        =       Module_ComponentName, " ", Module_HelpVersion, " microcode ", 34, "%s", 34, 0
+ShortInfo
+        =       "AC-3 Dongle Driver ", Module_HelpVersion, " © Pace ", Module_Date :RIGHT: 4, 0
+        ALIGN
 
 
         AREA    |Asm$$Data|, DATA
@@ -2656,11 +1844,18 @@ Interface                               ; struct to pass to generic Zoran code
         DCD     0
         DCD     0
         DCD     0
+        DCD     0
+        DCD     0
+        DCD     &0300A002               ; PRISM ID
+        DCD     FunctionDescriptorTable
+        DCD     (FunctionDescriptorTableEnd - FunctionDescriptorTable) / 8
+        DCD     0
         DCD     HWInfoPrototype
         DCD     0
         DCD     0
         DCD     DriverInfoPrototype
         DCD     0
+        DCD     ShortInfo
         ASSERT  .-Interface = InterfaceSize
 InUseSemaphore
         DCD     0                       ; nonzero => decoder in use
@@ -2670,18 +1865,10 @@ OldKeyboardIRQBits
         DCD     0                       ; original keyboard bits in IRQMSKB
 OldKeyboardEnable
         DCD     0                       ; original keyboard enable bit in KBDCR
- [ PCB = 2 :LOR: PCB = 3
-SoftCopyKBDCR
-        DCD     0                       ; because the register is write-only
- ]
- [ PCB = 4
 SoftCopyCtrl
         DCD     0                       ; soft copy of ctrl register (irqen/init set, slctin toggling), for speed
- ]
- [ PCB >= 2
 SoftCopyData
         DCD     0                       ; for speed
- ]
 ParallelFileHandle
         DCD     0                       ; file handle we lock parallel: with
 OldParallelIRQBit
@@ -2692,23 +1879,29 @@ ParallelSemaphore
         DCD     0                       ; address to poke into IRQ stack if threaded, else 0
 Aborted
         DCD     0                       ; whether the current SendPacket was aborted
- [ :LNOT: Microcode
-StuffingSemaphore
-        DCD     0                       ; whether a stuffing IRQ (parallel or ticker) is threaded
- ]
 StuffingBytesRemaining
         DCD     0                       ; space in FIFO (for resumption of stuffing after underrun)
- [ PCB = 4
 IICNoAckError
         %       256                     ; internationalised error block
- ]
 
 
-HWInfoPrototype                         ; printf format
-        =       "Zoran ZR38601 (ROM %08X) parallel port dongle", 0
-DriverInfoPrototype
-        =       Module_ComponentName, " ", Module_HelpVersion, " microcode ", 34, "%s", 34, 0
-        ALIGN
+; Table for passing to PRISM_CreateVeneers
+; ----------------------------------------
+
+FunctionDescriptorTable
+        DCD     ZoranPara_ComponentInfo
+        DCD     0
+        DCD     ZoranPara_ClockCorrection
+        DCD     0
+        DCD     ZoranPara_SpeedChange
+        DCD     0
+        DCD     ZoranPara_ActivateSyncControl
+        DCD     0
+        DCD     ZoranPara_GetBufferLength
+        DCD     0
+        DCD     ZoranPara_AdjustRate
+        DCD     0
+FunctionDescriptorTableEnd
 
 
         END
