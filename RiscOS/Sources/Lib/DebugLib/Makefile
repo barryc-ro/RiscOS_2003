@@ -57,7 +57,7 @@ TRACELIBZM	= libs.t_m_pl
 
 INCLUDES	= -Itbox:,C:
 DFLAGS		=
-
+#DFLAGS		= -g
 
 # ------------------------------------------------------------------------------
 # Program specific options:
