@@ -32,11 +32,13 @@ WFLAGS  = ~cr~v
 #
 COMPONENT = Messages
 SOURCE    = s.Messages
-TARGET    = rm.${SYSTEM}.Messages
-RESDIR    = Resources.${LOCALE}.${SYSTEM}
+TARGET    = rm.Messages
+PROCESSDIR= Resources
+LDIR      = ${LOCALE}
+RESDIR    = <resource$dir>
 UTILS     = Utils
 DATA      = Data
-# Note: RESDATA mustn't be in RESDIR !!
+# Note: RESDATA mustn't be in PROCESSDIR !!
 RESDATA   = ${DATA}.Data
 HELPTAGS  = ${DATA}.HelpTags
 HELPMESS  = ${DATA}.HelpMess
@@ -64,7 +66,7 @@ SCANRES = ${UTILS}.ScanRes
 # Generic rules:
 #
 rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built for System: ${SYSTEM}
+        @echo ${COMPONENT}: module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -82,6 +84,9 @@ clean:
         ${WIPE} Resources.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned (Dictionary & HelpTokens not removed)
 
+#
+# Clean_all: removes Dictionary and HelpTokens and ${LOCALE}.*
+#
 clean_all:
         ${RM} ${TARGET}
         ${RM} ${RESDATA}
@@ -102,27 +107,48 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} ${DATA}.Tokenised
-        ${MKDIR} rm.${SYSTEM}
+        ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${DATA}.Tokenised: ${DICTIONARY} ${HELPTAGS}
-        ${MKDIR} ${RESDIR}.Resources.Kernel
-        ${CP} ${DICTIONARY} ${RESDIR}.Resources.Kernel.Dictionary ${CPFLAGS}
+#
+# Tokenise the Messages file using Help and Dictionary Tokens
+#
+${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
+        Print ${HELPTOKENS} { >> ${PROCESSDIR}.Resources.Help.Messages }
         ${MSGTOK} ${HELPTOKENS} ${HELPTAGS}
+        ${CP} ${DICTIONARY} ${PROCESSDIR}.Resources.Kernel.Dictionary ${CPFLAGS}
         ${MSGTOK2} ${DICTTOKENS} ${DICTTAGS}
-        Print ${HELPTOKENS} { >> ${RESDIR}.Resources.Help.Messages }
-        ${SCANRES} ${RESDIR} ${RESDATA}
         ${TOUCH} ${DATA}.Tokenised; settype ${DATA}.Tokenised fff
 
-${HELPTAGS}: ${TAGEXT}
-        ${TAGEXT} ${RESDIR} ${DICTTAGS} ${HELPTAGS}
+#
+# Copy Local Resources, then extract Help and Dictionary token tags
+#
+${HELPTAGS}:
+        @echo Copying ${LOCALE} Resources to Resources directory for tokenising ...
+        ${CP} ${LOCALE} Resources ${CPFLAGS}
+        ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
 
-${DICTIONARY}:
+#
+# Help tokens
+#
+${HELPTOKENS}:
         ${MSGEXT} ${HELPMESS} ${HELPTAGS}
-        ${MSGEXT2} ${DICTMESS} ${DICTTAGS}
         ${TOKGEN} ${HELPMESS} ${HELPTOKENS}
+
+#
+# Use minimum Dictionary tokens:
+#
+#${DICTIONARY}: ${DATA}.MinDict
+#        ${CP} ${DATA}.MinDict  ${DICTIONARY} ${CPFLAGS}
+#        ${CP} ${DATA}.MinDictT ${DICTTOKENS}  ${CPFLAGS}
+
+#
+# Use optimal Dictionary tokens:
+#
+${DICTIONARY}:
+        ${MSGEXT2} ${DICTMESS} ${DICTTAGS}
         ${TOKGEN2} ${DICTMESS} ${DICTTOKENS} ${DICTIONARY}
 
 ${TAGEXT}:
@@ -157,3 +183,16 @@ rm.Morris4.Messages: Hdr:Proc
 rm.Morris4.Messages: Hdr:ResourceFS
 rm.Morris4.Messages: Version
 rm.Morris4.Messages: Hdr:NDRDebug
+rm.Messages: Hdr:ListOpts
+rm.Messages: Hdr:Macros
+rm.Messages: Hdr:System
+rm.Messages: Hdr:SWIs
+rm.Messages: Hdr:CPU.Generic26
+rm.Messages: Hdr:IO.GenericIO
+rm.Messages: Hdr:RISCOS
+rm.Messages: Hdr:ModHand
+rm.Messages: Hdr:Services
+rm.Messages: Hdr:Proc
+rm.Messages: Hdr:ResourceFS
+rm.Messages: Version
+rm.Messages: Hdr:NDRDebug

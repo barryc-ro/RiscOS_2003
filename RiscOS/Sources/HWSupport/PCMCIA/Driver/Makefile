@@ -47,6 +47,11 @@ COMPONENT = PCMCIA_Drv
 RELOC_MOD = rm.PCMCIA_Drv
 TARGET    = aof.PCMCIA_Drv
 
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources2.PCMCIA.Driver
+
 OBJS =\
  o.debug\
  o.enableIRQ\
@@ -94,8 +99,8 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${MKDIR} ${RESDIR}
+        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # ROM target (re-linked at ROM Image build time)
@@ -106,15 +111,13 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_image:
+rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} { > map.${COMPONENT} }
-        GetArSize AS map.${COMPONENT} Stub$$Data
-        @echo Truncating <AS> bytes from linked.${COMPONENT}
-        @Truncate linked.${COMPONENT} <AS>
-        @Unset AS
-        @echo ${COMPONENT}: rom_image complete
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 ${RELOC_MOD}: ${OBJS} ${CLIB}
         ${LD} -o $@ -Module ${OBJS} ${CLIB}
@@ -124,6 +127,7 @@ o.debug:	c.debug
 o.debug:	C:h.swis
 o.debug:	C:h.kernel
 o.debug:	C:h.kernel
+o.enableIRQ: s.enableIRQ
 o.error:	c.error
 o.error:	C:h.kernel
 o.error:	h.Defs
@@ -131,6 +135,7 @@ o.error:	h.Structs
 o.error:	h.Error
 o.error:	h.Debug
 o.error:	h.Variables
+o.errors: s.errors
 o.functions:	c.functions
 o.functions:	C:h.kernel
 o.functions:	C:h.time
@@ -156,6 +161,7 @@ o.hwops:	h.Variables
 o.hwops:	h.Interrupts
 o.hwops:	h.functions
 o.hwops:	h.Debug
+o.irq_jump: s.irq_jump
 o.init:	c.init
 o.init:	C:h.kernel
 o.init:	h.Defs

@@ -9,6 +9,11 @@
 # 11-Oct-94  WT           Constituent files changed
 
 #
+# Paths
+#
+EXP_HDR = <export$dir>
+
+#
 # Generic options:
 #
 MKDIR   = cdir
@@ -46,6 +51,14 @@ INCLUDES = -IC:
 COMPONENT = PCMCIA_Mgr
 RELOC_MOD = rm.PCMCIA_Mgr
 TARGET    = aof.PCMCIA_Mgr
+EXPORTS   = ${EXP_HDR}.PCMCIA
+RDIR      = Resources
+LDIR      = ${RDIR}.${LOCALE}
+
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources2.PCMCIA.Manager
 
 OBJS =\
  CDIrqVenr.o\
@@ -97,14 +110,15 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${MKDIR} ${RESDIR}.^.^.PCMCIA
+        ${MKDIR} ${RESDIR}
+        ${CP} ${LDIR}.Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # ROM target (re-linked at ROM Image build time)
@@ -115,20 +129,22 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_image:
+rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} { > map.${COMPONENT} }
-        GetArSize AS map.${COMPONENT} Stub$$Data
-        @echo Truncating <AS> bytes from linked.${COMPONENT}
-        @Truncate linked.${COMPONENT} <AS>
-        @Unset AS
-        @echo ${COMPONENT}: rom_image complete
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 ${RELOC_MOD}: ${OBJS} ${CLIB}
         ${LD} -o $@ -Module ${OBJS} ${CLIB}
 
+${EXP_HDR}.PCMCIA: hdr.PCMCIA
+        ${CP} hdr.PCMCIA $@ ${CPFLAGS}
+
 # Dynamic dependencies:
+o.CDIrqVenr: s.CDIrqVenr
 o.Cis:	c.Cis
 o.Cis:	C:h.kernel
 o.Cis:	h.Defs
@@ -160,6 +176,7 @@ o.Driver:	h.misc
 o.Driver:	h.Swi
 o.Driver:	h.Driver
 o.Driver:	h.Debug
+o.Driver_s: s.Driver_s
 o.Error:	c.Error
 o.Error:	C:h.kernel
 o.Error:	h.Defs
@@ -167,6 +184,7 @@ o.Error:	h.Structs
 o.Error:	h.Error
 o.Error:	h.Debug
 o.Error:	h.Variables
+o.Errors: s.Errors
 o.FSOp:	c.FSOp
 o.FSOp:	C:h.kernel
 o.FSOp:	h.Defs
@@ -200,6 +218,7 @@ o.Interrupts:	h.Swi
 o.Interrupts:	h.Cis
 o.Interrupts:	h.Misc
 o.Interrupts:	h.Interrupts
+o.Interrupts:	h.Services
 o.Misc:	c.Misc
 o.Misc:	C:h.kernel
 o.Misc:	h.Defs
@@ -226,6 +245,7 @@ o.Read:	h.Read
 o.Read:	h.Driver
 o.Read:	h.Error
 o.Read:	h.Debug
+o.Read_s: s.Read_s
 o.Resources:	c.Resources
 o.Resources:	C:h.kernel
 o.Resources:	h.Defs
@@ -283,3 +303,4 @@ o.Write:	h.Write
 o.Write:	h.Driver
 o.Write:	h.Error
 o.Write:	h.Debug
+o.Write_s: s.Write_s

@@ -57,6 +57,8 @@ install_rom: ${TARGET}
 resources:
         ${MKDIR} ${RESDIR}
         ${CP} ${LDIR}.Messages  ${RESDIR}.Messages  ${CPFLAGS}
+        ${CP} ${LDIR}.LCD       ${RESDIR}.LCD       ${CPFLAGS}
+        ${CP} ${LDIR}.SelectLCD ${RESDIR}.SelectLCD ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
@@ -107,9 +109,8 @@ rm.Portable: Hdr:PublicWS
 rm.Portable: Hdr:Sound
 rm.Portable: Hdr:Debug
 rm.Portable: Hdr:DevNos
-rm.Portable: Hdr:Wimp
+rm.Portable: Hdr:IIC
 rm.Portable: Hdr:Messages
-rm.Portable: Hdr:WimpSpace
 rm.Portable: Version
 rm.Portable: s.Front
 rm.Portable: s.Macros
@@ -118,3 +119,4 @@ rm.Portable: s.PowerCtrl
 rm.Portable: s.HotKeys
 rm.Portable: s.MicroCtrl
 rm.Portable: s.LCDcontrol
+rm.Portable: s.StateMC

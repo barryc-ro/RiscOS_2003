@@ -101,6 +101,9 @@
 ; ********************  See SrcFiler log file for changes since version 1.41.
 ;
 
+          GBLL    StrongARM
+StrongARM SETL    {TRUE}
+
         GET     Hdr:ListOpts
         OPT     OptNoList
         GET     Hdr:Macros
@@ -193,11 +196,21 @@ SpkrControl     SETL    IO_Type = "IOC-A1" :LOR: IO_Type = "IOC-A500" :LOR: IO_T
         GBLL    StorkPower
 StorkPower      SETL    True
 
-        GBLL    EnableIRQsIn16bit
-EnableIRQsIn16bit       SETL    True
+ [ StorkPower
+        GBLL    AdvancedPower   ;True - power on only whilst buffers hold 'non-quiet' data
+AdvancedPower   SETL    False   ;Switched off cos amps have nasty switch-on click
+ ]
 
+        GBLL    EnableIRQsIn16bit
+EnableIRQsIn16bit       SETL    False
+
+ [ EnableIRQsIn16bit
         GBLL    DisableFlybackIRQ
 DisableFlybackIRQ       SETL    True
+
+        GBLL    DisableHardDiscIRQ
+DisableHardDiscIRQ      SETL    True
+ ]
 
         GBLL    debug
 debug           SETL    False
@@ -349,6 +362,14 @@ Help_String
         DCB     "SoundDMA"
         DCB     9
         DCB     "$Version ($CurrentDate)"
+ [ Development
+        DCB     " Development"
+  [ EnableIRQsIn16bit
+        DCB     " IRQs enabled"
+  |
+        DCB     " IRQs disabled"
+  ]
+ ]
  [ VIDC_Type = "VIDC1"
         DCB     " A500 version"
  ]
@@ -837,6 +858,11 @@ compile
         ; (11): branch back to loop start code.  Need to compute offset here
         LDR     r4, loop_end            ; get the B . instruction (note: bits 23..3 are 1)
         LDMFD   sp!, {r0}               ; pop original code start (loop top)
+  [ StrongARM
+        STMFD   sp!,{r0-r2,lr}
+        BL      Sound0synccode          ;SynchroniseCodeAreas, r0=start addr, r1 = end addr (inclusive)
+        LDMFD   sp!,{r0-r2,lr}
+  ]
         SUB     r0, r1, r0              ; work out offset from there to . now
         SUB     r4, r4, r0, LSR #2      ; subtract offset (in words) to get instr
         STMIA   r1!, {r4}               ; store it out and we're done!
@@ -867,21 +893,21 @@ LinConvCode       #  MAXLinConvCodeSize ; Space for the dynamically-compiled mu-
  ]
 
  [ VIDC_Type = "VIDC1"
-A500Code          #  A500CodeSize              ; Code goes here in RMA
+A500Code          #  A500CodeSize       ; Code goes here in RMA
  ]
 
  [ StorkPower
 portable_present  # 4                   ;  = 0 if we don't think the Portable module is present
                                         ;  = 1 if we do
 power_state       # 4                   ;
-
-PowerControl    #    4                  ;0..PowerContThres2 number of consecutive quiet buffers
-PowerContThres1 *    2                  ;When PowerControl is >=2, both current & next buffers
+  [ AdvancedPower
+PowerControl      # 4                   ;0..PowerContThres2 number of consecutive quiet buffers
+PowerContThres1   * 2                   ;When PowerControl is >=2, both current & next buffers
                                         ; are quiet so allow amplifier to be powered down
                                         ; ie don't reject ServicePortable_PowerDown.
-PowerContThres2 *    100                ;Threshold at which the interrupt routine powers down
+PowerContThres2   * 100                 ;Threshold at which the interrupt routine powers down
                                         ; the amplifier
-
+  ]
 SoundPowerBits  * PortableControl_SoundEnable
  ]
 
@@ -1392,7 +1418,7 @@ WorkOutVIDCParams ROUT
 
         Debug   swi,"16bit output"
 
-        Push    "r4,r5,r6"
+        Push    "r4,r5,r6,r7,r8"
         MOV     r0, r0, LSR #Lin16Shift ; reduce mode to 1..3 range (0 accounted for above)
         ADRL    r1, mtab-1              ; address map table (0th entry)
         LDRB    r0, [r1, r0]            ; pick up map offset for mode
@@ -1403,15 +1429,34 @@ WorkOutVIDCParams ROUT
 22      LDRB    r6, [r0, lr]            ; get index into main freq table
         ADD     r1, r4, r6, LSL #3      ; address entry in table
         LDRB    r3, [r1, #4]            ; pick up nominal period
-        CMP     r3, r2                  ; check against required period
+
+        SUBS    r7, r3, r2              ; place (entry - freq) in r7 
         BEQ     %FT26                   ; if =, go do it
-        BGT     %FT24                   ; if period too large (f too low), try next one.
-                                        ; period lower than req (f higher): use lower one
-        CMP     lr, #1                  ; but if on first, we're stuck with it
-        SUBGT   lr, lr, #1              ; address previous entry if needed
-        LDRGTB  r6, [r0, lr]
-        ADDGT   r1, r4, r6, LSL #3
-        B       %FT26                   ; go accept it (we must)
+        BPL     %FT24                   ; else if freq > entry, then look at next entry 
+
+                                        ; here, freq < entry, so test for closest match ie
+
+                                        ;      (last_entry > freq < this_entry)
+
+        CMP     lr, #1                  ; accept if at start of table
+        BEQ     %FT26     
+        SUB     lr, lr, #1              ; otherwise back up to previous entry
+        LDRB    r6, [r0, lr]            ; get index into main freq table
+        ADD     r1, r4, r6, LSL #3      ; address entry in table
+        LDRB    r3, [r1, #4]            ; pick up nominal period
+
+        SUB     r8, r2, r3              ; place (freq - entry) in r8
+
+        CMP     r7, r8                  ; if r7 > r8 then we have best match
+        BGT     %FT26                   ; so accept the current entry
+
+        ADD     lr, lr, #1              ; otherwise go back up to next entry
+        LDRB    r6, [r0, lr]            ; get index into main freq table
+        ADD     r1, r4, r6, LSL #3      ; address entry in table
+        LDRB    r3, [r1, #4]            ; pick up nominal period
+        B       %FT26                   ; and accept it
+
+
 24      CMP     lr, r5                  ; if at end of list, accept this one
         BEQ     %FT26
         ADD     lr, lr, #1
@@ -1421,7 +1466,7 @@ WorkOutVIDCParams ROUT
         LDRB    r3, [r1, #5]            ; pick up unadjusted SFR value
         LDR     r0, [r1, #0]            ; get frequency value
         LDRB    r1, [r1, #6]            ; and SCR value
-        Pull    "r4,r5,r6"
+        Pull    "r4,r5,r6,r7,r8"
         ; and drop into final code
 
 ; Store computed values and exit:
@@ -1587,10 +1632,14 @@ Sound0Enable ENTRY "r1"
         STR     r14, [r10, #Semaphore]
 
  [ StorkPower
+  [ AdvancedPower
         LDR     r0, [r10, #SoundRMA]
         LDR     r0, [r0, #PowerControl]
         CMP     r0, #PowerContThres1    ; if both buffers are silent, no need to power up the amplifiers
         BLLT    SetPower_On             ; but if not... power up now (corrupts R0)
+  |
+        BL      SetPower_On             ; Power up now (corrupts R0)
+  ]
  ]
 
  [ MEMC_Type = "IOMD"
@@ -2133,15 +2182,12 @@ Initialise_Module ENTRY "r7, r8, r10, r11"
         STR     r0, [r2, #CurSRValue]   ;
  ]
  [ StorkPower
+  [ AdvancedPower
         MOV     r0, #0                          ; indicate amplifier power should be on
         STR     r0, [r2, #PowerControl]
-  [ 1 = 1
         BL      GetPower                        ;
   |
-        MOV     r0, #1                          ; pretend portable module present
-        STR     r0, [r2, #portable_present]     ; at least until we know better
-        MOV     r0, #0
-        STR     r0, [r2, #power_state]          ; show power_state as OFF, to force
+        BL      GetPower                        ;
         BL      SetPower_On                     ; SetPower_On to call XPortable_Control (corrupts R0)
   ]
  ]
@@ -2396,14 +2442,20 @@ ModeChangeCode
         Pull    "r0,r10,r11,pc",EQ,^            ; no then just pass on the service
 
         LDR     r0, [r10, #Semaphore]           ;Its OK to power down if sound IRQ's are off or
-        TST     r0, #&80000000                  ;  sound is quiet
+        TST     r0, #&80000000                  ; sound is quiet
         BNE     %FT32                           ;NE, sound system off
+  [ AdvancedPower
         LDR     r0, [r11, #PowerControl]
         CMP     r0, #PowerContThres1
         BGE     %FT32                           ;GE, playing, but quietly
 ;
 ; Sound system on AND making a noise, so prevent powerdown
 ;
+  |
+;
+; Sound system on, so prevent powerdown
+;
+  ]
         BICS    r3, r3, #SoundPowerBits         ; by clearing the sound bits
         MOVEQ   r1, #0                          ; and if there are no more bits being turned off
         Pull    "r0,r10,r11,pc",,^              ; then claim service to save time
@@ -2987,11 +3039,13 @@ Module_VectorCode ROUT
         MOVEQ   lr, pc                  ; Call Level1: don't change mode, flags
         LDREQ   pc, [r9, #SoundLevel1FillPtr]
  [ StorkPower
+  [ AdvancedPower
         LDR     r9, =SoundLevel0Base    ; Workspace pointer
         LDR     r9, [r9, #SoundRMA]     ; Address fixup code via RMA pointer
         LDR     r0, [r9, #portable_present]
         CMP     r0, #0
         BLNE    StorkCode
+  ]
  ]
         B       %FT99                   ; all finished with this buffer
 
@@ -3011,8 +3065,18 @@ Module_VectorCode ROUT
         ; (== stiff machine if Timer0 IRQ goes off while VSync IRQ is disabled).
         ;
         LDRB    lr, [r0, #IOCIRQMSKA]           ; Assume IOC base = IOMD base.
+        Push    lr
         BIC     lr, lr, #vsync_bit + timer0_bit
         STRB    lr, [r0, #IOCIRQMSKA]
+  ]
+
+  [ DisableHardDiscIRQ
+        ; Disable IDE interrupt too. Replay doesn't like this being enabled either.
+        ;
+        LDRB    lr, [r0, #IOCIRQMSKB]
+        Push    lr
+        BIC     lr, lr, #IOMD_HardDisc_IRQ_bit
+        STRB    lr, [r0, #IOCIRQMSKB]
   ]
 
         TEQP    pc, #SVC_mode           ; Into SVC mode, enable IRQs.
@@ -3077,13 +3141,14 @@ Module_VectorCode ROUT
  ]
 
  [ StorkPower
+  [ AdvancedPower
         LDR     r9, =SoundLevel0Base    ; Workspace pointer
         LDR     r9, [r9, #SoundRMA]     ; Address fixup code via RMA pointer
         LDR     r0, [r9, #portable_present]
         CMP     r0, #0
         BLNE    StorkCode
+  ]
  ]
-
         LDMFD   sp, {r4,r6,r10,r12}    ; restore saved values. NB leave on stack: no `!'
 
         ; Convert mu-law to 16-bit linear data.
@@ -3198,10 +3263,20 @@ Module_VectorCode ROUT
         LDRB    lr, [r0, #IOMD_DMAMSK]
         ORR     lr, lr, #IOMD_DMA_SD0
         STRB    lr, [r0, #IOMD_DMAMSK]
+   [ DisableHardDiscIRQ
+        Pull    lr
+        TST     lr, #IOMD_HardDisc_IRQ_bit
+        LDRNEB  lr, [r0, #IOCIRQMSKB]
+        ORRNE   lr, lr, #IOMD_HardDisc_IRQ_bit
+        STRNEB  lr, [r0, #IOCIRQMSKB]
+   ]
    [ DisableFlybackIRQ
-        LDRB    lr, [r0, #IOCIRQMSKA]
-        ORR     lr, lr, #vsync_bit + timer0_bit
-        STRB    lr, [r0, #IOCIRQMSKA]
+        Pull    lr
+        ANDS    lr, lr, #vsync_bit + timer0_bit
+        LDRNEB  r1, [r0, #IOCIRQMSKA]
+        BICNE   r1, r1, #vsync_bit + timer0_bit
+        ORRNE   r1, r1, lr
+        STRNEB  r1, [r0, #IOCIRQMSKA]
    ]
   ]
  ]
@@ -3346,6 +3421,7 @@ SetPower ENTRY "r1,r10,r11"
  ]
 
  [ StorkPower
+  [ AdvancedPower
         ; Check the buffer for being all 0.
 ;
 ; Scan the buffer just filled, to see if it is silent (all zeroes) or noisy (non-zero).
@@ -3390,17 +3466,13 @@ SetPower_
         TEQ     r0, r9
         Pull    "PC",EQ,^
 
-
        ;SVCMode r3
         MOV     r3, pc
         TEQP    pc, #SVC_mode + I_bit
         NOP
 
         Push    "LR"                            ;save SVC_LR
-;;;        MOV     r1, #:NOT:SoundPowerBits
-;;;        SWI     XPortable_Control
         BL      SetPower
-
         Pull    "LR"                            ;restore SVC_LR
 
        ;SetPSR  r3
@@ -3410,7 +3482,10 @@ SetPower_
         Pull    "PC",,^
 StorkCodeEnd
 StorkCodeSize * StorkCodeEnd - StorkCodeStart
+  ]
  ]
+
+    GET s.Sound0_SA
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 

@@ -90,6 +90,8 @@ rm.BatMgrSA: Hdr:SWIs
 rm.BatMgrSA: Hdr:CPU.Generic26
 rm.BatMgrSA: Hdr:IO.GenericIO
 rm.BatMgrSA: Hdr:RISCOS
+rm.BatMgrSA: Hdr:Machine.<Machine>
+rm.BatMgrSA: Hdr:IO.IOMDL
 rm.BatMgrSA: Hdr:Proc
 rm.BatMgrSA: Hdr:ModHand
 rm.BatMgrSA: Hdr:Services
@@ -127,6 +129,8 @@ rm.BatMgr: Hdr:SWIs
 rm.BatMgr: Hdr:CPU.Generic26
 rm.BatMgr: Hdr:IO.GenericIO
 rm.BatMgr: Hdr:RISCOS
+rm.BatMgr: Hdr:Machine.<Machine>
+rm.BatMgr: Hdr:IO.IOMDL
 rm.BatMgr: Hdr:Proc
 rm.BatMgr: Hdr:ModHand
 rm.BatMgr: Hdr:Services

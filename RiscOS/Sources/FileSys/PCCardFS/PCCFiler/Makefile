@@ -1,69 +1,49 @@
-# Makefile for PCCardFS Filer
+# Makefile for PCCardFSFiler
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 15-Jul-94  AMcC         Created.
+# 18-11-94   WT           Created
 #
+
+#
+# Paths
+#
+EXP_HDR = <export$dir>
 
 #
 # Generic options:
 #
 MKDIR   = cdir
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
+AS      = aasm
 CP      = copy
-LD      = link
 RM      = remove
-WIPE    = -wipe
-
-AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -zM -ff
+CCFLAGS = -c -depend !Depend -IC:
+ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-
-#
-# Libraries
-#
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-
-#
-# Include files
-#
-INCLUDES = -IC:
 
 #
 # Program specific options:
 #
 COMPONENT = PCCFiler
-RELOC_MOD = rm.PCCFiler
-TARGET    = aof.PCCFiler
-
-OBJS =
-
-#
-# Rule patterns
-#
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
-.cmhg.o:;    ${CMHG} $< $@
+SOURCE    = s.Front
+TARGET    = rm.PCCFiler
+EXPORTS   = ${EXP_HDR}.${COMPONENT}
+RDIR        = Resources
+LDIR        = ${RDIR}.${LOCALE}
 
 #
-# Build rules:
+# Export Paths for Messages module
 #
-all: ${RELOC_MOD}
-        @echo ${COMPONENT}: all built
+RESDIR = <resource$dir>.Resources2.${COMPONENT}
 
+#
+# Generic rules:
+#
 rom: ${TARGET}
-        @echo ${COMPONENT}: all built (rom version)
+        @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -73,37 +53,50 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${RELOC_MOD}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${MKDIR} ${RESDIR}
+        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages ${CPFLAGS}
+        ${CP} ${LDIR}.Templates ${RESDIR}.Templates ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-# ROM target (re-linked at ROM Image build time)
-#
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${SOURCE}
+        ${AS} ${ASFLAGS} ${SOURCE}
 
-#
-# Final link for the ROM Image (using given base address)
-#
-rom_image:
-        ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} { > map.${COMPONENT} }
-        GetArSize AS map.${COMPONENT} Stub$$Data
-        @echo Truncating <AS> bytes from linked.${COMPONENT}
-        @Truncate linked.${COMPONENT} <AS>
-        @Unset AS
-        @echo ${COMPONENT}: rom_image complete
-
-${RELOC_MOD}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -Module ${OBJS} ${CLIB}
+${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.PCCFiler: Hdr:ListOpts
+rm.PCCFiler: Hdr:Macros
+rm.PCCFiler: Hdr:System
+rm.PCCFiler: Hdr:SWIs
+rm.PCCFiler: Hdr:CPU.Generic26
+rm.PCCFiler: Hdr:IO.GenericIO
+rm.PCCFiler: Hdr:RISCOS
+rm.PCCFiler: Hdr:ModHand
+rm.PCCFiler: Hdr:Wimp
+rm.PCCFiler: Hdr:WimpSpace
+rm.PCCFiler: Hdr:Messages
+rm.PCCFiler: Hdr:Sprite
+rm.PCCFiler: Hdr:VduExt
+rm.PCCFiler: Hdr:NdrDebug
+rm.PCCFiler: Hdr:HostFS
+rm.PCCFiler: Hdr:PCMCIA
+rm.PCCFiler: Hdr:PCCardFS
+rm.PCCFiler: Hdr:MsgTrans
+rm.PCCFiler: Hdr:MsgMenus
+rm.PCCFiler: Hdr:Free
+rm.PCCFiler: Hdr:Hourglass
+rm.PCCFiler: Version
+rm.PCCFiler: s.ModHead
+rm.PCCFiler: s.Service
+rm.PCCFiler: s.StarCmd
+rm.PCCFiler: s.Wimpcore
+rm.PCCFiler: s.events
+rm.PCCFiler: s.fsops
+rm.PCCFiler: s.Free
+rm.PCCFiler: s.Format
+rm.PCCFiler: s.Tail

@@ -38,8 +38,8 @@
 /***    Function_CardInitialise()                                                      ***/
 /***    Function_CardFinalise()                                                        ***/
 /***    Function_CardPresent()                                                         ***/
-/***    Function_CardDetectEntry()                                                     ***/
-/***    Function_CardDetectExit()                                                      ***/
+/***    Function_CardDetectInitialise()                                                ***/
+/***    Function_CardDetectFinalise()                                                  ***/
 /***                                                                                   ***/
 /*****************************************************************************************/
 #include <stdio.h>
@@ -160,11 +160,11 @@ int PCMCIADriver_FunctionHandler(_kernel_swi_regs *reg, void *pw)
         break;
 
     case DRV_FUNCTION__CARDDETECT_ENTRY:
-        error = Function_CardDetectEntry(reg);
+        error = Function_CardDetectInitialise(reg);
         break;
 
     case DRV_FUNCTION__CARDDETECT_EXIT:
-        error = Function_CardDetectExit(reg);
+        error = Function_CardDetectFinalise(reg);
         break;
 
     default:
@@ -362,7 +362,11 @@ PCMCIADriver_ErrorCode Function_HardwareConfiguration(_kernel_swi_regs *reg)
     /*********************************************************************************/
     /***    Get and return the pointer to the Hardware Configuration block         ***/
     /*********************************************************************************/
-    reg ->r[0] = MAX_SLOTS_PER_ADAPTOR;
+    reg ->r[0] = 2;
+    _kernel_swi (OS_ReadSysInfo, reg, reg);
+    if(reg->r[2] != 2) reg->r[0] = 1;                   /** Inverted Stork Special Case! **/
+    else reg ->r[0] = MAX_SLOTS_PER_ADAPTOR;
+
     reg ->r[1] = PAGE_SIZE;
     reg ->r[2] = IO_PAGE_SIZE;
     reg ->r[3] = LONGEST_CYCLE_TIME;
@@ -649,6 +653,7 @@ PCMCIADriver_ErrorCode Function_SelectPage(_kernel_swi_regs *reg)
 /***                            4 - I/O without skewing                                ***/
 /***                            5 - I/O with 1-bit skewing                             ***/
 /***                            6 - I/O with 2-bit skewing                             ***/
+/***                                                                                   ***/
 /***       R7 = Slot Handle                                                            ***/
 /***                                                                                   ***/
 /***    On Exit:                                                                       ***/
@@ -659,6 +664,7 @@ PCMCIADriver_ErrorCode Function_SelectPage(_kernel_swi_regs *reg)
 /***                            1  Set if odd addr 16-bits are read onto upper 16bits  ***/
 /***                            2  Set if odd addr 16-bits are writ thru upper 16bits  ***/
 /***                            3 - 31  Reserved (0)                                   ***/
+/***                                                                                   ***/
 /***  Return Value:                                                                    ***/
 /***    NO_ERROR, if succesfully                                                       ***/
 /***                                                                                   ***/
@@ -672,7 +678,6 @@ PCMCIADriver_ErrorCode Function_SelectDataMode(_kernel_swi_regs *reg)
     DebugMessage("yK", "\n\n********       Select Data Mode (Function 6)  Entry       ********\n");
     DebugMessage("yK", "    Function 6, Entry:\n");
     DebugMessage("yK", "        R1 = &%8X    (DataMode)\n", reg ->r[1]);
-    DebugMessage("yK", "        R2 = &%8X    (IRQ datamode)\n", reg ->r[2]);
     DebugMessage("yK", "        R7 = &%8X    (Slot handle)\n", reg ->r[7]);
 #endif
 
@@ -682,7 +687,7 @@ PCMCIADriver_ErrorCode Function_SelectDataMode(_kernel_swi_regs *reg)
     if(((SUPPORTED_DATA_MODES | SUPPORTED_IO_MODES) & (1 << reg ->r[1])) != 0) {
         Set_DataMode(reg ->r[7], reg ->r[1]);
 
-        /***************** Now set up R0 for the return values **************************/
+        /***************** Now set up R0 and R1 for the return values *******************/
         /***************** depending on the data mode chosen ****************************/
         reg ->r[0] = 1 | LAYOUT__UPPER_READ_ON_UPPER_FLAG | LAYOUT__UPPER_WRITE_ON_UPPER_FLAG;
     }
@@ -973,6 +978,8 @@ PCMCIADriver_ErrorCode Function_SelectAccessTiming(_kernel_swi_regs *reg)
 /***             1 - Battery Very Low                                                  ***/
 /***             2 - Busy status changed                                               ***/
 /***            16 - I/O interrupt                                                     ***/
+/***         17-30 - Reserved                                                          ***/
+/***            31 - Prevent enabling of card detect IRQ                               ***/
 /***       R2 = Memory IRQ handler address (0 = don't change existing handler address) ***/
 /***       R3 = R12 value to use when calling Memory handler                           ***/
 /***       R4 = I/O IRQ handler address (0 = don't change existing handler address)    ***/
@@ -1069,6 +1076,9 @@ PCMCIADriver_ErrorCode Function_IRQHandlerInstall(_kernel_swi_regs *reg)
 /***  Uninstalls claimed irq handler routines (opposite to function 11)                ***/
 /***                                                                                   ***/
 /***    On Entry:                                                                      ***/
+/***       R1 = IRQ mask bit                                                           ***/
+/***            0-30 - Reserved (must be 0)                                            ***/
+/***              31 - Prevent enabling of card detect IRQ                             ***/
 /***       R2 = same as when installed (if memory handler)                             ***/
 /***       R3 = same as when installed (if memory handler)                             ***/
 /***       R4 = same as when installed (if io handler)                                 ***/
@@ -1126,7 +1136,9 @@ PCMCIADriver_ErrorCode Function_IRQHandlerUnInstall(_kernel_swi_regs *reg)
         }
 
         CCB_Block[reg ->r[7]].IRQ_Mask = IRQMask_Mask; /* Updates the CCB IRQMask */
-        Set_IRQMaskRegister(reg ->r[7],0); /** This may trip an irq or two... **/
+        if((reg ->r[1] & 0x80000000) != 0) Set_IRQMaskRegister(reg ->r[7],1); /** This may trip an irq or two... **/
+        else Set_IRQMaskRegister(reg ->r[7],0);
+
     }
 
 #if Debug == TRUE
@@ -1166,7 +1178,19 @@ PCMCIADriver_ErrorCode Function_SaveSlotState(_kernel_swi_regs *reg)
         DebugMessage("yK", "Entered function 13 routine in the I/f driver module.\n");
     #endif
 
-/** do the biz 'ere **/
+    if(StackLevel >= STATESTACK_ENTRIES) return(ERROR__STACK_FULL);
+
+    /** Ok, so let's stack the data then.... **/
+    State_Stack[StackLevel].IRQMask_Reg     = *(CCB_Block[reg->r[7]].Adaptor_Register_Base+ADAPTOR__IRQ_MASK_REG__OFFSET);
+    State_Stack[StackLevel].IRQMask_CCB     = CCB_Block[reg->r[7]].IRQ_Mask;
+    State_Stack[StackLevel].AccessTime_Reg  = *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__ACCESS_TIME_REG__OFFSET);
+    State_Stack[StackLevel].CommAccess_CCB  = CCB_Block[reg->r[7]].CommonAccessTime;
+    State_Stack[StackLevel].AttrAccess_CCB  = CCB_Block[reg->r[7]].AttribAccessTime;
+    State_Stack[StackLevel].AccessMode_Reg  = *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__ACCESS_MODE_REG__OFFSET);
+    State_Stack[StackLevel].VoltageCtrl_Reg = *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__VOLTAGE_CONTROL_REG__OFFSET);
+    State_Stack[StackLevel].SlotPage_Reg    = *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__PAGE_REG__OFFSET);
+
+    StackLevel++;
 
     return(NO_ERROR);   /* Impossible to generate an error in this routine */
 }
@@ -1199,7 +1223,19 @@ PCMCIADriver_ErrorCode Function_RestoreSlotState(_kernel_swi_regs *reg)
         DebugMessage("yK", "Entered function 14 routine in the I/f driver module.\n");
     #endif
 
-/** do the biz 'ere **/
+    if(StackLevel <= 0) return(ERROR__STACK_EMPTY);
+
+    /** Rightio, let's unstack the data then... **/
+    *(CCB_Block[reg->r[7]].Adaptor_Register_Base+ADAPTOR__IRQ_MASK_REG__OFFSET)  = State_Stack[StackLevel].IRQMask_Reg;
+    CCB_Block[reg->r[7]].IRQ_Mask                                                = State_Stack[StackLevel].IRQMask_CCB;
+    *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__ACCESS_TIME_REG__OFFSET)     = State_Stack[StackLevel].AccessTime_Reg;
+    CCB_Block[reg->r[7]].CommonAccessTime                                        = State_Stack[StackLevel].CommAccess_CCB;
+    CCB_Block[reg->r[7]].AttribAccessTime                                        = State_Stack[StackLevel].AttrAccess_CCB;
+    *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__ACCESS_MODE_REG__OFFSET)     = State_Stack[StackLevel].AccessMode_Reg;
+    *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__VOLTAGE_CONTROL_REG__OFFSET) = State_Stack[StackLevel].VoltageCtrl_Reg;
+    *(CCB_Block[reg->r[7]].Slot_Register_Base+SLOT__PAGE_REG__OFFSET)            = State_Stack[StackLevel].SlotPage_Reg;
+
+    StackLevel--;
 
     return(NO_ERROR);   /* Impossible to generate an error in this routine */
 }
@@ -1238,8 +1274,10 @@ PCMCIADriver_ErrorCode Function_CardInitialise(_kernel_swi_regs *reg)
 
     /* Would check the VC pins here, but we don't seem to need to */
 
-    *(CCB_Block[reg ->r[7]].Slot_Register_Base + SLOT__VOLTAGE_CONTROL_REG__OFFSET)
-         = PCMCIA__SUPPLY_VOLTAGE__ON << SLOT__VCC_SWITCH__SHIFT;  /* Power the slot to 5v Vcc */
+/*    *(CCB_Block[reg ->r[7]].Slot_Register_Base + SLOT__VOLTAGE_CONTROL_REG__OFFSET)
+        = PCMCIA__SUPPLY_VOLTAGE__ON << SLOT__VCC_SWITCH__SHIFT;   Power the slot to 5v Vcc */
+
+    Set_Power(reg ->r[7], SLOT__POWER_ON__MASK);   /** And, as if by magic, the PCMCIA card stirred into life. **/
 
     /************************/
     /* Now wait 6ms minimum */
@@ -1380,7 +1418,7 @@ PCMCIADriver_ErrorCode Function_CardPresent(_kernel_swi_regs *reg)
 /*****************************************************************************************/
 /***                                                                                   ***/
 /***  Function 18                                                                      ***/
-/***  Function_CardDetectEntry(regs)                                                   ***/
+/***  Function_CardDetectInitialise(regs)                                              ***/
 /***                                                                                   ***/
 /***  This function simply removes the card detect interrupt from the interface        ***/
 /***  hardware. This is necessary due to the fact that the card detect interrupt       ***/
@@ -1396,7 +1434,7 @@ PCMCIADriver_ErrorCode Function_CardPresent(_kernel_swi_regs *reg)
 /***    NO_ERROR                                                                       ***/
 /***                                                                                   ***/
 /*****************************************************************************************/
-PCMCIADriver_ErrorCode Function_CardDetectEntry(_kernel_swi_regs *reg)
+PCMCIADriver_ErrorCode Function_CardDetectInitialise(_kernel_swi_regs *reg)
     {
     int                         StartTime;
     int                         EndTime;
@@ -1429,7 +1467,7 @@ PCMCIADriver_ErrorCode Function_CardDetectEntry(_kernel_swi_regs *reg)
 /*****************************************************************************************/
 /***                                                                                   ***/
 /***  Function 19                                                                      ***/
-/***  Function_CardDetectExit(regs)                                                    ***/
+/***  Function_CardDetectFinalise(regs)                                                ***/
 /***                                                                                   ***/
 /***  This function simply removes the card detect interrupt from the interface        ***/
 /***  hardware. This is necessary due to the fact that the card detect interrupt       ***/
@@ -1445,9 +1483,11 @@ PCMCIADriver_ErrorCode Function_CardDetectEntry(_kernel_swi_regs *reg)
 /***    NO_ERROR                                                                       ***/
 /***                                                                                   ***/
 /*****************************************************************************************/
-PCMCIADriver_ErrorCode Function_CardDetectExit(_kernel_swi_regs *reg)
+PCMCIADriver_ErrorCode Function_CardDetectFinalise(_kernel_swi_regs *reg)
     {
     int                 loop;
+
+    _kernel_irqs_off();   /** They should be switched back on by the exit veneer.... **/
 
     #if Debug == TRUE
         DebugMessage("yK","In carddetectexit\n");

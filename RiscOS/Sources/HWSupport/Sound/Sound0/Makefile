@@ -95,3 +95,4 @@ rm.Morris.Sound0: Hdr:Sound
 rm.Morris.Sound0: Hdr:Portable
 rm.Morris.Sound0: Version
 rm.Morris.Sound0: s.TokHelpSrc
+rm.Morris.Sound0: s.Sound0_SA

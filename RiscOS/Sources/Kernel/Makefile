@@ -261,6 +261,7 @@ rm.Morris.Kernel: Hdr:Wimp
 rm.Morris.Kernel: Hdr:ColourTran
 rm.Morris.Kernel: Hdr:Debug
 rm.Morris.Kernel: s.PMF.DEF
+rm.Morris.Kernel: s.Copro15ops
 rm.Morris.Kernel: s.Kernel
 rm.Morris.Kernel: TestSrc.Begin
 rm.Morris.Kernel: s.Morris
@@ -340,3 +341,18 @@ rm.Morris.Kernel: s.PMF.oswrch
 rm.Morris.Kernel: s.PMF.buffer
 rm.Morris.Kernel: s.PMF.key
 rm.Morris.Kernel: s.PMF.mouse
+rm.Morris.Kernel: s.AMBControl.AMB
+rm.Morris.Kernel: s.AMBControl.Options
+rm.Morris.Kernel: s.AMBControl.Workspace
+rm.Morris.Kernel: s.AMBControl.main
+rm.Morris.Kernel: s.AMBControl.allocate
+rm.Morris.Kernel: s.AMBControl.deallocate
+rm.Morris.Kernel: s.AMBControl.growshrink
+rm.Morris.Kernel: s.AMBControl.mapslot
+rm.Morris.Kernel: s.AMBControl.mapsome
+rm.Morris.Kernel: s.AMBControl.readinfo
+rm.Morris.Kernel: s.AMBControl.growp
+rm.Morris.Kernel: s.AMBControl.shrinkp
+rm.Morris.Kernel: s.AMBControl.service
+rm.Morris.Kernel: s.AMBControl.Memory
+rm.Morris.Kernel: s.AMBControl.memmap
