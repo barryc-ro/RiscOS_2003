@@ -137,6 +137,7 @@ dirs:
         ${MKDIR} ${RESAPP}
         
 resources: ${TARGET} dirs
+	squeeze ${TARGET}
 	set EngMenuRes$Path Resources.${USERIF}.${LOCALE}., Resources.${USERIF}.UK.
         ${CP} ${RDIR}.!Run      ${RESAPP}.!Run ${CPFLAGS}
         access ${RESAPP}.!Run WR/r
