@@ -109,7 +109,7 @@ resources: ${RESFILES} dirs
 	@echo ${COMPONENT}: resource files copied
 
 BBETYPE = printdefs
-bbe-printdefs: bbe-generic-rom bbe-generic-resources-get-alias
+bbe-printdefs: bbe-generic-resources-get-alias
   BBE_Export_Dir Resources.Printers
   BBE_Export_Dir Resources.Palettes
   BBE_Export_Dir Resources.ps
