@@ -98,7 +98,8 @@ OBJS      =	\
 #
 .SUFFIXES:  .o .s .c .h .cmhg
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 
@@ -155,14 +156,11 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 
-h.${CMHGNAME}: ${CMHGOBJ}
-	@|
-
 ${EXPORTS}: h.${CMHGNAME} h.dhcpextern ${DIRS}
 	${CP} h.dhcpextern $@ ${CPFLAGS}
 	Do ${AWK} -- "/.define DHCP\_00/,/endif/" h.${CMHGNAME} >>$@
 
-o.module: VersionNum
+o.module: VersionNum h.${CMHGNAME}
 
 ${DIRS}:
 	${MKDIR} o

@@ -25,12 +25,54 @@
 #include "consts.h"
 #include "sockets.h"
 
-u_char *dhcp_options_start(const DHCP *d)
+/* Locate a specific option in a designated area.  Returns pointer to
+ * the code byte if found, NULL if not found.  If overload is non-NULL
+ * it will be filled in with the value of the Option Overload option,
+ * if found while searching, or 0 if not found.
+ */
+static u_char *dhcp_find_option_in_area(const u_char *options, size_t len, u_int option, int *overload)
 {
-	/* The sockets module will have guaranteed a cookie, filling in a null
-	 * options list if not present.
+	const u_char *eoo = options + len;
+	int xoption = -1;
+
+	if ((option >> 16) == OPTION_EXTENSION) {
+		xoption = option & 0xFFFF;
+		option >>= 16;
+	}
+
+        if (overload) {
+        	*overload = 0;
+        }
+
+        while (*options != OPTION_END && options < eoo) {
+		if (*options != OPTION_PAD) {
+			if (*options == option) {
+				/* Sanity check - does option fit in area? */
+				if (option != OPTION_END &&
+				    (options + 1 >= eoo || options + 2 + options[1] > eoo)) {
+					return NULL;
+				}
+				/* If looking for an extended option, is this the right one? */
+				if (option == OPTION_EXTENSION && xoption != -1) {
+					if (options[1] < 2 || (options[2] << 8) + options[3] != xoption)
+						continue;
+				}
+			        return (u_char *) options;
+			}
+			if (*options == OPTION_OPTIONOVERLOAD && options[1] != 0 && overload) {
+			        *overload = options[2];
+			}
+			options += options[1] + 2;
+		}
+		else {
+			++options;
+		}
+        }
+
+	/* By doing this comparison, we can use this routine to find the used length
+	 * of the options buffer.
 	 */
-	return (u_char *) &d->options[4];
+	return (option == OPTION_END) ? (u_char *) options : NULL;
 }
 
 /* Locate a specific option in the options body.  Returns pointer to
@@ -38,51 +80,41 @@ u_char *dhcp_options_start(const DHCP *d)
  * option, indicating that the file and/or server name parts of the header have been
  * used as extensions for the options, then search those too, in the order specified
  * by RFC2131.
+ *
+ * Sub-options are supported by specifying a >8 bit number. For example 0x2B03 will
+ * find suboption 3 in the vendor-specific information.
+ *
+ * Extended options are supported by passing a 24-bit number: 0x7F0001 will find
+ * extended option 1.
+ *
+ * Extended options and suboptions are mutually exclusive (for now).
  */
-u_char *dhcp_find_option(const DHCP *d, const u_char option)
+u_char *dhcp_find_option(const DHCP *d, u_int option)
 {
-        u_char *options = dhcp_options_start(d), *eoo = options + sizeof(d->options) - 4;
-        int overload = 0;
+	u_char *o;
+        int overload;
 
-        while (*options != OPTION_END || overload != 0) {
-		if (*options != OPTION_PAD) {
-			if (*options == option) {
-			        return options;
-			}
-			if (*options == OPTION_OPTIONOVERLOAD && options[1] != 0) {
-			        overload = options[2];
-			}
-			if (*options == OPTION_END && overload != 0) {
-			        if (overload & 1) {
-			                overload ^= 1;
-			                options = (u_char *) d->file;
-			                eoo = options + sizeof(d->file);
-			        }
-			        else if (overload & 2) {
-			                overload ^= 2;
-			                options = (u_char *) d->sname;
-			                eoo = options + sizeof(d->sname);
-			        }
-			        else {
-			                /* Don't know */
-			                overload = 0;
-			        }
-			        continue;
-			}
-			options += options[1] + 2;
+	if (option > 0xFF && (option >> 16) != OPTION_EXTENSION) {
+		o = dhcp_find_option(d, option >> 8);
+		if (o) {
+			return dhcp_find_option_in_area(o + 2, o[1], option & 0xFF, NULL);
 		}
 		else {
-			++options;
-			if (options >= eoo) {
-			        return NULL;
-			}
+			return NULL;
 		}
-        }
+	}
 
-	/* By doing this comparison, we can use this routine to find the used length
-	 * of the options buffer.
-	 */
-	return (option == OPTION_END) ? options : NULL;
+	o = dhcp_find_option_in_area(d->options + 4, sizeof d->options - 4, option, &overload);
+
+	if (!o && (overload & 1)) {
+		o = dhcp_find_option_in_area(d->file, sizeof d->file, option, NULL);
+	}
+
+	if (!o && (overload & 2)) {
+		o = dhcp_find_option_in_area(d->sname, sizeof d->sname, option, NULL);
+	}
+
+	return o;
 }
 
 /* Add an option to a DHCP packet's options field.  Returns pointer to newly added
@@ -185,7 +217,7 @@ void dhcp_delete_option(DHCP *d, const u_char option)
                         }
                 }
                 else {
-                        dhcp__delete(opt, d->options, &d->options[OPTIONS_MAX]);
+                        dhcp__delete(opt, d->options + 4, &d->options[OPTIONS_MAX]);
                 }
         }
 }
@@ -251,6 +283,24 @@ u_char *dhcp_find_server_identifier(const DHCP *d, struct in_addr *ia)
 }
 
 
+/* Locates and extracts the server priority option from the given DHCP packet.  Returns
+ * NULL if the option was not found, and *priority is set to -1, else a pointer to the
+ * type byte in the packet and *priority is filled in.
+ */
+u_char *dhcp_find_server_priority(const DHCP *d, int *priority)
+{
+	u_char *opt = dhcp_find_option(d, OPTION_SERVERPRIORITY);
+	if (opt != NULL && opt[1] == 2) {
+		*priority = (opt[2] << 8) | opt[3];
+		return opt;
+	}
+	else {
+		*priority = -1;
+		return NULL;
+	}
+}
+
+
 /* This routine copies an option from the src DHCP packet to the destination
  * should the option be present in the source.  it returns the address of
  * the option in the destination, or NULL if the copy did not succeed (either
@@ -271,7 +321,10 @@ static void dhcp_add_vendor_class_information(DHCP *d)
         _kernel_oserror *e = _swix(OS_Byte, _INR(0,1), 0, 0);
 
         if (e != NULL) {
-                dhcp_add_option(d, OPTION_CLASSIDENTIFIER, strlen(e->errmess), e->errmess);
+        	size_t len = strlen(e->errmess);
+        	if (len > 255) len = 255;
+
+                dhcp_add_option(d, OPTION_CLASSIDENTIFIER, len, e->errmess);
         }
 }
 
@@ -296,12 +349,9 @@ void dhcp_init_packet(dhcp_interface *di, DHCP *dsrc, u_char message_type)
                 (void) memcpy(d->chaddr, di->dib->dib_address, d->hlen);
         }
 
-	{
-	        /* Initialise the options field */
-	        const u_long cookie = htonl(OPTIONS_COOKIE);
-    		memcpy(d->options, &cookie, sizeof(cookie));
-		d->options[4] = OPTION_END;
-	}
+	/* Initialise the options field */
+	*(u_long *) d->options = htonl(OPTIONS_COOKIE);
+	d->options[4] = OPTION_END;
 
 	dhcp_add_option(d, OPTION_DHCPMESSAGETYPE, 1, &message_type);
 	if (message_type != DHCPDECLINE && message_type != DHCPRELEASE) {
@@ -342,12 +392,9 @@ void dhcp_init_inform_packet(DHCP *d, struct ether_addr *hw_addr, u_long ciaddr)
                 (void) memcpy(d->chaddr, hw_addr, d->hlen);
         }
 
-	{
-	        /* Initialise the options field */
-	        const u_long cookie = htonl(OPTIONS_COOKIE);
-    		memcpy(d->options, &cookie, sizeof(cookie));
-		d->options[4] = OPTION_END;
-	}
+	/* Initialise the options field */
+	*(u_long *) d->options = htonl(OPTIONS_COOKIE);
+	d->options[4] = OPTION_END;
 
 	dhcp_add_option(d, OPTION_DHCPMESSAGETYPE, 1, &message_type);
 
@@ -357,11 +404,12 @@ void dhcp_init_inform_packet(DHCP *d, struct ether_addr *hw_addr, u_long ciaddr)
         d->xid = interfaces_current_time() ^ ciaddr;
 }
 
-/* This routine controls backoff fuzz values, based on the current monotonic time */
+/* This routine controls backoff fuzz values. It changes "interval" by a randomly
+ * chosen amount uniformly distributed over -1 to +1 seconds.
+ */
 static dhcp_time dhcp_time_fuzz(dhcp_time interval)
 {
-	int now = ((interfaces_current_time() % 9) - 5) * 25;
-        return interval + now;
+	return interval + ((rand() % 201) - 100);
 }
 
 /* This routine is called to transmit the current packet (di->di_dhcp) on the network.
