@@ -52,8 +52,8 @@ DFLAGS    = -DRISCOS -DPNG_DEBUG=0
 #
 # Program specific options:
 #
-COMPONENT  = libpng-lib
-COMPONENTZ = libpng-lzm
+COMPONENT  = o.libpng-lib
+COMPONENTZ = o.libpng-lzm
 SOURCE     = ...
 TARGET     = ${COMPONENT}
 TARGETZ    = ${COMPONENTZ}
@@ -124,9 +124,13 @@ local_dirs:
 # Final link
 #
 ${TARGET}: ${OBJS} local_dirs
-        ${LB} ${LBFLAGS} -o o.${COMPONENT} ${OBJS}
+        ${LB} ${LBFLAGS} -o ${COMPONENT} ${OBJS}
 
 ${TARGETZ}: ${OBJSZ} local_dirs
-	${LB} ${LBFLAGS} -o o.${COMPONENTZ} ${OBJSZ}
+	${LB} ${LBFLAGS} -o ${COMPONENTZ} ${OBJSZ}
+
+pngtest: o.pngtest ${TARGET} ${CLIB} ^.ZLib.o.zlib_lib
+        ${LD} -o pngtest o.pngtest ${TARGET} ${CLIB} ^.ZLib.o.zlib_lib
+
 
 # Dynamic dependencies:

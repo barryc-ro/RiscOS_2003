@@ -51,7 +51,7 @@ LIBS      = ${PNGLIB} ${PNGLIBZ} ${ZLIB} ${ZLIBZ}
 #
 # Include files
 #
-INCLUDES = -Itbox:,C:
+INCLUDES = -Itbox:,C:,PNG,ZLib
 DFLAGS    = -DRISCOS -DPNG_DEBUG=0
 
 #
