@@ -49,6 +49,7 @@ INCLUDES = -IC:
 #
 COMPONENT = PortMan
 TARGET    = aof.${COMPONENT}
+SATARGET  = rm.${COMPONENT}SA
 RMTARGET  = rm.${COMPONENT}
 EXPORTS   = ${EXP_C_H}.${COMPONENT} ${EXP_HDR}.${COMPONENT}
 RDIR      = ${RESDIR}.${COMPONENT}
@@ -80,9 +81,11 @@ o<Machine>.resfiles
 
 # build a relocatable module:
 #
-all: ${RMTARGET} dirs
-	@echo ${COMPONENT}: all complete
-	
+all: ${SATARGET} dirs
+        @echo ${COMPONENT}: all complete
+
+ram: ${RMTARGET} dirs
+        @echo ${COMPONENT}: ram complete
 #
 # RISC OS ROM build rules:
 #
@@ -149,15 +152,19 @@ rom_link:
 #
 # Relocatable module target
 #
-${RMTARGET}: ${OBJS} ${RAMOBJS}
+${SATARGET}: ${OBJS} ${RAMOBJS}
         ${LD} -rmf -o $@ ${OBJS} ${RAMOBJS} ${CLIB}
-        ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
+        ${CHMOD} $@ ${CHMODFLAGS}
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 ${EXP_HDR}.${COMPONENT}:	hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+${RMTARGET}: ${OBJS} ${ROMOBJS} ${CLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${ROMOBJS} ${CLIB}
+        ${CHMOD} $@ ${CHMODFLAGS}
 
 BBETYPE = local
 bbe-local: bbe-generic
