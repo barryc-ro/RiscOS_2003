@@ -820,6 +820,8 @@ static access_complete_flags access_redirect_complete(void *h, int status, char 
 
     access_handle d = (access_handle) h;
 
+    ACCDBG(("access_redirect_complete: ah%p\n", d));
+    
     cache_it = d->complete(d->h, status, cfile, url); /* Pass up the real URL, not the one they requested */
     d->redirect = NULL;
 
@@ -1109,6 +1111,7 @@ static void access_reschedule(alarm_handler fn, access_handle d, int dt)
 {
     if (d->flags & access_PENDING_FREE)
     {
+	ACCDBG(("access_reschedule: ah%p pending free\n", d));
 	access_free_item(d);
     }
     else
@@ -1143,6 +1146,8 @@ static void access_http_dns_alarm(int at, void *h)
     }
     else if (access_try_fancy_resolve(d, "www."))
     {
+	/* will try again with different host - clear header */
+	ep = NULL;
     }
     else
     {
@@ -1833,6 +1838,8 @@ static void access_gopher_dns_alarm(int at, void *h)
     }
     else if (access_try_fancy_resolve(d, "gopher."))
     {
+	/* will try again with different host - clear header */
+	ep = NULL;
     }
     else
     {
@@ -2010,6 +2017,8 @@ static void access_ftp_dns_alarm(int at, void *h)
     }
     else if (access_try_fancy_resolve(d, "ftp."))
     {
+	/* will try again with different host - clear header */
+	ep = NULL;
     }
     else
     {
@@ -2736,8 +2745,12 @@ static os_error *access_new_http(char *url, access_url_flags flags, char *ofile,
     {
 	while (!access_done_flag)
 	    d->next_fn(0, d);
-	*result = 0;
+/* 	*result = 0; */
     }
+
+    /* If dns fails immediately then 'd' will have been freed already */
+    if (access_done_flag)
+	*result = 0;
 
     return NULL;
 }
@@ -2801,8 +2814,12 @@ static os_error *access_new_ftp(char *url, access_url_flags flags, char *ofile, 
 	{
 	    while (!access_done_flag)
 		d->next_fn(0, d);
-	    *result = 0;
+	    /* *result = 0; */
 	}
+
+	/* If dns fails immediately then 'd' will have been freed already */
+	if (access_done_flag)
+	    *result = 0;
     }
 
     return ep;
@@ -3561,8 +3578,12 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    {
 			while (!access_done_flag)
 			    d->next_fn(0, d);
-			*result = 0;
+			/* *result = 0; */
 		    }
+
+		    /* If dns fails immediately then 'd' will have been freed already */
+		    if (access_done_flag)
+			*result = 0;
 		}
 	    }
 #endif /* ndef FILEONLY */

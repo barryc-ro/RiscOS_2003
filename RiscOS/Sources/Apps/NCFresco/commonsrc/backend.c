@@ -4336,7 +4336,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->magic = ANTWEB_DOC_MAGIC;
     new->parent = v;
     new->scale_value = config_display_scale_image;
-    new->encoding = config_display_encoding;
+    new->encoding = config_encoding_internal;
 
     /* new: add the url here */
     new->url = strdup(url);
@@ -4836,15 +4836,15 @@ extern int backend_doc_encoding(be_doc doc, int encoding)
 
     if (doc == NULL)
     {
-	old_encoding = config_display_encoding;
+	old_encoding = config_encoding_internal;
 	if (encoding != be_encoding_READ)
-	    config_display_encoding = encoding;
+	    config_encoding_internal = encoding;
     }
     else
     {
 	old_encoding = doc->encoding;
 	if (encoding != be_encoding_READ)
-	    config_display_encoding = doc->encoding = encoding;
+	    config_encoding_internal = doc->encoding = encoding;
     }
 
     return old_encoding;

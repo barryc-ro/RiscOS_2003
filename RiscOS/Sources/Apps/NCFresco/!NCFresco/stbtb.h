@@ -39,6 +39,8 @@ extern void tb_status_box(wimp_box *box);
 extern void tb_status_set_lights(int state);
 extern void tb_status_set_secure(int on);
 extern void tb_status_set_direction(int up);
+extern void tb_status_set_modem(int on);
+extern void tb_status_set_key_leds(void);
 
 #define status_type_FETCH   0
 #define status_type_URL     1

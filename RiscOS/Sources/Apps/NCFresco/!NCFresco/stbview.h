@@ -193,7 +193,11 @@ struct _frontend_view
 #define NVRAM_BEEPS_TAG		"BrowserBeepStatus"
 #define NVRAM_SCALING_TAG	"BrowserScaling"
 #define NVRAM_PRINT_COLOUR_TAG	"PrinterColour"
-#define NVRAM_PRINT_ORIENTATION_TAG	"PrinterOrientation"
+#define NVRAM_PRINT_ORIENTATION_TAG "PrinterOrientation"
+#define NVRAM_PRINT_BG_TAG	"PrinterPrintBackgrounds"
+#define NVRAM_PRINT_IMAGES_TAG	"PrinterPrintImages"
+#define NVRAM_DISPLAY_BG_TAG	"BrowserDisplayBackgrounds"
+#define NVRAM_DISPLAY_IMAGES_TAG "BrowserDisplayImages"
 
 /* ----------------------------------------------------------------------------- */
 

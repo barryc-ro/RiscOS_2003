@@ -64,7 +64,7 @@ typedef struct
 #define ncfresco_reason_DIE		1
 /* 2 is reserved */
 #define ncfresco_reason_READ_CONFIG	3
-
+#define ncfresco_reason_WRITE_CONFIG	4
 /* LOAD_DATA flags */
 #define ncfresco_loaddata_NOT_ALL	0x00000001
 #define ncfresco_loaddata_CONFIG	0x00000002 /* all loads are assumed if NOT_ALL is clear */

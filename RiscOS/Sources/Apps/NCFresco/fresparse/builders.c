@@ -696,7 +696,17 @@ extern rid_aref_item *new_aref_item(HTMLCTX* me,
     }
 
     rid_aref_item_connect(me->rh, new);
+
     me->aref = new;
+
+    /* if there is no href field then create a scaffold element to
+     * hold the anchor and don't set the 'aref' field.
+     */
+    if (new->href == NULL)
+    {
+	text_item_push_word(me, rid_flag_NO_BREAK, FALSE);
+	me->aref = NULL;
+    }
 
     return new;
 }

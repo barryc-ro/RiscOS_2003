@@ -1658,7 +1658,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    OBJDBG(("plugin: msg reshape request %p state %d\n", pp, pp->state));
 
- 	    objects_resize(pp->doc, pp->parent_item, reshape_request->width, reshape_request->height);
+	    /* note this is sent in OS units */
+ 	    objects_resize(pp->doc, pp->parent_item, reshape_request->width*2, reshape_request->height*2);
 	    break;
 	}
 

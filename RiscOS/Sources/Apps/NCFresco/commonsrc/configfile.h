@@ -43,6 +43,9 @@ extern int config_has_been_changed;
 #define config_filter_phase_START	0
 #define config_filter_phase_STOP	1
 #define config_filter_phase_ADD		2
+#define config_filter_phase_START_WRITE	3
+#define config_filter_phase_STOP_WRITE	4
+#define config_filter_phase_WRITE	5
 
 /* return TRUE to free any strings allocated to this item */
 typedef BOOL (*config_filter_fn)(int phase, const char *name, const void *value);

@@ -758,7 +758,8 @@ enum
     content_tag_ONBLUR,
     content_tag_SUBMITONUNLOAD,
     content_tag_SELECTBUTTON,
-    content_tag_SPECIALSELECT
+    content_tag_SPECIALSELECT,
+    content_tag_NOANTITWITTER
 };
 
 static const char *content_tag_list[] =
@@ -767,7 +768,8 @@ static const char *content_tag_list[] =
     "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL",
     "FASTLOAD", "URL", "USER", "USERNAME",
     "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR",
-    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON", "SPECIALSELECT"
+    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON", "SPECIALSELECT",
+    "NOANTITWITTER"
 };
 
 /*
@@ -923,7 +925,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     old_keyboard_state = keyboard_state;
 
     v->select_button = 0;
-    
+
+    /* force on antitwitter */
+    gbf_flags |= GBF_ANTI_TWITTER;
+
     /* check for special page instructions - not all relevant to child pages */
     {
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
@@ -970,6 +975,12 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 			v->pending_user = atoi(vals[content_tag_USER].value);
 			v->pending_user_name = strdup(vals[content_tag_USERNAME].value);
+		    }
+
+		    if (vals[content_tag_NOANTITWITTER].value)
+		    {
+			STBDBG(("ncbrowsermode: disable antitwitter\n"));
+			gbf_flags &= ~GBF_ANTI_TWITTER;
 		    }
 		}
 		/* open valid for transients */
@@ -1102,7 +1113,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     }
 
     /* if not transient page then ensure codec toolbar removed */
-    if (!v->open_transient)
+    if (!v->open_transient && use_toolbox)
     {
 	tb_codec_kill();
     }
@@ -1171,7 +1182,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    v->browser_mode = mode;
 
 	/* new scheme is embed info about the button to select into the HTML */
-	if (v->select_button)
+	if (v->select_button && use_toolbox)
 	{
 	    tb_status_button(v->select_button, tb_status_button_ACTIVE);
 	}
@@ -1497,7 +1508,7 @@ os_error *fe_print(fe_view v, int size)
 	else
 	{
 	    e = frontend_open_url(buffer, NULL, print_targets[size], NULL, fe_open_url_NO_CACHE | fe_open_url_NO_REFERER);
-	    if (!e) tb_status_button(print_events[size], tb_status_button_ACTIVE);
+	    if (!e && use_toolbox) tb_status_button(print_events[size], tb_status_button_ACTIVE);
 	}
     }
     else
@@ -1557,7 +1568,8 @@ static os_error *set_fetch_message(fe_view v)
 
         n += sprintf(buffer+n, msgs_lookup("stim"), v->images_had, v->images_had + v->images_waiting);
 
-        e = tb_status_set_message(status_type_FETCH, buffer);
+	if (use_toolbox)
+	    e = tb_status_set_message(status_type_FETCH, buffer);
     }
 
     return e;
@@ -1600,7 +1612,7 @@ static int fe_transient_set_size(fe_view v)
     case fe_position_TOOLBAR:
 	v->box.x0 = text_safe_box.x0;
 	v->box.x1 = text_safe_box.x1;
-	h = v->transient_position == fe_position_TOOLBAR_WITH_COORDS ? v->dbox_y : tb_status_height();
+	h = v->transient_position == fe_position_TOOLBAR_WITH_COORDS || !use_toolbox ? v->dbox_y : tb_status_height();
 	    
 	if (config_display_control_top)
 	{
@@ -1639,10 +1651,13 @@ static int fe_transient_set_size(fe_view v)
 
     case fe_position_FULLSCREEN:
  	v->box = screen_box;
-	if (config_display_control_top)
-	    v->margin.y1 -= tb_status_height();
-	else
-	    v->margin.y0 += tb_status_height();
+	if (use_toolbox)
+	{
+	    if (config_display_control_top)
+		v->margin.y1 -= tb_status_height();
+	    else
+		v->margin.y0 += tb_status_height();
+	}
 	changed = TRUE;
 	break;
 
@@ -1754,7 +1769,7 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 
 	/* if on the toolbar then there may be some specific decisions,
 	   for now - put it back onto the main page*/
-	if (cs.w == tb_status_w())
+	if (fe_status_window_handle())
 	{
 	    vcaret = main_view;
 	    if (vcaret->children)
@@ -1949,7 +1964,8 @@ int fe_check_download_finished(fe_view v)
 	    fe_global_history_optimise();
 	    fe_history_optimise(main_view);
 
-	    tb_optimise();
+	    if (use_toolbox)
+		tb_optimise();
 	    fe_internal_optimise();
 
 	    cookie_optimise();
@@ -3022,17 +3038,23 @@ os_error *fe_hotlist_add(fe_view v)
 
     t = time(NULL) + 2;
 
-    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_ACTIVE);
-    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
+    if (use_toolbox)
+    {
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_ACTIVE);
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
+    }
 
     frontend_complain(hotlist_add(url, title));
 
     while (time(NULL) < t)
 	;
 
-    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_PRESSED);
-    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_INACTIVE);
-
+    if (use_toolbox)
+    {
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_PRESSED);
+	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_INACTIVE);
+    }
+    
     return NULL;
 }
 
@@ -3075,6 +3097,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
     wimp_wstate state;
     int movement = 0;
     wimp_box mbox;
+    int status_height = use_toolbox ? tb_status_height() : 0;
 
     if (config_display_frames_top_level)
 	mbox.y0 = mbox.y1 = 0;
@@ -3087,15 +3110,15 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
     {
 	if (config_display_control_top)
 	{
-	    v->margin.y1 = mbox.y1 - (tb_status_height() + STATUS_TOP_MARGIN);
-	    movement = tb_status_height() + STATUS_TOP_MARGIN;
+	    v->margin.y1 = mbox.y1 - (status_height + STATUS_TOP_MARGIN);
+	    movement = status_height + STATUS_TOP_MARGIN;
 
 	    if (on_screen_kbd && v->children == NULL)
 		v->margin.y1 -= on_screen_kbd_pos.y1 - on_screen_kbd_pos.y0;
 	}
 	else
 	{
-	    v->margin.y0 = mbox.y0 + tb_status_height() + STATUS_TOP_MARGIN;
+	    v->margin.y0 = mbox.y0 + status_height + STATUS_TOP_MARGIN;
 
 	    if (on_screen_kbd && v->children == NULL)
 		v->margin.y0 += on_screen_kbd_pos.y1 - on_screen_kbd_pos.y0;
@@ -3106,7 +3129,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
 	if (config_display_control_top)
 	{
 	    v->margin.y1 = mbox.y1;
-	    movement = -tb_status_height() - STATUS_TOP_MARGIN;
+	    movement = -status_height - STATUS_TOP_MARGIN;
 	    if (state.o.y > -mbox.y1)
 		movement = state.o.y + mbox.y1;
 	}
@@ -3132,21 +3155,24 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
 
 os_error *fe_status_state(fe_view v, int state)
 {
-    BOOL is_open = tb_is_status_showing();
+    BOOL is_open = use_toolbox ? tb_is_status_showing() : FALSE;
     BOOL new_state_open = state == -1 ? !is_open : state;
 
     if (new_state_open != is_open)
     {
 	int movement = fe_status_set_margins(v, state);
 
-        if (new_state_open)
-        {
-            tb_status_update_fades(v);
-            tb_status_show(FALSE);
-        }
-        else
-            tb_status_hide(FALSE);
-
+	if (use_toolbox)
+	{
+	    if (new_state_open)
+	    {
+		tb_status_update_fades(v);
+		tb_status_show(FALSE);
+	    }
+	    else
+		tb_status_hide(FALSE);
+	}
+	
         if (v->displaying)
 	{
 #if 0				/* this version ensure background is redrawn correctly */
@@ -3188,7 +3214,8 @@ os_error *fe_status_toggle(fe_view v)
 	v = fe_find_top_nopopup(v);
 
 	/* changed so that when the user toggles state it always results in a change */
-	user_status_open = !tb_is_status_showing();
+	if (use_toolbox)
+	    user_status_open = !tb_is_status_showing();
 
 	/* get rid of all the popups */
 	if (!user_status_open) while (v->next)
@@ -3332,7 +3359,7 @@ os_error *fe_status_unstack(fe_view source_v)
 		fe_dispose_view(v);
 	    }
 	}
-	else if (tb_status_unstack(TRUE))
+	else if (use_toolbox & tb_status_unstack(TRUE))
 	{
 	}
 	else
@@ -3340,7 +3367,8 @@ os_error *fe_status_unstack(fe_view source_v)
             fe_history_move(main_view/* source_v */, history_PREV);
     }
 
-    tb_status_update_fades(top);
+    if (use_toolbox)
+	tb_status_update_fades(top);
 
     return NULL;
 }
@@ -3349,6 +3377,9 @@ BOOL fe_status_unstack_possible(fe_view source_v)
 {
     fe_view v;
 
+    if (!use_toolbox)
+	return FALSE;
+    
     if (stbmenu_is_open() || on_screen_kbd)
 	return TRUE;
 
@@ -3371,8 +3402,11 @@ BOOL fe_status_unstack_possible(fe_view source_v)
 
 os_error *fe_status_open_toolbar(fe_view v, int bar)
 {
-    tb_status_new(v, bar);
-    tb_status_update_fades(v);
+    if (use_toolbox)
+    {
+	tb_status_new(v, bar);
+	tb_status_update_fades(v);
+    }
     return NULL;
 }
 
@@ -3396,7 +3430,8 @@ void fe_status_unstack_all(void)
 	fe_dispose_view(v);
     }
 
-    tb_status_unstack_all(TRUE);
+    if (use_toolbox)
+	tb_status_unstack_all(TRUE);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -3714,6 +3749,10 @@ static void fe_idle_handler(void)
     int flags;
     char *link;
 
+    /* update key leds */
+    if (use_toolbox)
+	tb_status_set_key_leds();
+    
     frontend_fatal_error(wimp_get_point_info(&m));
     pointer_moved = m.x != pointer_last_pos.x || m.y != pointer_last_pos.y;
 
@@ -3794,7 +3833,7 @@ static void fe_idle_handler(void)
 	}
 
 	/* check if the pointer has been moved and we need to go to pointer mode    */
-	if (pointer_moved && (v_over || m.w == tb_status_w()))
+	if (pointer_moved && (v_over || m.w == fe_status_window_handle()))
 	{
 	    STBDBG(( "idle: pointer moved to %d,%d had_modechange %d\n", m.x, m.y, pointer_ignore_next));
 
@@ -4757,6 +4796,15 @@ static void read_gbf(void)
     _kernel_setenv("NCFresco$GBF", buf);
 }
 
+static os_error *mark_frames(fe_view v, void *handle)
+{
+    if (v->children == NULL)
+	v->pending_mode_change = TRUE;
+
+    return NULL;
+    NOT_USED(handle);
+}
+
 static void fe_mode_changed(void)
 {
     int dx, dy;
@@ -4800,13 +4848,7 @@ static void fe_mode_changed(void)
 	v->pending_mode_change = TRUE;
 
 	/* mark the children so they don't get reopened */
-	do
-	{
-	    v = fe_next_frame(v, TRUE);
-	    if (v)
-		v->pending_mode_change = TRUE;
-	}
-	while (v);
+	iterate_frames(v, mark_frames, NULL);
     }
     else
 	fe_refresh_window(-1, NULL);
@@ -4993,7 +5035,7 @@ static BOOL window_is_ours(wimp_w w)
 {
     int vals[2];
 
-    if (w == tb_status_w())
+    if (w == fe_status_window_handle())
 	return TRUE;
 
     vals[0] = w;
@@ -5057,6 +5099,7 @@ static void fe_handle_prequit(void)
 
 static BOOL fe_config_filter(int phase, const char *name, const void *value)
 {
+    static FILE *fh = NULL;
     BOOL discard = FALSE;
 
     STBDBGN(("fe_config_filter: phase %d name '%s'\n", phase, strsafe(name)));
@@ -5087,6 +5130,32 @@ static BOOL fe_config_filter(int phase, const char *name, const void *value)
 	    discard = TRUE;
 	}
 	break;
+
+    case config_filter_phase_START_WRITE:
+	fh = (FILE *)value;
+	break;
+
+    case config_filter_phase_STOP_WRITE:
+	fh = NULL;
+	break;
+
+    case config_filter_phase_WRITE:
+	if (fh)
+	{
+	    if (strcmp(name, "key") == 0)
+	    {
+		discard = TRUE;
+	    }
+	    else if (strcmp(name, "toolbar") == 0)
+	    {
+		discard = TRUE;
+	    }
+	    else if (strcmp(name, "toolbar.name") == 0)
+	    {
+		discard = TRUE;
+	    }
+	}
+	break;
     }
     return discard;
 }
@@ -5102,6 +5171,13 @@ static void read_nvram(void)
     if (nvram_read(NVRAM_PRINT_ORIENTATION_TAG, &t))
 	config_print_sideways = t;
 
+    if (nvram_read(NVRAM_PRINT_BG_TAG, &t))
+	config_print_nobg = !t;
+
+    if (nvram_read(NVRAM_PRINT_IMAGES_TAG, &t))
+	config_print_nopics = !t;
+
+
     if (nvram_read(NVRAM_FONTS_TAG, &t))
 	fe_font_size_set(t, TRUE);
 
@@ -5113,6 +5189,13 @@ static void read_nvram(void)
 
     if (nvram_read(NVRAM_SCALING_TAG, &t))
 	fe_scaling_set(t);
+
+
+    if (nvram_read(NVRAM_DISPLAY_BG_TAG, &t))
+	config_display_body_colours = t;
+
+    if (nvram_read(NVRAM_DISPLAY_IMAGES_TAG, &t))
+	config_defer_images = !t;
 }
 
 static void re_read_config(int flags)
@@ -5177,6 +5260,12 @@ static void re_read_config_data(int flags, const char *filename)
     NOT_USED(flags);
 }
 
+static void write_config_data(int flags, const char *filename)
+{
+    config_write_file_by_name(filename);
+    NOT_USED(flags);
+}
+
 static void fe_handle_service_message(wimp_msgstr *msg)
 {
     os_regset *r = (os_regset *)&msg->data.words[0];
@@ -5197,6 +5286,8 @@ static void fe_handle_service_message(wimp_msgstr *msg)
             {
 		connection_up = fe_interface_UP;
 
+		tb_status_set_modem(TRUE);
+
                 /* only reload stuff on first connection */
                 if (connection_count++ == 0)
                 {
@@ -5206,6 +5297,8 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	    /* IP is down */
 	    else if (new_state == dialler_DISCONNECTED)
 	    {
+		tb_status_set_modem(FALSE);
+
 		/* only reset if we were up, otherwise it will wipe
                    out the error condition before we have a chance to
                    look at it. */
@@ -5440,7 +5533,7 @@ void fe_event_process(void)
         {
             fe_view v = find_view(e.data.o.w);
 
-	    STBDBGN(("EOPEN: v%p %d,%d %d,%d sender %x\n", v, e.data.o.box.x0, e.data.o.box.y0, e.data.o.box.x1, e.data.o.box.y1, sender));
+	    STBDBGN(("EOPEN: v%p %d,%d %d,%d\n", v, e.data.o.box.x0, e.data.o.box.y0, e.data.o.box.x1, e.data.o.box.y1));
 
 	    if (v && v->pending_mode_change)
 	    {
@@ -5462,7 +5555,7 @@ void fe_event_process(void)
 		if (v->w)
 		    fe_refresh_window(v->w, NULL);
 	    }
-	    else if (toolbar_pending_mode_change && e.data.o.w == tb_status_w())
+	    else if (toolbar_pending_mode_change && use_toolbox && e.data.o.w == tb_status_w())
 	    {
 		tb_status_hide(FALSE);
 		tb_status_show(FALSE);
@@ -5593,7 +5686,7 @@ void fe_event_process(void)
 			fe_frame_link_redraw_all(v_new);		/* redraw them all */
 		}
 	    }
-	    else if (e.data.c.w == tb_status_w() && pointer_mode == pointermode_OFF)
+	    else if (use_toolbox && e.data.c.w == tb_status_w() && pointer_mode == pointermode_OFF)
 		tb_status_highlight(FALSE);		
             break;
         }
@@ -5622,7 +5715,7 @@ void fe_event_process(void)
 		fe_pointer_mode_update(pointermode_OFF);
 
 		/* if moving onto the toolbar */
-		if (e.data.c.w == tb_status_w())
+		if (use_toolbox && e.data.c.w == tb_status_w())
 		{
 		    /* take the highlight */
  		    tb_status_highlight(TRUE);
@@ -5707,6 +5800,10 @@ void fe_event_process(void)
 		    usrtrc("readconfig:\n");
 		    re_read_config_data(msg->data.words[1], (const char *)&msg->data.words[2]);
 		    break;
+
+		case ncfresco_reason_WRITE_CONFIG:
+		    usrtrc("writeconfig:\n");
+		    write_config_data(msg->data.words[1], (const char *)&msg->data.words[2]);
 		}
 		break;
 
@@ -5993,6 +6090,7 @@ static BOOL fe_initialise(void)
     os_error *e;
     char *s;
     int t;
+    char buffer[32];
 
     /* Initialise the WIMP stuff */
     visdelay_init();
@@ -6007,6 +6105,19 @@ static BOOL fe_initialise(void)
 	wimp_version = 350;
     else
 	wimp_version = 380;
+
+#if !MEMLIB
+    /* Now bring up the flex system->.. */
+    flex_init(program_name);
+#else
+    strncpysafe(buffer, program_name, sizeof(buffer));
+    strlencat(buffer, " data", sizeof(buffer));
+    MemFlex_Initialise2(buffer);
+
+    strncpysafe(buffer, program_name, sizeof(buffer));
+    strlencat(buffer, " heap", sizeof(buffer));
+    MemHeap_Initialise(buffer);
+#endif
 
     if (use_toolbox)
     {
@@ -6028,26 +6139,13 @@ static BOOL fe_initialise(void)
     STBDBG(( "task handle: %x\n", task_handle));
 
 #if !MEMLIB
-    /* Now bring up the flex system->.. */
-    flex_init(program_name);
     heap_init(program_name);
 #else
-    {
-	char buffer[32];
-
-	strncpysafe(buffer, program_name, sizeof(buffer));
-	strlencat(buffer, " data", sizeof(buffer));
-	MemFlex_Initialise2(buffer);
-
-	strncpysafe(buffer, program_name, sizeof(buffer));
-	strlencat(buffer, " heap", sizeof(buffer));
-	MemHeap_Initialise(buffer);
-
-	strncpysafe(buffer, program_name, sizeof(buffer));
-	strlencat(buffer, " image ws", sizeof(buffer));
-	heap_init(buffer);
-    }
+    strncpysafe(buffer, program_name, sizeof(buffer));
+    strlencat(buffer, " image ws", sizeof(buffer));
+    heap_init(buffer);
 #endif
+
     atexit(&fe_tidyup);
 
 /*  gbf_flags &= ~GBF_TRANSLATE_UNDEF_CHARS; this needs to not be defined to build a japanese version */
@@ -6064,6 +6162,18 @@ static BOOL fe_initialise(void)
 
     if (nvram_read(NVRAM_PRINT_ORIENTATION_TAG, &t))
 	config_print_sideways = t;
+
+    if (nvram_read(NVRAM_PRINT_BG_TAG, &t))
+	config_print_nobg = !t;
+
+    if (nvram_read(NVRAM_PRINT_IMAGES_TAG, &t))
+	config_print_nopics = !t;
+
+    if (nvram_read(NVRAM_DISPLAY_BG_TAG, &t))
+	config_display_body_colours = t;
+
+    if (nvram_read(NVRAM_DISPLAY_IMAGES_TAG, &t))
+	config_defer_images = !t;
 
     if (nvram_read(NVRAM_FONTS_TAG, &config_display_scale))
 	config_display_scale = config_display_scales[config_display_scale];

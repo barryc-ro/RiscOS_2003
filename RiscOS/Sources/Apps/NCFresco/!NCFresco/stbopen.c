@@ -364,7 +364,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	!parent->open_transient &&
 	!is_internal &&
 	pointer_mode == pointermode_OFF &&
-	tb_is_status_showing() &&
+	use_toolbox && tb_is_status_showing() &&
 	config_mode_cursor_toolbar)
     {
 	tb_status_highlight_stop();

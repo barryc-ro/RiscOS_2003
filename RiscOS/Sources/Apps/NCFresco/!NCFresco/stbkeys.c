@@ -884,7 +884,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	break;
     }
 
-    if (cs->w == tb_status_w())
+    if (use_toolbox && cs->w == tb_status_w())
     {
         event = fe_key_lookup(chcode, key_map_TOOLBAR);
     }

@@ -166,6 +166,7 @@
 #define fevent_TOOLBAR_NC1		    0x20A8
 #define fevent_TOOLBAR_CODEC		    0x20A9
 #define fevent_TOOLBAR_CUSTOM		    0x20AA
+#define fevent_TOOLBAR_CYCLE		    0x20AE
 #define fevent_TOOLBAR_EXIT		    0x20AF /* unstack */
 
 #define fevent_PRINT_LETTER		    0x20B0
