@@ -114,7 +114,7 @@ glurg
         LDR     R14,=MSToWimpMagicHandle
         TEQ     R5,R14
         BEQ     autowimp_menu
-;
+
         MOV     R14,R5,LSL #32-flag_versionbit
         LDR     R3,[wsptr,R14,LSR #32-flag_versionbit]  ; R3 --> task data
         TST     R3,#task_unused
@@ -218,7 +218,7 @@ SWIWimp_SendMessage
 ; first find out if application is sending a font changed message
         Push    "R0-R1"
         LDR     R0,[R1,#16]
-        LDR     R1,=&400CF
+        LDR     R1,=Message_FontChanged
         CMP     R0,R1
         Pull    "R0-R1"
         BNE     ordinary_message
@@ -1034,6 +1034,7 @@ returnerror
 01
       ]
 
+      [ debugtask4
 ; Stamp with event time for task priority and swapping
 
         LDR     R4,[wsptr,handle]
@@ -1041,13 +1042,12 @@ returnerror
 
         Push    "R0",NE
         SWINE   XOS_ReadMonotonicTime
- [ debugtask4
         BEQ     %FT00
         Debug   task4,"Time",R0
 00
- ]
         STRNE   R0,[R4,#task_eventtime]
         Pull    "R0",NE
+      ]
 
 ; restore FP registers if they were saved (ie. save block present)
 
@@ -1061,6 +1061,10 @@ returnerror
 
         MOV     R5,#0                   ; avoid FP exceptions
         WFS     R5                      ; will still occur if FPEmulator RMKilled
+      [ FPE4
+	LFM	F0,4,[R4,#fp_reg0]      ; (only gets here if active previously)
+	LFM	F4,4,[R4,#fp_reg4]
+      |
         LDFE    F0,[R4,#fp_reg0]        ; (only gets here if active previously)
         LDFE    F1,[R4,#fp_reg1]
         LDFE    F2,[R4,#fp_reg2]
@@ -1069,6 +1073,7 @@ returnerror
         LDFE    F5,[R4,#fp_reg5]
         LDFE    F6,[R4,#fp_reg6]
         LDFE    F7,[R4,#fp_reg7]
+      ]
         LDR     R5,[R4,#fp_status]
         WFS     R5
 01
@@ -1076,10 +1081,10 @@ returnerror
         CMP     R0,#max_reason          ; Valid message?
         BHS     %FT01                   ; No then jump,maybe -> *command from Wimp_StartTask
 
-        Push    "R1-R2"
+        Push    "R1"
         MOV     R1,userblk
         CallFilter postfilter           ; call the post-poll filter
-        Pull    "R1-R2"
+        Pull    "R1"
         CMP     R0,#-1
         BEQ     repollwimp              ; if it claimed then just re-poll
 01
@@ -1196,6 +1201,10 @@ saveFPregs
         STR     R1,[R2,#fp_status]
         LDR     R1,=C_runtime_status            ; now C run-time status value
         WFS     R1
+      [ FPE4
+    	SFM	F0,4,[R2,#fp_reg0]
+	SFM	F4,4,[R2,#fp_reg4]
+      |
         STFE    F0,[R2,#fp_reg0]
         STFE    F1,[R2,#fp_reg1]
         STFE    F2,[R2,#fp_reg2]
@@ -1204,6 +1213,7 @@ saveFPregs
         STFE    F5,[R2,#fp_reg5]
         STFE    F6,[R2,#fp_reg6]
         STFE    F7,[R2,#fp_reg7]
+      ]
 ;
         Pull    "R0-R3,PC",,^                   ; preserve flags
 
@@ -1268,9 +1278,15 @@ setbuttonx
 ;              bit 5 ==> 'poll' error window (ie. leave open & exit)
 ;              bit 6 ==> finish polling error window, select [r1] and close it
 ;              bit 7 ==> don't beep (even if WimpFlags bit 4 clear)
+;              bit 8 ==> new type error report
+;              bits 9-11 ==> error type
+;
 ;         R2 --> application name (<=0 ==> Wimp has detected the error)
-; Exit:   R1 = 1 ==> OK box was selected
+;         R3 --> sprite name (for new type error report)
+;         R4 --> sprite area, or 1 for Wimp area (for new type error report)
+;         R5 --> comma separated additional button list, or 0 for none (for n; Exit:   R1 = 1 ==> OK box was selected
 ;         R1 = 2 ==> Cancel box was selected
+;         R1 = 3,4... ==> additional button pressed
 ;
 
 errorprefix     DCB     "NoError",0
@@ -1455,7 +1471,7 @@ pollit
         MOVEQ   R4,#1                   ; select OK
         TST     R14,#erf_okbox:OR:erf_cancelbox
         BNE     finisherror
-        TST     R14,#newerrorbits
+        TST     R14,#erf_newtype
         BEQ     finisherror
         LDR     R4,tempworkspace+12              ; first extra button
         SUB     R4,R4,#1
@@ -1627,6 +1643,8 @@ notoveryet
         STR     R4,[R1,#i_data+i_size*4]
         MOV     R1,#0
         STR     R1,watchdogerrtxt+216
+	LDR	R1,tempworkspace+16	; Get back buttons
+	STR	R1,tempworkspace+4
         ADRL    R1,watchdogerrtxt+224
         LDMIA   R1,{R4-R7}
         MOV     userblk,R5
@@ -1714,8 +1732,8 @@ starterrorbox
 
 ; bit 31 is reserved, used internally
 
-        BIC     R5,R5,#&80000000
-        BIC     userblk,userblk,#&80000000
+        BIC     R5,R5,#erf_describe
+        BIC     userblk,userblk,#erf_describe
 
         MOV     R1,#0
         STR     R1,watchdogerrtxt+216   ; make sure no label swapping
@@ -1767,14 +1785,18 @@ starterrorbox
         ADR     R0,errorptoken
         BL      LookupToken
         ADRL    R4,watchdogerror
-        MOV     R5,#&80000003           ; cancel describe
-        ORR     R5,R5,#&100              ; continue rather than ok
+	LDR	R1,tempworkspace+4	; store buttons away
+	STR	R1,tempworkspace+16	; in case we need them again
+					; when user hits describe
+	TST	R5,#erf_newtype
+	MOV	R5,#erf_describe:OR:erf_cancelbox:OR:erf_okbox
+        ORR     R5,R5,#erf_newtype      ; continue rather than ok
         MOV     userblk,R5
         MOV     R6,#0
-        STR     R6,tempworkspace
-        STR     R6,tempworkspace+4      ; no custom buttons/sprite
+	MOVEQ	R7,#0			; make sure no sprite if original error wasn't new type
+        STREQ   R6,tempworkspace
+        STR     R6,tempworkspace+4      ; no custom buttons
         LDR     R6,watchdogerrtxt+232   ; app name
-        MOV     R7,#0                   ; no sprite
 
 starterror_next
         ]
@@ -1888,9 +1910,7 @@ starterrorbox_draw
         SWI     XOS_Byte                ; R1 := actual shape number
       ]
 
-      [ chwidth
         BL      set16x32chars
-      ]
         Pull    "R0-R3"                 ; R0-R3 = original registers
 ;
         Push    "R0"                    ; R0 --> error block
@@ -1926,15 +1946,15 @@ starterrorbox_draw
 
         [ NewErrorSystem
 
-; set up sprites in dialog box
+; set up sprites in dialogue box
 
         MOV     R0,userblk
-        AND     R0,R0,#errortypemask
+        AND     R0,R0,#erf_errortype
         ADR     R14,errspritetable
-        TST     userblk,#newerrorbits
-        ADDNE   R0,R14,R0 , LSR #errortypeshift-4
+        TST     userblk,#erf_newtype
+        ADDNE   R0,R14,R0 , LSR #erb_errortype-4
         MOVEQ   R0,R14
-        TST     userblk,#&80000000
+        TST     userblk,#erf_describe
         ADDNE   R0,R0,#48               ; program symbol
 
 ; R14 now points to error type sprite name <= 12 chars
@@ -1948,7 +1968,7 @@ starterrorbox_draw
         ; set up app sprite
         MOV     R0,#1
         STR     R0,[handle,#w_areaCBptr]
-        TST     userblk,#newerrorbits
+        TST     userblk,#erf_newtype
         BEQ     oldappsprite
         CMP     R3,#1
 
@@ -2059,7 +2079,7 @@ doneappsprite
 ;
 
         LDR     R14,tempworkspace+4             ; button list
-        TST     userblk,#newerrorbits
+        TST     userblk,#erf_newtype
         TEQNE   R14,#0
         BNE     %FT10
 
@@ -2121,7 +2141,7 @@ doneappsprite
         MOVLT   R3,#7
         BLT     markinvisibleicons
 
-        TST     userblk,#newerrorbits
+        TST     userblk,#erf_newtype
         MOVEQ   R3,#7
         BEQ     markinvisibleicons
 
