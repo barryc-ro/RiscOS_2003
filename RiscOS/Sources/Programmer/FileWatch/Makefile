@@ -44,6 +44,8 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
+REMOTEDB  =
 #
 # Include files
 #
@@ -99,14 +101,11 @@ o.filewatch: Documents.def.filewatch
 	${RM} viafile
 	${WIPE} Defmod ~cr
 
+# CMHG header file gets generated at the same time as the object file.
 h.${CMHGNAME}: o.${CMHGNAME}
 	@
 
-o.filechange: h.${CMHGNAME}
-o.handlers: h.${CMHGNAME}
-o.interest: h.${CMHGNAME}
-o.main: h.${CMHGNAME}
-oz.main: h.${CMHGNAME}
+o.filechange o.handlers o.interest o.main oz.main: h.${CMHGNAME}
 
 #
 # RISC OS ROM build rules:
@@ -114,11 +113,16 @@ oz.main: h.${CMHGNAME}
 rom: ${TARGET} local_dirs
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: export_${PHASE}
+
+export_hdrs: h.filewatch hdr.filewatch
         ${CP} h.filewatch ${EXP_HDR}.h.filewatch ${CPFLAGS}
         ${CP} hdr.filewatch ${EXP_HDR1}.filewatch ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (headers)
+
+export_libs: o.filewatch
         ${CP} o.filewatch ${EXP_HDR}.o.filewatch ${CPFLAGS}
-        @echo ${COMPONENT}: export complete
+        @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET} local_dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -132,14 +136,17 @@ clean:
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
+        ${RM} h.filewatch
+        ${RM} hdr.filewatch
         ${RM} ${TARGET}
         ${RM} h.${CMHGNAME}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.Messages ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+	${MKDIR} ${RESDIR}
+	TokenCheck LocalRes:Messages
+	${CP} LocalRes:Messages  ${RESDIR}.Messages ${CPFLAGS}
+	@echo ${COMPONENT}: resource files copied
 
 local_dirs:
 	${MKDIR} o
@@ -150,8 +157,9 @@ local_dirs:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${REMOTEDB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${REMOTEDB}
+
 #
 # Final link for the ROM Image (using given base address)
 #
@@ -160,7 +168,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS}
-        ${TLD} -o $@ -module ${OBJS}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${REMOTEDB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${REMOTEDB}
 
 # Dynamic dependencies:
