@@ -21,7 +21,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -throwback -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 
 #
@@ -105,5 +105,6 @@ rm.Fonts: s.Font_BasFP
 rm.Fonts: s.Funcache
 rm.Fonts: s.Fonts04
 rm.Fonts: s.Encoding
+rm.Fonts: s.FontsWide
 rm.Fonts: s.Blending
 rm.Fonts: hdr:ITable
