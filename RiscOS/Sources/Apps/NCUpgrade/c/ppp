@@ -47,7 +47,7 @@ static enum ppp_state ppp_state = IDLE;
 
 static int initiate_link_connection(void);
 static int tell_ppp_to_disconnect(void);
-static int call_ppp_stats(void);
+static int ppp_status(void);
 static int e_check(int rc,int line);
 
 #ifdef PPP_SIMULATION
@@ -82,6 +82,7 @@ extern int ppp_stateMachine(int reason)
                                          rc = initiate_link_connection();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
+                                              ppp_state = IDLE;
                                               return ERROR;
                                          }
                                          else if (rc == IN_PROGRESS)
@@ -124,6 +125,7 @@ extern int ppp_stateMachine(int reason)
                              case CLOSE: rc = tell_ppp_to_disconnect();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
+                                              ppp_state = IDLE;
                                               return ERROR;
                                          }
                                          else if (rc == IN_PROGRESS)
@@ -137,9 +139,10 @@ extern int ppp_stateMachine(int reason)
                                               return DONE;
                                          }
                                          break;
-                             case POLL:  rc = call_ppp_stats();
+                             case POLL:  rc = ppp_status();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
+                                              ppp_state = IDLE;
                                               return ERROR;
                                          }
                                          else if (rc == IN_PROGRESS)
@@ -168,6 +171,7 @@ extern int ppp_stateMachine(int reason)
                              case CLOSE: rc = tell_ppp_to_disconnect();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
+                                              ppp_state = IDLE;
                                               return ERROR;
                                          }
                                          else if (rc == IN_PROGRESS)
@@ -199,9 +203,10 @@ extern int ppp_stateMachine(int reason)
                                          return ERROR;
                                          break;
                              case ABORT: /* Drop through */
-                             case CLOSE: rc = call_ppp_stats();
+                             case CLOSE: rc = ppp_status();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
+                                              ppp_state = IDLE;
                                               return ERROR;
                                          }
                                          else if (rc == IN_PROGRESS)
@@ -215,9 +220,10 @@ extern int ppp_stateMachine(int reason)
                                               return DONE;
                                          }
                                          break;
-                             case POLL:  rc = call_ppp_stats();
+                             case POLL:  rc = ppp_status();
                                          if ((e_check(rc,__LINE__)) == ERROR)
                                          {
+                                              ppp_state = IDLE;
                                               return ERROR;
                                          }
                                          else if (rc == IN_PROGRESS)
@@ -244,20 +250,18 @@ extern int ppp_stateMachine(int reason)
 
 /************************************************************************************/
 /* Function:   initiate_link_connection()                                           */
-/* Behaviour:  Open a PPP link.                                                     */
-/* Returns:    DONE, PPP_ERROR_CANT_WRITE_SECRETS, PPP_ERROR_FAILED_CONNECT, or     */
-/*             PPP_ERROR_TIMEOUT.                                                   */
+/* Behaviour:  Starts the process of opening a PPP link.                            */
+/* Returns:    IN_PROGRESS, PPP_ERROR_CANT_WRITE_SECRETS, or PPP_ERROR_FAILED_      */
+/*             CONNECT.                                                             */
 /************************************************************************************/
 static int initiate_link_connection(void)
 {
 #ifndef PPP_SIMULATION
-    struct ifreq ifr;
-    int    error = 0;
-    int    r;
     int    s;
-    int    start_time;
-    int    time_now;
     _kernel_oserror *er = NULL;
+    #ifdef TEST_PPP_CONNECT_DOESNT_BLOCK
+    _kernel_swi_regs regs;
+    #endif
 
     /* Create secrets files in InetDBase */
     s = create_secrets_files();
@@ -270,53 +274,19 @@ static int initiate_link_connection(void)
          return PPP_ERROR_FAILED_CONNECT;
     }
 
-    /* Try and open a socket */
-    s = socket(PF_INET, SOCK_RAW, 0);
-    if (s == -1)
-    {
-        error_handler(__FILE__,__LINE__,"initiate_link_connection()",0,"Couldn't open a socket",WARNING);
-        return PPP_ERROR_FAILED_CONNECT;
-    }
+    /* Return for a wimp poll.  Control subsequently returns to ppp_status() to see how PPP is
+       getting on and whether or not we have a connection yet.  This avoids hogging the wimp and
+       the possibility of blocking the UI for the specified timeout period. */
 
-    /* Length of this array is 16 bytes */
-    strncpy(ifr.ifr_name, "ppp0", sizeof(ifr.ifr_name));
+       #ifdef TEST_PPP_CONNECT_DOESNT_BLOCK
+       _kernel_swi(OS_WriteI+4,&regs,&regs);
+       _kernel_swi(OS_WriteI+30,&regs,&regs);
+       _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+       printf("PPP in progress\n");
+       _kernel_swi(OS_WriteI+5,&regs,&regs);
+       #endif
 
-    /* Note our start time and only try for a given time */
-    _swix(OS_ReadMonotonicTime, _OUT(0), &start_time);
-
-    do
-    {
-        /* See if socket up and running */
-        error = socketioctl (s, SIOCGIFFLAGS, &ifr);
-
-        /* Have we timed out yet? */
-        _swix(OS_ReadMonotonicTime, _OUT(0), &time_now);
-        if (time_now > (start_time + PPP_CONNECT_TIMEOUT))
-        {
-            error_handler(__FILE__,__LINE__,"initiate_link_connection()",0,"PPP timed out",WARNING);
-            return PPP_ERROR_TIMEOUT;
-        }
-    }
-    while (error != -1 && (ifr.ifr_ifru.ifru_flags & IFF_UP) == 0);
-
-    /* Close socket now */
-    r = socketclose(s);
-
-    /* socketioctl returned an error? */
-    if (error == -1)
-    {
-        error_handler(__FILE__,__LINE__,"initate_link_connection()",0,"socketioctl returned an error",WARNING);
-        return PPP_ERROR_FAILED_CONNECT;
-    }
-
-    /* socketclose returned an error? */
-    if (r == -1)
-    {
-        error_handler(__FILE__,__LINE__,"initiate_link_connection()",0,"socketclose returned an error",WARNING);
-        return PPP_ERROR_FAILED_CONNECT;
-    }
-
-    return DONE;
+       return IN_PROGRESS;
 
 #else
   static int timer_started = 0;
@@ -338,9 +308,6 @@ static int tell_ppp_to_disconnect(void)
 #ifndef PPP_SIMULATION
     _kernel_oserror *e;
     _kernel_swi_regs regs;
-    struct stats     ppp_stats;
-    int              start_time;
-    int              time_now;
     char   pppdisconnect[] = "pppdisconnect\0";
 
     /* Do a *PPPDisconnect */
@@ -348,30 +315,25 @@ static int tell_ppp_to_disconnect(void)
     if ((e = _kernel_swi(OS_CLI,&regs,&regs)) != NULL)
     {
          error_handler(__FILE__,__LINE__,"tell_ppp_to_disconnect()",e->errnum,e->errmess,WARNING);
-         return PPP_ERROR_FAILED_DISCONNECT;
+      /* error_handler() notes the error for the attention of engineers during development,
+         but this isn't something the user needs to know about so return DONE and proceed
+         as normal. */
+         return DONE;
     }
 
-    /* Note our start time and only try for a given time */
-    _swix(OS_ReadMonotonicTime, _OUT(0), &start_time);
+    /* Return for a wimp poll.  Control subsequently returns to ppp_status() to see how PPP is
+       getting on and whether or not we've disconnected yet.  This avoids hogging the wimp and
+       the possibility of blocking the UI for the specified timeout period. */
 
-    do
-    {
-        e = _swix(PPP_Stats, _INR (0, 2), 0x1, 0, &ppp_stats);
+       #ifdef TEST_PPP_DISCONNECT_DOESNT_BLOCK
+       _kernel_swi(OS_WriteI+4,&regs,&regs);
+       _kernel_swi(OS_WriteI+30,&regs,&regs);
+       _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+       printf("PPP disconnect in progress\n");
+       _kernel_swi(OS_WriteI+5,&regs,&regs);
+       #endif
 
-        /* Have we timed out yet? */
-        _swix(OS_ReadMonotonicTime, _OUT(0), &time_now);
-        if (time_now > (start_time + PPP_DISCONNECT_TIMEOUT))
-        {
-            return PPP_ERROR_TIMEOUT;
-        }
-    }
-    while (e == NULL && (ppp_stats.st_link_status & ST_STATUS_ACTIVE) != 0);
-
-    /* If PPP still active, return an error */
-    if ((ppp_stats.st_link_status & ST_STATUS_ACTIVE) != 0)
-        return PPP_ERROR_FAILED_DISCONNECT;
-
-    return DONE;
+       return IN_PROGRESS;
 
 #else
   static int timer_started = 0;
@@ -384,14 +346,174 @@ static int tell_ppp_to_disconnect(void)
 }
 
 /************************************************************************************/
-/* Function:  call_ppp_stats()                                                      */
+/* Function:  ppp_status()                                                          */
 /* Behaviour: Not used at present.                                                  */
 /* Returns:   DONE                                                                  */
 /************************************************************************************/
-static int call_ppp_stats(void)
+static int ppp_status(void)
 {
 #ifndef PPP_SIMULATION
-    return DONE;
+  static int connect_sock_started = FALSE;
+  static int timer_started = FALSE;
+  static int r,s;
+  static struct ifreq ifr;
+  static int start_time;
+  int error = 0;
+  int time_now;
+  struct stats ppp_stats;
+  _kernel_oserror *er = NULL;
+  _kernel_swi_regs regs;
+
+    switch (ppp_state)
+    {
+      case CONNECTING: if (connect_sock_started == FALSE)
+                       {
+                           /* Try and open a socket */
+                           s = socket(PF_INET,SOCK_RAW,0);
+                           if (s == -1)
+                           {
+                               error_handler(__FILE__,__LINE__,"ppp_status()",0,
+                                 "Unable to open a socket",WARNING);
+                               return PPP_ERROR_FAILED_CONNECT;
+                           }
+
+                           /* Length of this array is 16 bytes */
+                           strncpy(ifr.ifr_name,"ppp0",sizeof(ifr.ifr_name));
+
+                           /* Note our start time and only try for the specified timeout period */
+                           _swix(OS_ReadMonotonicTime,_OUT(0),&start_time);
+                           connect_sock_started = TRUE;
+                           return IN_PROGRESS;
+                       }
+                       else
+                       {
+                           /* See of socket up and running */
+                           #ifndef TEST_PPP_CONNECT_DOESNT_BLOCK
+                           error = socketioctl(s,SIOCGIFFLAGS,&ifr);
+                           #endif
+                           if (error == -1)
+                           {
+                               error_handler(__FILE__,__LINE__,"ppp_status()",0,
+                                 "socketioctl returned an error",WARNING);
+                               connect_sock_started = FALSE;
+                               return PPP_ERROR_FAILED_CONNECT;
+                           }
+
+                           if (ifr.ifr_ifru.ifru_flags & IFF_UP != 0)
+                           {
+                               /* PPP connection established */
+                               r = socketclose(s);
+                               connect_sock_started = FALSE;
+                               if (r == -1)
+                               {
+                                   error_handler(__FILE__,__LINE__,"ppp_status()",0,
+                                     "Unable to close socket",WARNING);
+                                   return PPP_ERROR_FAILED_CONNECT;
+                               }
+                               else
+                               {
+                                   return DONE;
+                               }
+                           }
+                           else
+                           {
+                               /* Have we timed out yet? */
+                               _swix(OS_ReadMonotonicTime,_OUT(0),&time_now);
+                               if (time_now > (start_time + PPP_CONNECT_TIMEOUT))
+                               {
+                                   error_handler(__FILE__,__LINE__,"ppp_status()",0,
+                                     "PPP timed out",WARNING);
+                                   connect_sock_started = FALSE;
+                                   return PPP_ERROR_TIMEOUT;
+                               }
+                               else
+                               {
+                                   #ifdef TEST_PPP_CONNECT_DOESNT_BLOCK
+                                   static int i = 1;
+                                   _kernel_swi(OS_WriteI+4,&regs,&regs);
+                                   _kernel_swi(OS_WriteI+30,&regs,&regs);
+                                   _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+                                   printf("\n\n%d\n",i++);
+                                   _kernel_swi(OS_WriteI+5,&regs,&regs);
+                                   #endif
+
+                                   return IN_PROGRESS;
+                               }
+                           }
+                       }
+
+                       error_handler(__FILE__,__LINE__,"ppp_status()",0,"Unexpected path of execution",WARNING);
+                       return ERROR;
+
+      case DISCONNECTING: if (timer_started == FALSE)
+                          {
+                            /* Note our start time and only try for a given time */
+                              _swix(OS_ReadMonotonicTime,_OUT(0),&start_time);
+                              timer_started = TRUE;
+                              return IN_PROGRESS;
+                          }
+                          else
+                          {
+                           /* Have we disconnected yet? */
+                              regs.r[0] = 0x1;
+                              regs.r[1] = 0;
+                              regs.r[2] = (int)&ppp_stats;
+                              if ((er = _kernel_swi(PPP_Stats,&regs,&regs)) != NULL)
+                              {
+                                   error_handler(__FILE__,__LINE__,"ppp_status()",er->errnum,er->errmess,WARNING);
+                                   timer_started = FALSE;
+                                /* error_handler() notes the error for the attention of engineers during development,
+                                   but this isn't something the user needs to know about so return DONE and proceed
+                                   as normal. */
+                                   return DONE;
+                              }
+
+                              #ifdef TEST_PPP_DISCONNECT_DOESNT_BLOCK
+                              if (0)
+                              #else
+                              if ((ppp_stats.st_link_status & ST_STATUS_ACTIVE) == 0)
+                              #endif
+                              {
+
+                                /* PPP has disconnected. */
+                                   timer_started = FALSE;
+                                   return DONE;
+                              }
+                              else
+                              {
+                                /* Have we timed out yet? */
+                                   _swix(OS_ReadMonotonicTime,_OUT(0),&time_now);
+                                   if (time_now > (start_time + PPP_DISCONNECT_TIMEOUT))
+                                   {
+                                       error_handler(__FILE__,__LINE__,"ppp_status()",0,"PPP timed out on disconnect",WARNING);
+                                       timer_started = FALSE;
+                                       return PPP_ERROR_TIMEOUT;
+                                   }
+                                   else
+                                   {
+                                       #ifdef TEST_PPP_DISCONNECT_DOESNT_BLOCK
+                                       static int i = 1;
+                                       _kernel_swi(OS_WriteI+4,&regs,&regs);
+                                       _kernel_swi(OS_WriteI+30,&regs,&regs);
+                                       _kernel_swi(OS_ReadMonotonicTime,&regs,&regs);
+                                       printf("\n\n%d\n",i++);
+                                       _kernel_swi(OS_WriteI+5,&regs,&regs);
+                                       #endif
+
+                                       return IN_PROGRESS;
+                                   }
+                              }
+                          }
+
+                          error_handler(__FILE__,__LINE__,"ppp_status()",0,"Unexpected path of execution",WARNING);
+                          return ERROR;
+
+                       /* In terms of what is displayed to the user, error translation (error.c) will interpret
+                          this as 'Programming_Failure'. */
+
+      default:            error_handler(__FILE__,__LINE__,"ppp_status()",0,"Unexpected path of execution",WARNING);
+                          return ERROR;
+    }
 
 #else
   static int timer_started = 0;
@@ -531,7 +653,10 @@ static int e_check(int rc,int line)
               error_handler(__FILE__,line,"ppp_stateMachine()",er->errnum,
                 er->errmess,WARNING);
          }
-         ppp_state = IDLE;
+         else
+         {
+              pause(0);
+         }
          rc = ERROR;
     }
 

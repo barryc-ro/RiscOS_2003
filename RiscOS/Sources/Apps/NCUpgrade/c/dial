@@ -36,7 +36,7 @@ enum dial_state {IDLE,
                  CONNECTED,
                  HANGING_UP};
 
-static int dial_state = IDLE;
+static enum dial_state dial_state = IDLE;
 
 /************************************************************************************/
 /*                             Function Prototypes                                  */
@@ -58,7 +58,7 @@ static int get_country_code(int dial_code);
 /************************************************************************************/
 /* Function:  dialler_stateMachine()                                                */
 /* Behaviour: Code contained within the Dialler state machine maps directly onto    */
-/*            the Dialler state machine spreadsheet, drawing no.xxx,xxx/DS.         */
+/*            the Dialler state machine spreadsheet, drawing no.2205,033/DS.        */
 /*            Error reporting to the user is done via e_check().  e_check()         */
 /*            translates internal error codes to those recognised by the UI Library.*/
 /* Requires:  'reason', which is START, ABORT, CLOSE, POLL, or HANGUP, as defined   */
@@ -79,6 +79,7 @@ extern int dialler_stateMachine(int reason)
                            case START: rc = initialise_with_dialler_and_dial_ISP();
                                        if ((e_check(rc,__LINE__)) == ERROR)
                                        {
+                                            dial_state = IDLE;
                                             return ERROR;
                                        }
                                        else if (rc == IN_PROGRESS)
@@ -121,6 +122,7 @@ extern int dialler_stateMachine(int reason)
                            case HANGUP:rc = tell_dialler_to_hang_up();
                                        if ((e_check(rc,__LINE__)) == ERROR)
                                        {
+                                            dial_state = IDLE;
                                             return ERROR;
                                        }
                                        else if (rc == IN_PROGRESS)
@@ -137,6 +139,7 @@ extern int dialler_stateMachine(int reason)
                            case POLL:  rc = check_dialler_status_word();
                                        if ((e_check(rc,__LINE__)) == ERROR)
                                        {
+                                            dial_state = IDLE;
                                             reset_modem();
                                             return ERROR;
                                        }
@@ -165,6 +168,7 @@ extern int dialler_stateMachine(int reason)
                            case HANGUP:rc = tell_dialler_to_hang_up();
                                        if ((e_check(rc,__LINE__)) == ERROR)
                                        {
+                                            dial_state = IDLE;
                                             return ERROR;
                                        }
                                        else if (rc == IN_PROGRESS)
@@ -198,6 +202,7 @@ extern int dialler_stateMachine(int reason)
                            case POLL:  rc = check_dialler_status_word();
                                        if ((e_check(rc,__LINE__)) == ERROR)
                                        {
+                                            dial_state = IDLE;
                                             return ERROR;
                                        }
                                        else if (rc ==IN_PROGRESS)
@@ -339,13 +344,36 @@ static int initialise_with_dialler_and_dial_ISP(void)
 static int tell_dialler_to_hang_up(void)
 {
 #ifndef DIALLER_SIMULATION
-    /* XXX: At present this causes a postmortem.  Exiting the app'n with the line
-            still up and attempting to hang up from within BASIC also stiffs the
-            machine.  This seen with controllerless modem version 0.27 and 0.24.
-            It looks like PPP hangs up the line anyway but regardless, we shouldn't
-            be crashing at this point. */
-    /* if (_swix(DiallerB_HangUp, _IN(0), 0)) return DIAL_ERROR_BAD_HANGUP; */
+
+  _kernel_swi_regs regs;
+  _kernel_oserror *er = NULL;
+  int status_word;
+  int state;
+
+    if ((er = _swix(DiallerB_Status, _IN(0)|_OUT(0), 0, &status_word)) != NULL)
+    {
+         error_handler(__FILE__,__LINE__,"tell_dialler_to_hang_up()",er->errnum,er->errmess,WARNING);
+    }
+
+    state = status_word & Dialler_ConnectedFlagsMask;
+
+    if (state == Dialler_Connected)
+    {
+        /* XXX: At present this causes a postmortem.  Exiting the app'n with the line
+                still up and attempting to hang up from within BASIC also stiffs the
+                machine.  This seen with controllerless modem version 0.27 and 0.24.
+                It looks like PPP hangs up the line anyway but regardless, we shouldn't
+                be crashing at this point. */
+
+        regs.r[0] = 0;
+        if ((er = _kernel_swi(DiallerB_HangUp,&regs,&regs)) != NULL)
+        {
+             error_handler(__FILE__,__LINE__,"tell_dialler_to_hang_up()",er->errnum,er->errmess,WARNING);
+             return DIAL_ERROR_BAD_HANGUP;
+        }
+    }
     return DONE;
+
 #else
   static int timer_started = 0;
   static time_t save_time;
@@ -361,7 +389,7 @@ static int tell_dialler_to_hang_up(void)
 /* Behaviour: Check the status of the dialling to see if it has finished.           */
 /*            Error reporting to the user is as described in initialise_dialler_and */
 /*            dial_ISP().                                                           */
-/* Returns:   Either IN_PROGRESS, DONE or ERROR.                                    */
+/* Returns:   IN_PROGRESS, DONE, DIAL_ERROR_DIALLING, or DIAL_ERROR_BAD_HANGUP.	    */
 /************************************************************************************/
 static int check_dialler_status_word(void)
 {
@@ -374,7 +402,19 @@ static int check_dialler_status_word(void)
     if ((e = _swix(DiallerB_Status, _IN(0)|_OUT(0), 0, &status_word)) != NULL)
     {
          error_handler(__FILE__,__LINE__,"check_dialler_status_word()",e->errnum,e->errmess,WARNING);
-         return ERROR;
+
+         if (dial_state == CONNECTING)
+         {
+             return DIAL_ERROR_DIALLING;
+         }
+         else if (dial_state == HANGING_UP)
+         {
+             return DIAL_ERROR_BAD_HANGUP;
+         }
+         else
+         {
+             error_handler(__FILE__,__LINE__,"check_dialler_status_word()",0,"Unexpected path of execution",WARNING);
+         }
     }
 
     state = status_word & Dialler_ConnectedFlagsMask;
@@ -421,7 +461,18 @@ static int check_dialler_status_word(void)
                    WARNING);
         }
 
-        return ERROR;
+        if (dial_state == CONNECTING)
+        {
+            return DIAL_ERROR_DIALLING;
+        }
+        else if (dial_state == HANGING_UP)
+        {
+            return DIAL_ERROR_BAD_HANGUP;
+        }
+        else
+        {
+            error_handler(__FILE__,__LINE__,"check_dialler_status_word()",0,"Unexpected path of execution",WARNING);
+        }
     }
 
     /* XXX: don't think this is needed anymore. */
@@ -545,7 +596,6 @@ static int e_check(int rc,int line)
   int flags = 0;
   error_t report_err;
   _kernel_oserror *er;
-  static int n = 1;
 
     if ((rc != IN_PROGRESS) && (rc != DONE))
     {
@@ -555,11 +605,13 @@ static int e_check(int rc,int line)
               error_handler(__FILE__,line,"dialler_stateMachine()",er->errnum,
                 er->errmess,WARNING);
          }
-         dial_state = IDLE;
+         else
+         {
+              pause(0);
+         }
          rc = ERROR;
     }
 
-    n++;
     return rc;
 }
 
