@@ -99,8 +99,9 @@ clean:
 # Static dependencies:
 #
 
-${ROM_MODULE}: s.Main ${RESFILES}
-        ${AS} ${AFLAGS} -from s.Main -to $@
+${ROM_MODULE}: VersionNum ${RESFILES}
+        perl build:getversion Chars$Version
+        do modgen ${ROM_MODULE} !Chars !Chars <Chars$Version> Resources.!RunImage Resources.Chars.!RunImage
 
 ${RDIR}.!RunImage: crunched.!RunImage
         ${SQUISH} ${SQFLAGS} -from crunched.!RunImage -to $@
