@@ -32,6 +32,8 @@ SOURCE    = s.FilterMgr
 TARGET    = rm.FilterMgr
 EXPORTS   = ${EXP_HDR}.Filter
 
+MERGEDRESOURCE = MergedMsgs
+
 #
 # Generic rules:
 #
@@ -47,12 +49,13 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${RM} ${MERGEDRESOURCE}
         @echo ${COMPONENT}: cleaned
 
 resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
 
-resources_common:
+resources_common: ${MERGEDRESOURCE}
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
 
@@ -62,7 +65,11 @@ resources-None: resources_common
 resources-: resources_common
 	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
-${TARGET}: ${SOURCE}
+${MERGEDRESOURCE}: Resources.${LOCALE}.Messages Resources.${LOCALE}.CmdHelp
+	${CP} Resources.${LOCALE}.Messages ${MERGEDRESOURCE} ${CPFLAGS}
+	print Resources.${LOCALE}.CmdHelp { >> ${MERGEDRESOURCE} }
+
+${TARGET}: ${SOURCE} ${MERGEDRESOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 ${EXP_HDR}.Filter: hdr.Filter
