@@ -130,6 +130,10 @@
 #endif
 
 
+#ifndef ITERATIVE_PANIC
+#define ITERATIVE_PANIC 0
+#endif
+
 /* This is on its own because the include file that it is in includes lots of others */
 /* Not that this is a good excuse. */
 extern void rid_zero_widest_height_from_item(rid_text_item *item);
@@ -1428,6 +1432,8 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 	return 0;
     }
 
+    if (doc->magic != ANTWEB_DOC_MAGIC)
+	return 0;
 
     rh = doc->rh;
 
@@ -1895,9 +1901,9 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		}
 	    }
 
-	    /* SJM: It appears that some scripts expect the POST data to be CRLF terminated */
-	    fputs("\r\n", f);
-
+#if 0
+	    fputc('\n', f);
+#endif
 	    mmfclose(f);
 
 	    dest = url_join(BASE(doc), form->action);
@@ -4053,7 +4059,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
 
     buffer = mm_malloc(PPARSE_BUFSIZE);
-    
+
     rh = doc->rh;
     rh->doc = doc;
 
@@ -4088,7 +4094,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     }
 
     mm_free(buffer);
-    
+
 #if USE_MARGINS
 #if DEBUG
     if ((rh->margin.left != -1 && rh->margin.left*2 != doc->margin.x0) ||
@@ -4167,6 +4173,8 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     antweb_doc *doc = (antweb_doc *) h;
     static antweb_doc *threaded = NULL;
 
+    ACCDBG(("doc%p: antweb_doc_progress(%d) called\n", doc, status ));
+
     /* Make the world turn a little */
     frontend_view_status(doc->parent, sb_status_WORLD);
 
@@ -4190,6 +4198,9 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     {
 	threaded = doc;
     }
+
+    PPDBG(("doc%p: adp, so_far=%d ftype=%d fh=%d status=%d\n",
+           doc, so_far, ftype, fh, status ));
 
     if (so_far > 0 && ftype != -1 && fh &&
          ((status == status_GETTING_BODY) || (status == status_COMPLETED_PART) ) )
@@ -4646,8 +4657,13 @@ os_error *backend_doc_abort(be_doc doc)
     return NULL;
 }
 
-#ifdef STBWEB
-int antweb_doc_abort_all(void)
+#if ITERATIVE_PANIC
+/*
+ * level 0 means abort external fetches
+ * level 1 means abort internal fetches
+ */
+
+int antweb_doc_abort_all(int level)
 {
     be_doc doc;
     int count = 0;
@@ -4657,13 +4673,32 @@ int antweb_doc_abort_all(void)
 
 	if (!incomplete)
 	{
-	    if (doc->ah)
+	    if ((level > 0 || doc->url == NULL ||
+		 (strncasecomp(doc->url, "ncint:", sizeof("ncint:")-1) != 0 &&
+		  strncasecomp(doc->url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0))
+		 &&
+		 (doc->ah || doc->ph))
 	    {
-		access_abort(doc->ah);
-		doc->ah = NULL;
+		DBG(("antweb_doc_abort_all: doc%p aborted through lack of memory\n", doc));
 
+		/* set first to ensure we aren't reentered */
 		doc->flags |= doc_flag_INCOMPLETE;
 
+		if (doc->ah)
+		{
+		    access_abort(doc->ah);
+		    doc->ah = NULL;
+		}
+		
+ 		if (doc->ph)
+ 		{
+ 		    doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, NULL);
+ 		    doc->ph = NULL; 
+ 		}		     
+
+		if (doc->rh)
+		    fvpr_progress_stream_flush( &doc->rh->stream );
+		
 		frontend_view_status(doc->parent, sb_status_ABORTED);
 
 		count++;
@@ -4766,7 +4801,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->encoding = config_display_encoding;
 
     /* new: add the url here */
-/*     new->url = strdup(url); */
+    new->url = strdup(url);
 
     BENDBG(( "backend_open_url: url '%s' checklist: add %p document_list %p next %p\n",
 	   strsafe(url), new, document_list, document_list ? document_list->next : NULL));

@@ -51,6 +51,8 @@
 static BOOL include_frames = FALSE;
 
 static void HTRISCOS_put_string (HTMLCTX * me, const char* s);
+static rid_header *close_actions(HTMLCTX *htmlctx);
+static rid_header *pparse_gopher_close(void *h, char *cfile);
 
 #if SGML_REPORTING
 
@@ -408,8 +410,15 @@ static int pparse_html_data(void *h, char *buffer, int len, int more)
 
     ASSERT(htmlctx->magic == HTML_MAGIC);
 
+    /* SJM: mark as threaded */
+    htmlctx->sgmlctx->threaded = 1;
+    
     htmlctx->isa->write(htmlctx, buffer, len);
 
+    /* SJM: mark as unthreaded and check for close */
+    htmlctx->sgmlctx->threaded = 0;
+    if (htmlctx->sgmlctx->pending_close)
+	close_actions(htmlctx);
 #if 0
     HTStream *new = h;
 
@@ -496,6 +505,13 @@ static rid_header *pparse_html_close(void *h, char *cfile)
 
     PRSDBG(("Exiting with title '%s'\n", htmlctx->rh->title ? htmlctx->rh->title : "<none>"));
 
+    /* SJM: if threaded then mark as pending close */
+    if (htmlctx->sgmlctx->threaded)
+    {
+	htmlctx->sgmlctx->pending_close = 1;
+	return htmlctx->rh;
+    }
+    
     return close_actions(htmlctx);
 }
 
@@ -549,6 +565,9 @@ static int pparse_text_data(void *h, char *buffer, int len, int more)
 
     ASSERT(sgmlctx->magic == SGML_MAGIC);
 
+    /* SJM: mark as threaded */
+    sgmlctx->threaded = 1;
+    
 #if 0
     /* Correct, but horendously slow */
     sgml_feed_characters(sgmlctx, buffer, len);
@@ -562,6 +581,10 @@ static int pparse_text_data(void *h, char *buffer, int len, int more)
 	(*sgmlctx->chopper) (sgmlctx, s);
     }
 #endif
+    /* SJM: mark as unthreaded and check for close */
+    sgmlctx->threaded = 0;
+    if (sgmlctx->pending_close)
+	close_actions(htmlctx);
 
     return 1;
 }
@@ -578,6 +601,13 @@ static rid_header *pparse_text_rh(void *h)
 static rid_header *pparse_text_close(void *h, char *cfile)
 {
     HTMLCTX* htmlctx = (HTMLCTX *) h;
+
+    /* SJM: if threaded then mark as pending close */
+    if (htmlctx->sgmlctx->threaded)
+    {
+	htmlctx->sgmlctx->pending_close = 1;
+	return htmlctx->rh;
+    }
 
     return close_actions(htmlctx);
 }
@@ -604,11 +634,22 @@ static rid_header *pparse_image_close(void *h, char *cfile)
 
     impp = (imp_str *) h;
 
+    /* SJM: if threaded then mark as pending close */
+    if (impp->me->sgmlctx->threaded)
+    {
+	/* end stream here as cfile is not available later */
+	image_stream_end(impp->i, cfile);
+
+	impp->me->sgmlctx->pending_close = 1;
+	return impp->me->rh;
+    }
+
     ASSERT(impp->me->magic == HTML_MAGIC);
 
     res = close_actions(impp->me);
 
-    image_stream_end(impp->i, cfile);
+    if (cfile)			/* SJM: cfile is null if called from pparse_image_data */
+	image_stream_end(impp->i, cfile);
 
     mm_free(impp->url);
 
@@ -639,6 +680,9 @@ static int pparse_image_data(void *h, char *buffer, int len, int more)
 
     ASSERT(impp->me->magic == HTML_MAGIC);
 
+    /* SJM: mark as threaded */
+    impp->me->sgmlctx->threaded = 1;
+    
     if (!impp->have_image)
     {
 	impp->have_image = TRUE;
@@ -650,6 +694,11 @@ static int pparse_image_data(void *h, char *buffer, int len, int more)
     {
 	image_stream_data(impp->i, buffer, len, !more);
     }
+
+    /* SJM: mark as unthreaded and check for close */
+    impp->me->sgmlctx->threaded = 0;
+    if (impp->me->sgmlctx->pending_close)
+	pparse_image_close(impp, NULL);
 
     return TRUE;
 }
@@ -945,6 +994,8 @@ static int pparse_gopher_data(void *h, char *buffer, int len, int more)
 {
     gparse_str *gp = h;
 
+    gp->me->sgmlctx->threaded = 1;
+   
     while (len)
     {
 	char c;
@@ -978,6 +1029,10 @@ static int pparse_gopher_data(void *h, char *buffer, int len, int more)
 	}
     }
 
+    gp->me->sgmlctx->threaded = 0;
+    if (gp->me->sgmlctx->pending_close)
+	pparse_gopher_close(gp, NULL);
+
     return 1;
 }
 
@@ -993,6 +1048,13 @@ static rid_header *pparse_gopher_close(void *h, char *cfile)
     rid_header *result;
     gparse_str *gp = h;
 
+    /* SJM: mark pending close if threaded */
+    if (gp->me->sgmlctx->threaded )
+    {
+	gp->me->sgmlctx->pending_close = 1;
+	return gp->me->rh;
+    }
+    
     if (gp->used > 1 || (gp->used == 1 && gp->buffer[0] != '.'))
     {
 	gp->buffer[gp->used] = 0;

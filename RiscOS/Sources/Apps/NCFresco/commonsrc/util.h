@@ -305,7 +305,16 @@ extern void fskipline(FILE *in);
 
 /* stdio wrappers that allocate a buffer using mm_malloc.c */
 
+#ifdef BUILDERS
+
+#define mmfopen(a,b)	fopen(a,b)
+#define mmfclose(a)	fclose(a)
+
+#else
+
 extern FILE *mmfopen(const char *file, const char *mode);
 extern void mmfclose(FILE *f);
+
+#endif
 
 /* eof util.h */

@@ -5593,8 +5593,8 @@ static BOOL fe_initialise(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if STBWEB_ROM
-int __root_stack_size  =64*1024;
+#if STBWEB_ROM || 1
+int __root_stack_size = 8*1024;
 /* extern int disable_stack_extension; */
 #endif
 

@@ -861,20 +861,18 @@ os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor )
 FILE *mmfopen(const char *file, const char *mode)
 {
     FILE *f = fopen(file, mode);
-#if 0
     if (f)
 	setvbuf(f, mm_malloc(BUFSIZ), _IOFBF, BUFSIZ);
-#endif
     return f;
 }
 
 void mmfclose(FILE *f)
 {
-#if 0
-    if (f && (f->__flag & _IOSBF) == 0) /* flag to say system buffer in use */
-	mm_free(f->__base);
-#endif
+    void *buf_to_free = f && (f->__flag & _IOSBF) == 0 ? f->__base : NULL;
+
     fclose(f);
+
+    mm_free(buf_to_free);
 }
 
 

@@ -44,6 +44,8 @@
 #include "gbf.h"
 #include "config.h"
 #include "fvpr.h"
+#include "indent.h"
+#include "webfonts.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -972,7 +974,7 @@ static void calc_pct_minwidth(antweb_doc *doc,
        column values from now on, as I can't wrap my head around doing
        all this with groups yet. */
 
-    colspan_column_and_eql_copy(table, horiz, PCT_MIN,
+    colspan_all_and_eql_copy(table, horiz, PCT_MIN,
 				0, 0, ABS_MIN);
 
     width = largest_implied_table_width(table, PCT_MIN, horiz);
@@ -1146,11 +1148,14 @@ static void basic_size_table(antweb_doc *doc,
 
     FMTDBG(("basic_size_table: id %d: done\n", table->idnum));
 
+    colspan_trace_cells(table, HORIZONTALLY);
+
     /* Attempt to override sizes with user width, if it exists */
 #if 1
     switch (table->userwidth.type)
     {
     case value_absunit:
+	table->flags |= rid_tf_HAVE_WIDTH;
 	uwidth = ceil(table->userwidth.u.f);
 	if (uwidth >= table->hwidth[RAW_MIN])
 	{
@@ -1167,7 +1172,6 @@ static void basic_size_table(antweb_doc *doc,
 		table->hwidth[REL_MAX] = uwidth;
 #endif
 	    /* BLUNT! */
-	    table->flags |= rid_tf_HAVE_WIDTH;
 	}
 	else
 	{
@@ -1308,10 +1312,17 @@ static void allocate_widths_stream(antweb_doc *doc,
 
     for (ti = stream->text_list; ti != NULL; ti = rid_scanf(ti))
     {
+        /* pdh: don't format things to full margin width if they have margins
+         */
+        int reduction = ti->st.indent * INDENT_UNIT     /* left margin */
+                         + ( (ti->flag & rid_flag_RINDENT)
+                                         ? (INDENT_UNIT*INDENT_WIDTH)
+                                         : 0 );         /* right margin */
+
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
-	    allocate_widths_table(doc, rh, table, fwidth);
+	    allocate_widths_table(doc, rh, table, fwidth - reduction);
 	}
 #if 1
 	/* SJM: set sizes for images where the fwidth is */
@@ -1320,7 +1331,7 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_text_item_image *tii = (rid_text_item_image *)ti;
 	    if (tii->ww.type == value_pcunit)
 	    {
-		oimage_size_allocate(ti, rh, doc, fwidth);
+		oimage_size_allocate(ti, rh, doc, fwidth - reduction);
 	    }
 	}
 
@@ -1329,7 +1340,7 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_input_item *ii = ((rid_text_item_input *)ti)->input;
 	    if (ii->tag == rid_it_IMAGE && ii->ww.type == value_pcunit)
 	    {
-		oinput_size_allocate(ti, rh, doc, fwidth);
+		oinput_size_allocate(ti, rh, doc, fwidth - reduction);
 	    }
 	}
 
@@ -1338,7 +1349,7 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_object_item *obj = ((rid_text_item_object *)ti)->object;
 	    if (obj->userwidth.type == value_pcunit)
 	    {
-		oobject_size_allocate(ti, rh, doc, fwidth);
+		oobject_size_allocate(ti, rh, doc, fwidth - reduction);
 	    }
 	}
 #endif
@@ -1581,13 +1592,20 @@ extern void rid_toplevel_format(antweb_doc *doc,
              */
             old_scale_value = doc->scale_value;
             doc->scale_value = config_display_scale_image;
+
+	    /* DAF: Mainly for builders, but good sanity check */
+	    if (doc->scale_value < MIN_SCALE)
+		doc->scale_value = MIN_SCALE;
         }
 
 	FMTDBG(("Sizing root stream\n"));
 	basic_size_stream(doc, rh, root_stream, 0);
-	FMTDBG(("\nDone sizing root stream: min %d, max %d\n",
+	FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
 		root_stream->width_info.minwidth,
-		root_stream->width_info.maxwidth));
+		root_stream->width_info.maxwidth,
+		fwidth,
+		doc->scale_value,
+		MIN_SCALE));
 
 	/*dump_header(rh);*/
 
@@ -1608,6 +1626,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
                 if ( scale < doc->scale_value )
                 {
+#ifndef BUILDERS
                     if ( scale != old_scale_value
                          && doc->parent )
                     {
@@ -1617,6 +1636,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
                          */
                         frontend_view_redraw( doc->parent, NULL );
                     }
+#endif
 
                     doc->scale_value = scale;
 

@@ -422,7 +422,7 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
 	if (stream->text_fvpr == NULL)
 	    stream->text_fvpr = stream->text_list;
 
-	RENDBG(("fvpr: flushing from %p to %p", stream->text_fvpr, stream->text_last));
+	RENDBG(("fvpr: flushing from %p to %p\n", stream->text_fvpr, stream->text_last));
 
 	if (stream->text_fvpr != NULL)
 	{

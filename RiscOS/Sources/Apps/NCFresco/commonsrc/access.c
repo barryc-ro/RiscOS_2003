@@ -1633,7 +1633,7 @@ static void access_gopher_fetch_alarm(int at, void *h)
 
     if (ep)
     {
-	ACCDBGN(( "WebGopher_Status: %s\n", ep->errmess));
+	ACCDBG(( "WebGopher_Status: %s\n", ep->errmess));
 	memset(&gos, 0, sizeof(gos));
 	gos.out.status = status_FAIL_REQUEST;
     }
@@ -1654,7 +1654,7 @@ static void access_gopher_fetch_alarm(int at, void *h)
 
     if (gos.out.status >= status_COMPLETED_FILE)
     {
-	ACCDBGN(( "Transfer complete for %s\n", d->url));
+	ACCDBG(( "acc%p: gopher transfer complete, status %d\n", d, gos.out.status));
 	/* Time to stop */
 
 	cfile = strdup(gos.out.fname);
@@ -1664,6 +1664,8 @@ static void access_gopher_fetch_alarm(int at, void *h)
 
 	if (gos.out.status == status_COMPLETED_FILE && d->progress)
 	{
+	    ACCDBG(( "acc%p: calling gopher progress (%d bytes)\n", d,
+	             gos.out.data_so_far ));
 	    d->progress(d->h, status_GETTING_BODY, gos.out.data_so_far, gos.out.data_so_far, gos.out.ro_fh, d->ftype, d->url);
 	}
 
@@ -2010,7 +2012,7 @@ static void access_copy_data(int inf, int outf, int start, int end)
     int len;
 
     buffer = mm_malloc(COPY_DATA_SIZE);	/* SJM: from auto to malloc */
-    
+
     while (start < end)
     {
 	len = end - start;
@@ -2858,7 +2860,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    if (slash && (dot == NULL || dot < slash))
 		    {
 		        int newft = suffix_to_file_type( slash+1 ); /* file type from extension */
-			
+
 			/* if we couldn't find the file then see if we can find one with the extensions stripped off */
 			*slash = 0;
 			ft = file_and_object_type(cfile, &obj_type);
@@ -2871,7 +2873,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		/* if still not file found then return error */
 		if (obj_type == 0)
 		    ep = makeerrorf(ERR_CANT_READ_FILE, url);
-		
+
 #ifndef STBWEB
                 /* pdh: Desktop Fresco wanted this, I don't know whether
                  * NCFresco does or not
@@ -3239,7 +3241,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    }
 		    nlbuf = strcatx1(nlbuf, "@");
 		    nlbuf = strcatx1(nlbuf, at+1);
-		    
+
 /* 		    sprintf(nlbuf, "%s%s%s@%s", */
 /* 			    user, */
 /* 			    passwd ? ":" : "", */
@@ -3529,7 +3531,7 @@ void *access_get_headers(access_handle d)
 
     if (!d)
 	return NULL;
-    
+
     si.in.handle = d->transport_handle;
     if (os_swix(HTTP_Status, (os_regset *) &si) != NULL)
 	return NULL;

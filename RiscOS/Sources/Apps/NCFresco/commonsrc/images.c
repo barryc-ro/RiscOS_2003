@@ -818,7 +818,7 @@ static int image_thread_process(image i, int fh, int from, int to)
         return FALSE;
 
     buffer = mm_malloc(IMAGE_THREAD_BUFFER_SIZE);	/* taken off stack so doesn't affect wimpslot */
-    
+
     while (from < to && i->tt->status == thread_ALIVE)
     {
 	int len;
@@ -859,7 +859,7 @@ static int image_thread_process(image i, int fh, int from, int to)
     IMGDBG(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
 
     mm_free(buffer);
-    
+
 #ifndef STBWEB
     if ( do_memory_panic )
     {
@@ -867,7 +867,7 @@ static int image_thread_process(image i, int fh, int from, int to)
         return FALSE;
     }
 #endif
-    
+
     return (i->tt->status == thread_ALIVE);
 }
 
@@ -1141,7 +1141,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
     /* SJM: free thread if it has died */
     if (i->tt && i->tt->status == thread_DEAD)
 	image_thread_end(i);
-    
+
     if (status == status_COMPLETED_FILE)
     {
 	os_filestr ofs;
@@ -1573,7 +1573,12 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->url = strdup(url);
 	i->hash = hash;
 	i->flags = image_flag_WAITING;
+	/* DAF: This clashed on merging. I presume the former is wanted? */
+#if 1
 	if (flags & image_find_flag_DEFER)
+#else
+	if ((flags & image_find_flag_DEFER) || gbf_active(GBF_LOW_MEMORY) )
+#endif
 	    i->flags |= image_flag_DEFERRED;
 
 	set_default_image(i, (flags & image_find_flag_DEFER) ? SPRITE_NAME_DEFERRED : SPRITE_NAME_UNKNOWN, TRUE);
@@ -2002,7 +2007,7 @@ static BOOL image_trim_animation(image i)
 	i->our_area->size = area_size;
 	i->our_area->freeoff = sprite_size + sizeof(sprite_area);
 
-	flex_extend((flex_ptr) &(i->our_area), area_size);
+	(void)flex_extend((flex_ptr) &(i->our_area), area_size);
 
 	/* get rid of the cache */
 	free_area(&i->cache_area);
@@ -2011,11 +2016,11 @@ static BOOL image_trim_animation(image i)
 	i->cache_frame = -1;
 	i->cur_frame = -1;
 	i->cache_mask = 0;
-	
+
 	flexmem_noshift();
 	strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
 	flexmem_shift();
-	
+
 	return TRUE;
     }
     return FALSE;
@@ -2037,7 +2042,7 @@ int image_memory_panic(void)
 	freed = image_trim_animation(i);
     }
 #endif /* ITERATIVE_PANIC */
-    
+
     for (i=image_list; i != NULL; i = i->next)
     {
 	/* If we already have the image then dispose of it */
@@ -2990,7 +2995,11 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
     bpp = 1 << bbc_modevar(-1, bbc_Log2BPP);
 
     i_w = i->width*scale_image/100;
+    if (i_w < 1)
+	i_w = 1;
     i_h = i->height*scale_image/100;
+    if (i_h < 1)
+	i_h = 1;
 
     if (i_w > i_h)
     {
@@ -3084,8 +3093,12 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 		if (i->plotter == plotter_SPRITE)
 #endif
 		{
-		    /* adjust for display_scale */
-		    fixup_scale(&facs, scale_image);
+		    /* adjust for display_scale - don't use image_scale as we may have corrected the values */
+		    facs.xmag *= i_w;
+		    facs.xdiv *= i->width;
+		    facs.ymag *= i_h;
+		    facs.ydiv *= i->height;
+
 		    scale_needed = image_reduce_scales(&facs);
 
 		    flags = (i->flags & image_flag_MASK ? 0x8 : 0) | (table_type == pixtrans_WIDE ? 0x20 : 0);
@@ -3521,7 +3534,7 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
 	    pt = i->pt;
 	    table_type = i->table_type;
 
-	    fixup_scale(&factors, scale_image);
+/* 	    fixup_scale(&factors, scale_image); */
 	    image_reduce_scales(&factors);
 	}
 
@@ -3636,7 +3649,7 @@ static int image_ave_col_n(image im, int n)
 
     count = mm_calloc(sizeof(int), 256*2); /* moved buffers out of wimpslot */
     palette = count + 256;
-    
+
     if (im->id.tag == sprite_id_name)
 	sprite_select_rp(*(im->areap), &(im->id), (sprite_ptr *) &sphp);
     else
@@ -3700,7 +3713,7 @@ static int image_ave_col_n(image im, int n)
     blues /= pixcount;
 
     mm_free(count);
-    
+
     return (reds << 8) + (greens << 16) + (blues << 24);
 }
 
@@ -3775,7 +3788,7 @@ static int image_white_byte(image im, wimp_paletteword colour)
     IMGDBG(("Finding colour closest to white\n"));
 
     palette = mm_malloc(sizeof(int)*256);
-    
+
     flexmem_noshift();
 
     if (im->id.tag == sprite_id_name)
@@ -3831,7 +3844,7 @@ static int image_white_byte(image im, wimp_paletteword colour)
     }
 
     mm_free(palette);
-    
+
     return best;
 }
 

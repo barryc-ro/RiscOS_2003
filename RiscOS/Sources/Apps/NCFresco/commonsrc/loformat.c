@@ -278,9 +278,6 @@ static BOOL floating_item_fits( RID_FMT_STATE *fmt, rid_pos_item *line,
     ASSERT(line != NULL);
     ASSERT(line->floats != NULL);
     ASSERT(fltr != NULL);
-/*     ASSERT(fmt->float_line != NULL); */
-/*     ASSERT(fmt->float_line->floats != NULL); */
-/*     ASSERT(fmt->float_line->first == NULL); */
     ASSERT(line->left_margin != NOTINIT);
 
     FMTDBG(("floating_item_fits: %s: LM/RM %d/%d, FW %d, MW %d, txt %d, fltrs %d\n",
@@ -312,6 +309,13 @@ static BOOL floating_item_fits( RID_FMT_STATE *fmt, rid_pos_item *line,
            any single item). */
 
 	ASSERT(fmt->fmt_method == MAYBE);
+
+	/* pdh: sometimes things just *don't* fit. We don't increase
+	   fwidth in this case, 'cos that would make all the rest
+	   format to this, too-large, width */
+	if ( !have_text && !have_fltrs )
+	    return TRUE;
+
 	ASSERT(have_text || have_fltrs);
     }
 
@@ -600,12 +604,14 @@ static void position_floating_item( RID_FMT_STATE *fmt, rid_pos_item *pi,
   If we've got any pending floaters, try and attach them to the current
   line.  */
 
-void attach_new_floaters( RID_FMT_STATE *fmt, rid_pos_item *pi )
+static void attach_new_floaters( RID_FMT_STATE *fmt, rid_pos_item *pi )
 {
     rid_text_item *ti = fmt->first_pending_floater;
 
     while ( ti )
     {
+        FMTDBG(("ti%p: testing in a_n_f\n", ti));
+
         if ( floating_item_fits( fmt, pi, ti )
              || !FLOATERS_THIS_LINE(pi) )
         {
@@ -1721,16 +1727,32 @@ static void formatting_start(RID_FMT_STATE *fmt)
 	    case DONT:
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
 		     table->userwidth.type == value_absunit)
+		{
 		    ti->width = ceil(table->userwidth.u.f);
+		    FMTDBG(("formatting_start: pickup user width of %d\n", ti->width));
+		    if (ti->width < table->hwidth[LAST_MIN])
+		    {
+			ti->width = table->hwidth[LAST_MIN];
+			FMTDBG(("formatting_start: override user width with %d\n", ti->width));
+		    }
+		}
 		else
-		    ti->width = table->hwidth[RAW_MAX];
+		    ti->width = table->hwidth[LAST_MAX];
 		break;
 	    case MUST:
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
 		     table->userwidth.type == value_absunit)
+		{
 		    ti->width = ceil(table->userwidth.u.f);
+		    FMTDBG(("formatting_start: pickup user width of %d\n", ti->width));
+		    if (ti->width < table->hwidth[LAST_MIN])
+		    {
+			ti->width = table->hwidth[LAST_MIN];
+			FMTDBG(("formatting_start: override user width with %d\n", ti->width));
+		    }
+		}
 		else
-		    ti->width = table->hwidth[RAW_MIN];
+		    ti->width = table->hwidth[LAST_MIN];
 		break;
 	    }
 

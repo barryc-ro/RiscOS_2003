@@ -382,6 +382,8 @@ struct SGMLCTX
     unsigned int apply_heuristics:1,
 	force_deliver:1,	/* if (->dlist != NULL) */
 	applying_rules:1,
+	threaded:1,		/* inside the 'data' function */
+	pending_close:1,	/* close called whilst threaded */
 	:0;			/* placeholder */
     
     /* Context operating within */

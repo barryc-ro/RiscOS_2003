@@ -58,7 +58,7 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 
     PRSDBGN(("sgml_feed_characters(): '%.*s'\n", bytes, buffer));
 
-    for (i = 0; i < bytes; i++, buffer++)
+    for (i = 0; i < bytes && !context->pending_close; i++, buffer++)
     {
 	char c = *buffer;
 

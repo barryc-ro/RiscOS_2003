@@ -798,7 +798,8 @@ NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o
+				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o \
+				../memcheck/MemCheck.o
 
 #				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 

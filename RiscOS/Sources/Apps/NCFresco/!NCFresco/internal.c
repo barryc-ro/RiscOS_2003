@@ -228,11 +228,18 @@ static int internal_decode_print_options(const char *query)
 
 	if ((s = extract_value(query, "color=")) != NULL)
 	{
+	    int old_bw = config_print_nocol;
+	    
 	    config_print_nocol = strcmp(s, "bw") == 0;
 	    mm_free(s);
-
 	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
-	    _swix(PPrimer_ChangePrinter, 0);
+
+	    /* If PPrimer fails then reset the NVRAM */
+	    if (frontend_complain(_swix(PPrimer_ChangePrinter, 0)) != NULL)
+	    {
+		config_print_nocol = old_bw;
+		nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
+	    }
 	}
 	
 #if 0
@@ -933,9 +940,8 @@ static os_error *fe_mem_dump_write_file(FILE *f)
     heap__dump(f);
 
     fprintf(f, "<H2><A NAME='image'>Flex memory</A></H2><PRE>");
-#if DEBUG
     MemFlex_Dump(f);
-#endif
+
     fprintf(f, "</PRE>");
 
     return NULL;

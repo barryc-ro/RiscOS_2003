@@ -833,7 +833,7 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
     group->table_cell = cell;
     widths = group->width;
 
-    FMTDBG(("init_group: id %d, %s, first %d, span %d\n",
+    FMTDBGN(("init_group: id %d, %s, first %d, span %d\n",
 	    table->id, HORIZVERT(horiz), first, span));
 
     /* New group, so always take these values */
@@ -916,7 +916,7 @@ static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell,
     int *widths = table->colspans[X].width;
     int z;
 
-    FMTDBG(("init_column: id %d, %s, X %d\n",
+    FMTDBGN(("init_column: id %d, %s, X %d\n",
 	    table->idnum, HORIZVERT(horiz), X));
 
     switch (vp->type)
@@ -1871,10 +1871,10 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
     int *master = HORIZCELLS(table, horiz);
     int x;
 
-    FMTDBG(("reflect_percentages: table %d, %s, fwidth %d\n",
-	    table->idnum, HORIZVERT(horiz), fwidth));
-
     fwidth -= TABLE_OUTSIDE_BIAS(table);
+
+    FMTDBG(("reflect_percentages: table %d, %s, inner fwidth %d\n",
+	    table->idnum, HORIZVERT(horiz), fwidth));
 
     ASSERT(fwidth >= 0);
 
@@ -1888,6 +1888,8 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
 	}
     }
 
+    FMTDBG(("reflect_percentages: fwidth reduction leaves fwidth as %d\n", fwidth));
+
     for (x = 0; x < max; x++)
     {
 	if ( (the_cells[x].flags & colspan_flag_PERCENT) != 0 )
@@ -1898,17 +1900,26 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
 		if (want <= the_cells[x].width[ACTUAL])
 		{
 		    used += the_cells[x].width[ACTUAL];
+		    FMTDBG(("reflect_percentages: want %d smaller actual %d, using actual\n", 
+			    want, the_cells[x].width[ACTUAL]));
 		}
 		else
 		{
 		    the_cells[x].width[ACTUAL] = want;
 		    used += want;
+		    FMTDBG(("reflect_percentages: using want %d\n", want));
 		}
 	    }
-	    /* else done in 1st loop */
+	    /* else done in 1st loop - UNLESS PCT_RAW < 100 */
+	    else if (master[PCT_RAW] < 100)
+	    {
+		FMTDBG(("reflect_percentages: zero percent - width %d\n", the_cells[x].width[ACTUAL]));
+		used += the_cells[x].width[ACTUAL];
+	    }
 	}
 	else
 	{
+	    FMTDBG(("reflect_percentages: non percent - width %d\n", the_cells[x].width[ACTUAL]));
 	    used += the_cells[x].width[ACTUAL];
 	}
     }
@@ -1916,7 +1927,8 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
     /* Columns with percentage contributions now have their FINAL
        sizes. The only reason we might add to a percentage column is
        if we have NOT been able to meet all percentage criteria, and
-       hence have not called this function. */
+       hence have not called this function. URM: except for rounding
+       errors! */
     FMTDBG(("reflect_percentages: reflected fwidth %d into ACTUAL with %d slop\n", fwidth, fwidth - used));
 
     ASSERT(used <= fwidth);
@@ -1960,6 +1972,8 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    if (table->flags & rid_tf_HAVE_WIDTH)
 	    {
 		user_width = ceil(table->userwidth.u.f);
+		if (user_width < table->hwidth[REL_MIN])
+		    user_width = table->hwidth[REL_MIN];
 
 		/* pdh: clip this if necessary
 		 */
@@ -2038,15 +2052,16 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
 	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
 
-    if (fwidth < master[RAW_MIN])
+    if (fwidth < master[PCT_MIN])
     {
-	FMTDBG(("colspan_share_extra_space: forcing RAW_MIN of %d\n", master[RAW_MIN]));
-	colspan_algorithm(table, RAW_MIN, horiz);
-	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
-	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
+	FMTDBG(("colspan_share_extra_space: forcing PCT_MIN of %d\n", master[PCT_MIN]));
+	colspan_algorithm(table, PCT_MIN, horiz);
+	colspan_column_init_from_leftmost(table, PCT_MIN, horiz);
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, PCT_MIN);
 	slop = 0;
-	fwidth = master[RAW_MIN];
+	fwidth = master[PCT_MIN];
     }
+#if 0
     else if (fwidth == master[RAW_MIN])
     {
 	FMTDBG(("colspan_share_extra_space: precisely RAW_MIN\n"));
@@ -2073,6 +2088,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	slop = fwidth - master[ABS_MIN];
 	FMTDBG(("colspan_share_extra_space: less than PCT_MIN, slop %d\n", slop));
     }
+#endif
     else
     {
 	if (fwidth > master[LAST_MAX] && user_width == 0)

@@ -190,7 +190,7 @@ extern void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti, wimp_box
 
 extern int antweb_get_edges(const rid_text_item *ti, int *left, int *right);
 extern int antweb_render_background(wimp_redrawstr *rr, void *h, int update);
-extern int antweb_doc_abort_all(void);
+extern int antweb_doc_abort_all(int level);
 extern os_error *antweb_trigger_fetching(antweb_doc *doc);
 
 /* backend.c */

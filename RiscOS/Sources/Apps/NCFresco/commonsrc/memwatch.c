@@ -113,7 +113,7 @@ static int mm_no_more_memory(void)
     return 0;
 }
 
-extern int antweb_doc_abort_all(void);
+extern int antweb_doc_abort_all(int level);
 
 /* Return 1 if more memory was made by freeing images
  * Return 2 if more memory was made by aborting documents
@@ -122,7 +122,7 @@ extern int antweb_doc_abort_all(void);
 
 #if ITERATIVE_PANIC
 
-#define EMERGENCY_MEMORY_STASH	(128*1024)
+#define EMERGENCY_MEMORY_STASH	(256*1024)
 #define EMERGENCY_MEMORY_UNIT	(EMERGENCY_MEMORY_STASH/8)
 
 static void *emergency_memory = NULL;
@@ -163,6 +163,25 @@ extern int mm_can_we_recover(int abort)
     if (r == 0 && frontend_memory_panic())
 	r = 4;			/* recovered from frontend */
 
+#if 0
+    if (r == 0 && emergency_memory)
+    {
+	int size = flex_size(&emergency_memory);
+	if (size > EMERGENCY_MEMORY_STASH/2)
+	{
+	    if (flex_extend(&emergency_memory, size - EMERGENCY_MEMORY_UNIT))
+		r = 6;
+	    else
+	    {
+		DBG(("mm_can_we_recover: emergency shrink failed!!!\n"));
+	    }
+	}
+    }
+#endif
+    
+    if (r == 0 && antweb_doc_abort_all(0))
+	r = 5;			/* recovered through abort transfers */
+
     if (r == 0 && emergency_memory)
     {
 	int size = flex_size(&emergency_memory);
@@ -177,10 +196,10 @@ extern int mm_can_we_recover(int abort)
 	}
     }
     
-    if (r == 0 && antweb_doc_abort_all())
+    if (r == 0 && antweb_doc_abort_all(1))
 	r = 3;			/* recovered through abort transfers */
 
-    DBG(("mm_can_we_recover: r %d abort %d\n", r, abort));
+    DBG(("mm_can_we_recover: r %d abort %d %s/%s/%s\n", r, abort, caller(1), caller(2), caller(3)));
 
     if (r == 0)			/* if can't recover any memory */
     {

@@ -2850,7 +2850,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     case value_pcunit:
 	if ( ceil(attr->u.f) > 0 )
 	{
-	    FMTDBG(("start_tdth: taking %%age value %d from %g\n", ceil(attr->u.f), attr->u.f));
+	    FMTDBG(("start_tdth: taking %%age value %d from %g\n", (int)ceil(attr->u.f), attr->u.f));
 	    cell->flags |= rid_cf_PERCENT;
 	    cell->userwidth = *attr;
 	}
