@@ -32,7 +32,10 @@
 #
 LEVEL=		../..
 INCLUDES=	INetInc:,C:
+LIBDIR=         <Lib$Dir>
 
+MKDIR=          cdir
+CP=             copy
 CC=		cc
 AS=		objasm
 LD=		link
@@ -42,6 +45,7 @@ CMHG=		cmhg
 
 CFLAGS=		-depend !Depend -pcc -zps0 -I${INCLUDES} -fah -Fn -DINET
 CFLAGSZM=	-depend !Depend -pcc -zps1 -I${INCLUDES} -ffah -DINET -zM
+CPFLAGS=        ~cfr~v
 
 CCZM=		${CC} ${CFLAGSZM}
 
@@ -78,6 +82,19 @@ ZFILES=		z.accept z.bind z.connect z.getpeernam z.getsocknam \
 .c.o:;		${CC} ${CFLAGS} -c -o $@ $<
 .s.z:;		${AS} $< $@
 .s.o:;		${AS} $< $@
+
+export: export_${PHASE}
+        @echo ${COMPONENT}: export complete (${PHASE})
+
+export_hdrs:
+	${MKDIR} ${LIBDIR}.socklib
+	${MKDIR} ${LIBDIR}.socklib.h
+	${CP} h ${LIBDIR}.socklib.h ${CPFLAGS}
+
+export_libs: socklibzm
+	${MKDIR} ${LIBDIR}.socklib
+	${MKDIR} ${LIBDIR}.socklib.o
+	${CP} socklibzm ${LIBDIR}.socklib.o.socklibzm ${CPFLAGS}	
 
 all:		socklib socklibzm
 

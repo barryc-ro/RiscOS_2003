@@ -1,3 +1,9 @@
+LIBDIR=         <Lib$Dir>
+
+MKDIR=          cdir
+CP=             copy
+CPFLAGS=        ~cfr~v
+
 CC = cc
 CFLAGS = -c -pcc -IINetInc:,C: -Darm -DRISCOS -depend !Depend
 CFLAGSM = -c -pcc -ff -zps1 -zM -IINetInc:,C: -Darm -DRISCOS -depend !Depend
@@ -32,6 +38,19 @@ HDRS = h.auth h.auth_unix h.clnt h.pmap_clnt \
 .SUFFIXES:	.z .o .c
 .c.z:;       $(CC) $(CFLAGSM) -c -o $@ $<
 .c.o:;       $(CC) $(CFLAGS) -c -o $@ $<
+
+export: export_${PHASE}
+        @echo ${COMPONENT}: export complete (${PHASE})
+
+export_hdrs:
+	${MKDIR} ${LIBDIR}.rpclib
+	${MKDIR} ${LIBDIR}.rpclib.h
+	${CP} h ${LIBDIR}.rpclib.h ${CPFLAGS}
+
+export_libs: rpclibzm
+	${MKDIR} ${LIBDIR}.rpclib
+	${MKDIR} ${LIBDIR}.rpclib.o
+	${CP} rpclibzm ${LIBDIR}.rpclib.o.rpclibzm ${CPFLAGS}	
 
 all: 	rpclib rpclibzm
 

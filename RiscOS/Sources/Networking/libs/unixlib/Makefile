@@ -14,7 +14,10 @@
 #
 LEVEL=		../..
 INCLUDES=	INetInc:,C:
+LIBDIR=         <Lib$Dir>
 
+MKDIR=          cdir
+CP=             copy
 CC=		cc
 AS=		objasm
 LD=		link
@@ -24,6 +27,7 @@ CMHG=		cmhg
 
 CFLAGS=		-depend !Depend -pcc -zps0 -I${INCLUDES} -fah -Fn -DINET
 CFLAGSZM=	-depend !Depend -pcc -zps1 -I${INCLUDES} -ffah -DINET -zM
+CPFLAGS=        ~cfr~v
 
 CCZM=		${CC} ${CFLAGSZM}
 
@@ -58,6 +62,19 @@ ZFILES=		z.access z.chdir z.chmod z.close z.filestat z.flushinput \
 
 .c.z:;	     ${CCZM} -c -o $@ $<
 .c.o:;       ${CC} ${CFLAGS} -c -o $@ $<
+
+export: export_${PHASE}
+        @echo ${COMPONENT}: export complete (${PHASE})
+
+export_hdrs:
+	${MKDIR} ${LIBDIR}.unixlib
+	${MKDIR} ${LIBDIR}.unixlib.h
+	${CP} h ${LIBDIR}.unixlib.h ${CPFLAGS}
+
+export_libs: unixlibzm
+	${MKDIR} ${LIBDIR}.unixlib
+	${MKDIR} ${LIBDIR}.unixlib.o
+	${CP} unixlibzm ${LIBDIR}.unixlib.o.unixlibzm ${CPFLAGS}	
 
 all:	unixlib unixlibzm 
 
