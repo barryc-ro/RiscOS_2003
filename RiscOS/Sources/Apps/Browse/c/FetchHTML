@@ -42,9 +42,25 @@
 
 #include "FetchHTML.h"
 
+/* Local structures */
+
+typedef struct fetcher_state
+{
+  unsigned int handle;
+
+  int          status;
+
+  int          read;
+  int          remaining;
+
+} fetcher_state;
+
 /* Statics */
 
-static char * fetch_buffer = NULL; /* Address of buffer for getting data from the URL module in html_get_next_token. */
+static char          * fetch_buffer  = NULL; /* Address of buffer for getting data from the URL module in html_get_next_token. */
+
+static int             fetch_waiting = 0;
+static fetcher_state   fetch_state;
 
 /* Local definitions */
 
@@ -53,6 +69,38 @@ static char * fetch_buffer = NULL; /* Address of buffer for getting data from th
 /* Local compilation options */
 
 #undef DUMP_HEADERS
+
+/* Static function prototyps */
+
+static _kernel_oserror * html_allocate_fetch_buffer (void);
+
+static _kernel_oserror * html_build_internal_page   (browser_data * b, flex_ptr source, urlstat * up, char * url, char * ref_url, int ref_size);
+static _kernel_oserror * html_transfer_to_store     (browser_data * b, flex_ptr source, urlstat * up, int r, int * size);
+
+/*************************************************/
+/* html_allocate_fetch_buffer()                  */
+/*                                               */
+/* Assuming fetch_buffer is NULL, malloc a block */
+/* of FetchBufferSize assigning the address to   */
+/* this static, raising an error if the malloc   */
+/* fails.                                        */
+/*************************************************/
+
+static _kernel_oserror * html_allocate_fetch_buffer(void)
+{
+  fetch_buffer = malloc(FetchBufferSize); /* See top of this file */
+
+  if (!fetch_buffer)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
+    #endif
+
+    return make_no_cont_memory_error(8);
+  }
+
+  return NULL;
+}
 
 /*************************************************/
 /* html_get()                                    */
@@ -417,6 +465,13 @@ _kernel_oserror * html_close(int handle)
 
   url_deregister(0, handle);
 
+  /* If the Fetcher was waiting for some reason - e.g. a Cookies  */
+  /* dialogue - we want to clear the stacked state or it will     */
+  /* lock itself out (the stored fetch handle will not be matched */
+  /* again).                                                      */
+
+  if (fetch_waiting && fetch_state.handle == handle) fetch_waiting = 0;
+
   /* It's another linked list traversal... As long as we aren't at the */
   /* end of the list, and we haven't reached the item relating to this */
   /* fetch, keep looking.                                              */
@@ -535,6 +590,419 @@ _kernel_oserror * html_close(int handle)
 }
 
 /*************************************************/
+/* html_build_internal_page()                    */
+/*                                               */
+/* Build an internal page, in such a way that    */
+/* the fetcher (html_get_next_token) will think  */
+/* it has got the data through a call to         */
+/* url_read_data and the fetch has finished.     */
+/*                                               */
+/* This code used to be in-line, and so the      */
+/* function is highly specialised... Munging of  */
+/* fetch flags etc. is left to the fetcher to    */
+/* try and make this more independent.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the fetch;            */
+/*                                               */
+/*             flex_ptr for the intended source  */
+/*             store in which the page is built; */
+/*                                               */
+/*             Pointer to the fetch's urlstat    */
+/*             struct to avoid wasting time      */
+/*             finding it from the browser_data  */
+/*             pointer;                          */
+/*                                               */
+/*             Actual URL being fetched (may not */
+/*             be the same as the reference base */
+/*             URL);                             */
+/*                                               */
+/*             Pointer to a copy of the URL in   */
+/*             a buffer (the contents may be     */
+/*             updated) - the caller should be   */
+/*             using this as the reference base  */
+/*             URL at all times;                 */
+/*                                               */
+/*             Size of that buffer.              */
+/*************************************************/
+
+static _kernel_oserror * html_build_internal_page(browser_data * b, flex_ptr source, urlstat * up,
+                                                  char * url, char * ref_url, int ref_size)
+{
+  int    ok;
+  char * extra = "";
+  char * tail  = "";
+  int    len, exoff, toff;
+
+  if (*source) flex_free(source);
+
+  /* Work out the length that the HTML file we're about to generate will be */
+
+  switch (b->displayed)
+  {
+    case Display_External_Image:
+    {
+      int protolen;
+
+      /* Look up the token embedded in the URL */
+
+      lookup_token(url + Int_URL_Len, 1, 0);
+
+      /* Find a ':' separating extra information and point just past it */
+
+      exoff = urlutils_internal_extra(url);
+      if (exoff) extra = url + exoff;
+
+      len = strlen(tokens) + 1;
+
+      if (*extra)
+      {
+        toff = urlutils_internal_tail(url);
+        if (toff) tail = url + toff;
+      }
+
+      /* Is this a system variable name for fetching, e.g. Wimp$Scrap? */
+
+      protolen = strlen(FileMethod ProtocolSepShort "<"); /* (URLutils.h) */
+
+      if (
+           !strncmp(extra,
+                    FileMethod ProtocolSepShort "<",
+                    protolen)
+           &&
+           extra[strlen(extra) - 1] == '>'
+         )
+      {
+        int              required;
+        _kernel_swi_regs r;
+
+        /* We'll have to trash the ref_url block. We know ref_url is at     */
+        /* least as long as URL, so extract the system variable name to it. */
+
+        strncpy(ref_url, extra + protolen, strlen(extra) - protolen - 1); /* -1 to skip the closing '>' */
+        ref_url[strlen(extra) - protolen - 1] = 0;
+
+        /* Now find out how long the expanded form would be */
+
+        r.r[0] = (int) ref_url;
+        r.r[1] = (int) NULL;
+        r.r[2] = -1;
+        r.r[3] = 0;
+        r.r[4] = 0;
+
+        /* _swix will not work correctly for this particular SWI if */
+        /* requiring the returned R2 value. Something to do with    */
+        /* the call relying on generating an error, but _swix spots */
+        /* it and pulls out earlier than the call expects. Or some  */
+        /* such thing...                                            */
+
+        _kernel_swi(OS_ReadVarVal, &r, &r);
+
+        required = -r.r[2];
+
+        /* Woah - system variable wasn't defined... */
+
+        if (!required)
+        {
+          erb.errnum = Utils_Error_Custom_Normal;
+
+          strcpy(erb.errmess, "<");
+          strcat(erb.errmess, ref_url);
+          strcat(erb.errmess, ">");
+          strcat(erb.errmess, lookup_token("NotDefined: not defined.",0,0));
+
+          return &erb;
+        }
+
+        if (required < 0 || required >= ref_size - 1) /* -1 = allow for terminator */
+        {
+          /* Well, we sort of haven't got enough memory. Ahem. */
+
+          return make_no_memory_error(8);
+        }
+
+        /* Otherwise, expand the variable (_swix is OK here as we don't */
+        /* want any returned register value).                           */
+
+        _swix(OS_ReadVarVal,
+              _INR(0,4),
+
+              ref_url,
+              ref_url,
+              ref_size,
+              0,
+              4);
+
+        /* Ensure it is terminated correctly */
+
+        ref_url[required - 1] = 0;
+
+        /* Turn it into a fetchable URL */
+
+        urlutils_pathname_to_url(ref_url, ref_size);
+
+        /* Point to this URL */
+
+        extra = url = ref_url;
+      }
+
+      /* Note that this is a very slow function call... */
+
+      len = utils_len_printf(tokens, extra, extra, tail);
+
+      if (len < 0)
+      {
+        /* If the above fails, do our best to calculate the length. */
+        /* This will always overestimate the size (safer to do this */
+        /* than underestimate!).                                    */
+
+        len = strlen(tokens) + 1;
+
+        /* For external images, need to fit the extra data in twice, and */
+        /* try to find a filename separator for a picture caption (put   */
+        /* this in 'tail').                                              */
+
+        if (*extra) len += strlen(extra) * 2 + strlen(tail) + 2;
+      }
+    }
+    break;
+
+    case Display_Scrap_File:
+    {
+      int found, type;
+
+      if (*source) flex_free(source);
+
+      /* Find the file length */
+
+      _swix(OS_File,
+            _INR(0,1) | _OUT(0) | _OUT(4) | _OUT(6),
+
+            23, /* Read catalogue info for named, stamped object */
+            Save_ScrapFile,
+
+            &found,
+            &len,
+            &type);
+
+      if (found != 1)
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
+
+        /* Error message will either be 'can't find the page', or, if this is */
+        /* a frame and the frame source matches the fetching URL, 'can't find */
+        /* the frame'.                                                        */
+
+        if (
+             b->ancestor          &&
+             b->frame             &&
+             b->frame->src        &&
+             browser_fetch_url(b) &&
+             !strcmp(b->frame->src, browser_fetch_url(b))
+           )
+        {
+          StrNCpy0(erb.errmess,
+                   lookup_token("WhatFrame:The sending application could not supply the page contents for this frame.",
+                                0,
+                                0));
+        }
+        else
+        {
+          StrNCpy0(erb.errmess,
+                   lookup_token("WhatScrap:Cannot find the page to load; the sending application may have died.",
+                                0,
+                                0));
+        }
+
+        return &erb;
+      }
+
+      /* Is this a text file? */
+
+      if (type == FileType_TEXT)
+      {
+        b->page_is_text = 1;
+        up->type        = TYPE_TEXTFILE;
+      }
+      else b->page_is_text = 0;
+    }
+    break;
+
+    case Display_About_Page:
+    {
+      len = 0;
+    }
+    break;
+  }
+
+  /* If required, claim memory for the page; complain if this fails */
+
+  if (len) ok = flex_alloc(source, len);
+  else     ok = 1;
+
+  if (!ok)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
+    #endif
+
+    return make_no_cont_memory_error(1);
+  }
+
+  /* Construct the page in the claimed block (or build it in a */
+  /* new block).                                               */
+
+  switch (b->displayed)
+  {
+    case Display_About_Page:
+    {
+      RetError(about_build_page(source));
+    }
+    break;
+
+    case Display_External_Image:
+    {
+      memset(*source, 0, len);
+      sprintf(*source, tokens, extra, extra, tail);
+    }
+    break;
+
+    case Display_Scrap_File:
+    {
+      FILE * file;
+
+      /* Load and delete the scrap file */
+
+      file = fopen(Save_ScrapFile, "rb");
+
+      if (!file) RetLastE;
+
+      if (fread(*source, 1, len, file) < len)
+      {
+        fclose(file);
+        RetLastE;
+      }
+
+      fclose(file);
+      remove(Save_ScrapFile);
+    }
+    break;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* html_transfer_to_store()                      */
+/*                                               */
+/* Another ex-fetcher function (see for example  */
+/* html_build_internal_page), this time to move  */
+/* data from fetch_buffer to the given source    */
+/* store.                                        */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the fetch;            */
+/*                                               */
+/*             flex_ptr for the current (or      */
+/*             intended, if no data has been     */
+/*             fetched in this session before)   */
+/*             source store;                     */
+/*                                               */
+/*             Pointer to the fetch's urlstat    */
+/*             struct to avoid wasting time      */
+/*             finding it from the browser_data  */
+/*             pointer;                          */
+/*                                               */
+/*             Amount of data that was read into */
+/*             the fetch buffer in bytes;        */
+/*                                               */
+/*             Pointer to int into which the     */
+/*             number of bytes fetched so far is */
+/*             placed (worked out from the size  */
+/*             of the source store after moving  */
+/*             data into it), or NULL if you're  */
+/*             not interested.                   */
+/*************************************************/
+
+static _kernel_oserror * html_transfer_to_store(browser_data * b, flex_ptr source, urlstat * up, int r, int * size)
+{
+  int ok, oldsize;
+
+  /* 'fetched' is a flag which if set indicates at least 1 byte has been */
+  /* got so far. If fetched is zero, and there is data in the source     */
+  /* store (i.e. 'source' is not NULL) then free up the store as it does */
+  /* not hold any valid data (must be from an old fetch).                */
+
+  if (!up->fetched && *source)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<12)) Printf("html_get_next_token: (1) flex_free block %p which held page source\n",source);
+      flexcount -= flex_size(source);
+      if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+    #endif
+
+    flex_free(source);
+    *source = NULL;
+  }
+
+  /* Signal that there's definitely data fetched now. */
+
+  up->fetched = 1;
+
+  /* If there's store allocated at this point, it holds valid source; extend */
+  /* it by the number of bytes read from the url_read_data call. Else, alloc */
+  /* a new buffer to hold the data.                                          */
+
+  #ifdef TRACE
+    if (tl & (1u<<12))
+    {
+      if (*source) Printf("html_get_next_token: flex_extend by %d to %d for page source store\n",r,flex_size(source) + r);
+      else         Printf("html_get_next_token: flex_alloc %d for page source store\n",r);
+    }
+  #endif
+
+  if (*source)
+  {
+    oldsize = flex_size(source);
+    ok = flex_extend(source, oldsize + r);
+  }
+  else
+  {
+    oldsize = 0;
+    ok = flex_alloc(source, r);
+  }
+
+  #ifdef TRACE
+    flexcount += r;
+    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+  #endif
+
+  if (size) *size = oldsize + r;
+
+  /* Report an error if the allocation failed */
+
+  if (!ok)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
+    #endif
+
+    return make_no_cont_memory_error(1);
+  }
+
+  /* The data block has been created/extended successfully, so copy the */
+  /* data from the url_read_data call into it.                          */
+
+  #ifdef TRACE
+    if (tl & (1u<<18)) Printf("\0216html_get_next_token: memcpy from %p to %p for %d bytes\0217\n",((char *) (*source)) + oldsize, fetch_buffer, r);
+  #endif
+
+  memcpy(((char *) (*source)) + oldsize, fetch_buffer, r);
+
+  return NULL;
+}
+
+/*************************************************/
 /* html_get_next_token()                         */
 /*                                               */
 /* Gets a chunk of document source from a given  */
@@ -549,7 +1017,7 @@ _kernel_oserror * html_close(int handle)
 /*                                               */
 /*             Pointer to int into which the     */
 /*             number of bytes still to be       */
-/*             fetched is played;                */
+/*             fetched is placed;                */
 /*                                               */
 /*             Pointer to int into which the     */
 /*             number of bytes fetched so far is */
@@ -595,38 +1063,48 @@ _kernel_oserror * html_close(int handle)
 _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int * remaining, int * size,
                                       HStream ** token, int * waiting, flex_ptr source, char * url, int image)
 {
+  /* Because this is a fairly large and complex state machine, and the code */
+  /* is not at all clean due to a long and colourful development history,   */
+  /* there are highlight comment blocks throughout to give an overview of   */
+  /* what each section of the code is doing.                                */
+
   _kernel_oserror * e = NULL;
-  int               r = 0;
   urlstat         * up;
+
   char              ref_url[Limits_URL];
+
+  int               read = 0;
+
+  /**************************************************/
+  /* Entry point - set up initial state information */
+  /**************************************************/
 
   #ifdef TRACE
     if (tl & (1u<<6)) Printf("html_get_next_token: Called\n");
   #endif
 
   /* Start in the default state of having no HStream to pass back */
-  /* through *token.                                              */
+  /* through *token. Signal that we're waiting for now, and       */
+  /* ensure a fetch buffer is allocated.                          */
 
   if (token) *token = NULL;
+  *waiting          = 1;
 
-  /* Until we know better, signal that we're waiting */
+  if (!fetch_buffer) RetError(html_allocate_fetch_buffer());
 
-  *waiting = 1;
+  /* If there are cookies pending, jump straight out! */
 
-  /* Ensure a fetch buffer is allocated */
-
-  if (!fetch_buffer)
+  if (cookies_pending())
   {
-    fetch_buffer = malloc(FetchBufferSize); /* See top of this file */
+    /* If we've not got a dialogue box open, something went wrong - */
+    /* cookies got queued without the browser knowing. So accept    */
+    /* the whole lot and get on with the fetch!                     */
 
-    if (!fetch_buffer)
+    if (!cookies_dialogue_open())
     {
-      #ifdef TRACE
-        if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
-      #endif
-
-      return make_no_cont_memory_error(8);
+      RetError(cookies_accept_all());
     }
+    else goto html_get_next_token_waiting_jump_point;
   }
 
   /* Get the urlstat structure for this fetch */
@@ -649,6 +1127,12 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
     return &erb;
   }
 
+  /**************************************************/
+  /* Get data - read from the remote host or kludge */
+  /* (sorry, I mean, create...) data with the       */
+  /* internal URL scheme                            */
+  /**************************************************/
+
   /* Only look for an anchor and use url_read_data for URLs which */
   /* are not internal or are direct data saves.                   */
 
@@ -656,398 +1140,130 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
   if (image || b->displayed == Display_Fetched_Page || b->save_link)
   {
-    int status = 0;
-
+    /* This *isn't* an internal URL, so sort out named  */
+    /* anchors etc., and read data from the server.     */
+    /*                                                  */
     /* Want to make sure we work on a URL which doesn't */
     /* have an anchor in it, so copy over the url to    */
     /* a local buffer and if there's a '#' marking an   */
     /* anchor, replace it with a string terminator.     */
 
-    char * p = fetch_find_name_tag(ref_url);
+    int    status = 0;
+    char * p      = fetch_find_name_tag(ref_url);
 
-    if (p) * p = 0;
+    if (p) *p = 0;
 
-    /* If there isn't an authorisation request in progress, and the  */
-    /* fetch is apparently in progress, and the authorisation status */
-    /* isn't '1' (which means 'doing'), get some data from the URL   */
-    /* module. The url_read_data call puts the number of bytes read  */
-    /* into r.                                                       */
+    /* If there isn't an authorisation request in progress, and the fetch  */
+    /* is apparently in progress, and the authorisation status isn't '1'   */
+    /* (which means 'doing'), get some data from the URL module. The       */
+    /* url_read_data call puts the number of bytes read into 'read'.       */
 
     if (!authorising && up->fetching && (up->authorised != 1))
     {
-      e = url_read_data(0,               /* Flags - must be 0 at present */
-                        handle,          /* Session handle               */
-                        fetch_buffer,    /* Buffer to receive data       */
-                        FetchBufferSize, /* The buffer's size            */
+      /* If the fetcher state store is clear, read data.                   */
+      /*                                                                   */
+      /* Otherwise, don't do the read call but recover state info from the */
+      /* store and carry on as if we'd just called url_read_data normally. */
+      /* This is used for things such as cookies - if a cookie coms in and */
+      /* the user has asked to be notified of each one, everything must    */
+      /* be suspended until the user deals with the cookie.                */
 
-                        &status,         /* Protocol status              */
-                        &r,              /* Number of bytes read         */
+      if (!fetch_waiting)
+      {
+        e = url_read_data(0,               /* Flags - must be 0 at present */
+                          handle,          /* Session handle               */
+                          fetch_buffer,    /* Buffer to receive data       */
+                          FetchBufferSize, /* The buffer's size            */
+                          &status,         /* Protocol status              */
+                          &read,           /* Number of bytes read         */
+                          remaining);      /* Number of bytes left to get  */
 
-                        remaining);      /* Number of bytes left to get  */
+        /* Deal with the size information */
 
-      /* Deal with cookies */
+        if (*remaining > 0 && !b->data_size) b->data_size = *remaining + read;
+      }
 
-      if (!e && (status & (1u<<16))) e = cookies_process_cookie(b);
+      /* Make sure we only restore fetch state for the correct */
+      /* fetch handle!                                         */
 
-      /* Deal with the size information */
+      else if (handle == fetch_state.handle)
+      {
+        fetch_waiting = 0;
 
-      if (*remaining > 0 && !b->data_size) b->data_size = *remaining + r;
+        status = fetch_state.status;
+        read   = fetch_state.read;
+
+        if (remaining) *remaining = fetch_state.remaining;
+      }
+
+      /* If we weren't called for the right handle, have to keep */
+      /* waiting until we are.                                   */
+
+      else goto html_get_next_token_waiting_jump_point;
+
+      /* Deal with cookies - if we have a cookie pending, we'll need to  */
+      /* store fetcher state and jump out as described above.            */
+
+      if (!e && (status & (1u<<16)))
+      {
+        e = cookies_process_cookie(b);
+
+        /* If we have any cookies still pending, store fetcher state and */
+        /* jump out of the function (well, almost, there may be some     */
+        /* tidy-up needed so we do a 'goto' (boo, hiss) to a label near  */
+        /* the end).                                                     */
+
+        if (!e && cookies_pending())
+        {
+          fetch_state.handle    = handle;
+
+          fetch_state.status    = status;
+          fetch_state.read      = read;
+          fetch_state.remaining = remaining ? *remaining : 0;
+
+          fetch_waiting         = 1;
+
+          goto html_get_next_token_waiting_jump_point;
+        }
+      }
+
+      /**************************************************/
+      /* Shuffle data from the fetch buffer to the      */
+      /* source store, if we got any data above and     */
+      /* there was no error.                            */
+      /**************************************************/
+
+      if (!e && read)
+      {
+        RetError(html_transfer_to_store(b,
+                                        source,
+                                        up,
+                                        read,
+                                        size));
+      }
     }
   }
   else if (up->fetching) /* Don't repeat this over and over... */
   {
-    /* This is an internal URL, so treat specially */
+    /**************************************************/
+    /* Handle internal URLs.                          */
+    /**************************************************/
+
+    RetError(html_build_internal_page(b,
+                                      source,
+                                      up,
+                                      url,
+                                      ref_url,
+                                      sizeof(ref_url)));
+
+    /* Set up fetch flags to say that a fetch has been completed */
 
-    int    ok;
-    char * extra = "";
-    char * tail  = "";
-    int    len, exoff, toff;
-
-    if (*source) flex_free(source);
-
-    /* Work out the length that the HTML file we're about to generate will be */
-
-    switch (b->displayed)
-    {
-      case Display_External_Image:
-      {
-        int protolen;
-
-        /* Look up the token embedded in the URL */
-
-        lookup_token(url + Int_URL_Len, 1, 0);
-
-        /* Find a ':' separating extra information and point just past it */
-
-        exoff = urlutils_internal_extra(url);
-        if (exoff) extra = url + exoff;
-
-        len = strlen(tokens) + 1;
-
-        if (*extra)
-        {
-          toff = urlutils_internal_tail(url);
-          if (toff) tail = url + toff;
-        }
-
-        /* Is this a system variable name for fetching, e.g. Wimp$Scrap? */
-
-        protolen = strlen(FileMethod ProtocolSepShort "<"); /* (URLutils.h) */
-
-        if (
-             !strncmp(extra,
-                      FileMethod ProtocolSepShort "<",
-                      protolen)
-             &&
-             extra[strlen(extra) - 1] == '>'
-           )
-        {
-          int              required;
-          _kernel_swi_regs r;
-
-          /* We'll have to trash the ref_url block. We know ref_url is at     */
-          /* least as long as URL, so extract the system variable name to it. */
-
-          strncpy(ref_url, extra + protolen, strlen(extra) - protolen - 1); /* -1 to skip the closing '>' */
-          ref_url[strlen(extra) - protolen - 1] = 0;
-
-          /* Now find out how long the expanded form would be */
-
-          r.r[0] = (int) ref_url;
-          r.r[1] = (int) NULL;
-          r.r[2] = -1;
-          r.r[3] = 0;
-          r.r[4] = 0;
-
-          /* _swix will not work correctly for this particular SWI if */
-          /* requiring the returned R2 value. Something to do with    */
-          /* the call relying on generating an error, but _swix spots */
-          /* it and pulls out earlier than the call expects. Or some  */
-          /* such thing...                                            */
-
-          _kernel_swi(OS_ReadVarVal, &r, &r);
-
-          required = -r.r[2];
-
-          /* Woah - system variable wasn't defined... */
-
-          if (!required)
-          {
-            erb.errnum = Utils_Error_Custom_Normal;
-
-            strcpy(erb.errmess, "<");
-            strcat(erb.errmess, ref_url);
-            strcat(erb.errmess, ">");
-            strcat(erb.errmess, lookup_token("NotDefined: not defined.",0,0));
-
-            return &erb;
-          }
-
-          if (required < 0 || required >= sizeof(ref_url) - 1) /* -1 = allow for terminator */
-          {
-            /* Well, we sort of haven't got enough memory. Ahem. */
-
-            return make_no_memory_error(8);
-          }
-
-          /* Otherwise, expand the variable (_swix is OK here as we don't */
-          /* want any returned register value).                           */
-
-          _swix(OS_ReadVarVal,
-                _INR(0,4),
-
-                ref_url,
-                ref_url,
-                sizeof(ref_url),
-                0,
-                4);
-
-          /* Ensure it is terminated correctly */
-
-          ref_url[required - 1] = 0;
-
-          /* Turn it into a fetchable URL */
-
-          urlutils_pathname_to_url(ref_url, sizeof(ref_url));
-
-          /* Point to this URL */
-
-          extra = url = ref_url;
-        }
-
-        /* Note that this is a very slow function call... */
-
-        len = utils_len_printf(tokens, extra, extra, tail);
-
-        if (len < 0)
-        {
-          /* If the above fails, do our best to calculate the length. */
-          /* This will always overestimate the size (safer to do this */
-          /* than underestimate!).                                    */
-
-          len = strlen(tokens) + 1;
-
-          /* For external images, need to fit the extra data in twice, and */
-          /* try to find a filename separator for a picture caption (put   */
-          /* this in 'tail').                                              */
-
-          if (*extra) len += strlen(extra) * 2 + strlen(tail) + 2;
-        }
-      }
-      break;
-
-      case Display_Scrap_File:
-      {
-        int found, type;
-
-        if (*source) flex_free(source);
-
-        /* Find the file length */
-
-        _swix(OS_File,
-              _INR(0,1) | _OUT(0) | _OUT(4) | _OUT(6),
-
-              23, /* Read catalogue info for named, stamped object */
-              Save_ScrapFile,
-
-              &found,
-              &len,
-              &type);
-
-        if (found != 1)
-        {
-          erb.errnum = Utils_Error_Custom_Normal;
-
-          /* Error message will either be 'can't find the page', or, if this is */
-          /* a frame and the frame source matches the fetching URL, 'can't find */
-          /* the frame'.                                                        */
-
-          if (
-               b->ancestor          &&
-               b->frame             &&
-               b->frame->src        &&
-               browser_fetch_url(b) &&
-               !strcmp(b->frame->src, browser_fetch_url(b))
-             )
-          {
-            StrNCpy0(erb.errmess,
-                     lookup_token("WhatFrame:The sending application could not supply the page contents for this frame.",
-                                  0,
-                                  0));
-          }
-          else
-          {
-            StrNCpy0(erb.errmess,
-                     lookup_token("WhatScrap:Cannot find the page to load; the sending application may have died.",
-                                  0,
-                                  0));
-          }
-
-          return &erb;
-        }
-
-        /* Is this a text file? */
-
-        if (type == FileType_TEXT)
-        {
-          b->page_is_text = 1;
-          up->type        = TYPE_TEXTFILE;
-        }
-        else b->page_is_text = 0;
-      }
-      break;
-
-      case Display_About_Page:
-      {
-        len = 0;
-      }
-      break;
-    }
-
-    /* If required, claim memory for the page; complain if this fails */
-
-    if (len) ok = flex_alloc(source, len);
-    else     ok = 1;
-
-    if (!ok)
-    {
-      #ifdef TRACE
-        if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
-      #endif
-
-      return make_no_cont_memory_error(1);
-    }
-
-    /* Construct the page in the claimed block (or build it in a */
-    /* new block).                                               */
-
-    switch (b->displayed)
-    {
-      case Display_About_Page:
-      {
-        RetError(about_build_page(source));
-      }
-      break;
-
-      case Display_External_Image:
-      {
-        memset(*source, 0, len);
-        sprintf(*source, tokens, extra, extra, tail);
-      }
-      break;
-
-      case Display_Scrap_File:
-      {
-        FILE * file;
-
-        /* Load and delete the scrap file */
-
-        file = fopen(Save_ScrapFile, "rb");
-
-        if (!file) RetLastE;
-
-        if (fread(*source, 1, len, file) < len)
-        {
-          fclose(file);
-          RetLastE;
-        }
-
-        fclose(file);
-        remove(Save_ScrapFile);
-      }
-      break;
-    }
-
-    /* Set up fetch flags to say that a fetch has been completed; since */
-    /* we've filled in the document source store here, say that zero    */
-    /* bytes have been fetched (otherwise code below will try to copy   */
-    /* data out of the fetch_buffer block).                             */
-
-    r              = 0;
-    remaining      = 0;
     up->identified = 1;
     up->allowparse = 1;
     up->fetched    = 1;
     up->fetching   = 0;
-  }
 
-  /* If there isn't an error, and more than zero bytes have been read, */
-  /* deal with the data (if any) returned from the above call.         */
-
-  if (r && !e)
-  {
-    int ok, oldsize;
-
-    /* 'fetched' is a flag which if set indicates at least 1 byte has been */
-    /* got so far. If fetched is zero, and there is data in the source     */
-    /* store (i.e. 'source' is not NULL) then free up the store as it does */
-    /* not hold any valid data (must be from an old fetch).                */
-
-    if (!up->fetched && *source)
-    {
-      #ifdef TRACE
-        if (tl & (1u<<12)) Printf("html_get_next_token: (1) flex_free block %p which held page source\n",source);
-        flexcount -= flex_size(source);
-        if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-      #endif
-
-      flex_free(source);
-      *source = NULL;
-    }
-
-    /* Signal that there's definitely data fetched now. */
-
-    up->fetched = 1;
-
-    /* If there's store allocated at this point, it holds valid source; extend */
-    /* it by the number of bytes read from the url_read_data call. Else, alloc */
-    /* a new buffer to hold the data.                                          */
-
-    #ifdef TRACE
-      if (tl & (1u<<12))
-      {
-        if (*source) Printf("html_get_next_token: flex_extend by %d to %d for page source store\n",r,flex_size(source) + r);
-        else         Printf("html_get_next_token: flex_alloc %d for page source store\n",r);
-      }
-    #endif
-
-    if (*source)
-    {
-      oldsize = flex_size(source);
-      ok = flex_extend(source, oldsize + r);
-    }
-    else
-    {
-      oldsize = 0;
-      ok = flex_alloc(source, r);
-    }
-
-    #ifdef TRACE
-      flexcount += r;
-      if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-    #endif
-
-    if (size) *size = oldsize + r;
-
-    /* Report an error if the allocation failed */
-
-    if (!ok)
-    {
-      #ifdef TRACE
-        if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
-      #endif
-
-      return make_no_cont_memory_error(1);
-    }
-
-    /* The data block has been created/extended successfully, so copy the */
-    /* data from the url_read_data call into it.                          */
-
-    #ifdef TRACE
-      if (tl & (1u<<18)) Printf("\0216html_get_next_token: memcpy from %p to %p for %d bytes\0217\n",((char *) (*source)) + oldsize, fetch_buffer, r);
-    #endif
-
-    memcpy(((char *) (*source)) + oldsize, fetch_buffer, r);
+    if (remaining) *remaining = 0;
   }
 
   /* If we're not authorising the transfer and data has been fetched, proceed normally */
@@ -1093,17 +1309,17 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
         if (up->context) HtmlSetEncodingCallback(up->context, encoding_changed_by_meta, b);
 
-        r = *source ? flex_size(source) : 0;
+        read = *source ? flex_size(source) : 0;
       }
 
-      /* If there is new data in the source store (size = r) and no error at */
-      /* present, attempt to parse the chunk of data with HtmlGetStream.     */
+      /* If there is new data in the source store (size = read) and no error at */
+      /* present, attempt to parse the chunk of data with HtmlGetStream.        */
 
-      if (r && !e)
+      if (read && !e)
       {
         new = HtmlGetStream(up->context,        /* Parser context, from HtmlParse            */
                             (char **) source,   /* Pointer to start of the complete document */
-                            r,                  /* Size of the chunk that has been added     */
+                            read,               /* Size of the chunk that has been added     */
                             &hf);               /* Flags from HTMLLib, e.g. 'have more data' */
 
         up->stream = new;
@@ -1859,6 +2075,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
       else Printf("html_get_next_token: Exitting with an error\n");
     }
   #endif
+
+html_get_next_token_waiting_jump_point:
 
   /* Exit, passing on any error if there is one */
 

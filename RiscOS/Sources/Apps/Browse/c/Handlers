@@ -28,6 +28,8 @@
 #include "quit.h"
 #include "proginfo.h"
 
+#include "ToolAction.h" /* NOT the proper Toolbox header, as this needed OSLib... */
+
 #include "Dialler.h"
 
 #include "svcprint.h"
@@ -74,6 +76,10 @@
 
 static int  last_click_x;
 static int  last_click_y;
+
+/* Local compilation options */
+
+#define H_DTS_MULTIPLIER 4
 
 /* Static function prototypes */
 
@@ -316,9 +322,10 @@ int handle_messages(WimpMessage * m, void * handle)
 
     /* URI handler */
 
+    case URI_MStarted:                           ChkError(protocols_auh_got_started(m));          break;
+    case URI_MDying:                             ChkError(protocols_auh_got_dying(m));            break;
     case URI_MProcess:                           ChkError(protocols_auh_got_process(m));          break;
     case URI_MReturnResult:                      ChkError(protocols_auh_got_return_result(m));    break;
-    case URI_MDying:                             ChkError(protocols_auh_got_dying(m));            break;
 
     /* ANT URL broadcast protocol */
 
@@ -1447,7 +1454,7 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
 
               /* If control is held down, set the reloading flag to bypass the cache */
 
-              if (ctrl) handle->reloading = 1;
+              if (ctrl) handle->reload_lock = 1, handle->reloading = 1;
 
               ChkError(fetchpage_new(handle,
                                      p->anchor,
@@ -1512,6 +1519,23 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
 
       browser_move_selection(handle, akbd_DownK);
     }
+
+    /* Handle drag-to-scroll */
+
+    if (!handle->nchildren)
+    {
+      drag_in_progress = 1;
+      handle->dragging = 1;
+
+      register_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_drags, handle);
+
+      /* Call it now to minimise the time during which the pointer */
+      /* could wander when it's meant to be constrained            */
+
+      handle_drags(0, NULL, NULL, handle);
+
+      return 1;
+    }
   }
 
   return 1;
@@ -1530,6 +1554,8 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
 int handle_drags(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle)
 {
   static browser_data     * browser_resizing = NULL;
+  static browser_data     * browser_scrolled = NULL;
+
   static int                resizing_row     = -1;
   static int                resizing_col     = -1;
   static int                resizing_ofsleft = 0;
@@ -1569,18 +1595,49 @@ int handle_drags(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data *
       handle->dragging = 0;
       deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_drags, handle);
 
+      if (browser_scrolled)
+      {
+        /* Make sure the pointer is the correct shape if we're no */
+        /* longer over the original window.                       */
+
+        if (
+             info.window_handle != browser_scrolled->window_handle &&
+             info.icon_handle   >= -1
+           )
+           mouse_set_pointer_shape(Mouse_Shape_Normal);
+
+        /* If there's an attached MayScroll indicator, make sure it's */
+        /* turned off.                                                */
+
+        if (browser_scrolled->may_scroll != NULL_ObjectId)
+        {
+          /* Set the state to 'off' */
+
+          _swix(Toolbox_ObjectMiscOp,
+                _INR(0,4),
+
+                0,
+                browser_scrolled->may_scroll,
+                ToolAction_SetState,
+                0, /* (Assume component ID is zero) */
+                0);
+
+        }
+      }
+
       if (browser_resizing)
       {
         /* If we were resizing a frameset, lock the new positions in place */
 
         frames_lock_frameset(browser_resizing);
-
-        /* Reset the various state variables ready for the next drag */
-
-        browser_resizing = NULL;
-        resizing_row     = -1;
-        resizing_col     = -1;
       }
+
+      /* Reset the various state variables ready for the next drag */
+
+      browser_resizing = NULL;
+      browser_scrolled = NULL;
+      resizing_row     = -1;
+      resizing_col     = -1;
 
       return 0;
     }
@@ -1611,8 +1668,9 @@ int handle_drags(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data *
     if (!num_rows) num_rows = 1;
     if (!num_cols) num_cols = 1;
 
-    /* A parent frame has got the click, so it must be in the border between */
-    /* other frames in its defined frameset.                                 */
+    /* If browser_resizing is NULL, this is the initiation of the drag; */
+    /* set up various state variables which will be relevant during the */
+    /* drag and are cleared when it ends.                               */
 
     if (!browser_resizing)
     {
@@ -1800,6 +1858,123 @@ int handle_drags(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data *
     }
 
   /* Closure of 'if (handle->nchildren)' */
+  }
+  else
+  {
+    /* If we reach here, a drag is happening inside a displaying */
+    /* browser window; in that case, we're doing drag-to-scroll. */
+
+    if (choices.drag_to_scroll)
+    {
+      static int start_xpos;
+      static int start_ypos;
+
+      static int start_xscr;
+      static int start_yscr;
+
+      static int start_ctrl;
+
+      /* If browser_scrolled is NULL, this is the initiation of the drag; */
+      /* set up various state variables which will be relevant during the */
+      /* drag and are cleared when it ends.                               */
+
+      if (!browser_scrolled)
+      {
+        BBox        extent;
+        int         exh, exw;
+        int         vih, viw;
+        WimpDragBox drag;
+
+        /* Holding down Control speeds up the mouse step / drag */
+        /* relationship by a factor of H_DTS_MULTIPLIER.        */
+
+        _swix(OS_Byte,
+              _INR(0,1) | _OUT(1),
+
+              121,
+              129,
+
+              &start_ctrl);
+
+        browser_scrolled = handle;
+
+        start_xpos       = info.x;
+        start_ypos       = info.y;
+        start_xscr       = state.xscroll;
+        start_yscr       = state.yscroll;
+
+        /* Work out the extent and visible area width and height */
+
+        ChkError(window_get_extent(0, browser_scrolled->self_id, &extent));
+
+        exw = extent.xmax - extent.xmin;
+        exh = extent.ymax - extent.ymin;
+
+        viw = state.visible_area.xmax - state.visible_area.xmin;
+        vih = state.visible_area.ymax - state.visible_area.ymin;
+
+        /* Set up a drag box */
+
+        drag.wimp_window       = browser_scrolled->window_handle;
+        drag.drag_type         = Wimp_DragBox_DragPoint;
+
+        drag.dragging_box.xmin = 0;
+        drag.dragging_box.ymin = 0;
+        drag.dragging_box.xmax = 0;
+        drag.dragging_box.ymax = 0;
+
+        if (!start_ctrl)
+        {
+          drag.parent_box.xmin = start_xscr + start_xpos - (exw - viw);
+          drag.parent_box.ymin = start_yscr + start_ypos;
+          drag.parent_box.xmax = start_xscr + start_xpos;
+          drag.parent_box.ymax = start_yscr + start_ypos + (exh - vih);
+        }
+        else
+        {
+          drag.parent_box.xmin = start_xscr / H_DTS_MULTIPLIER + start_xpos - (exw - viw) / H_DTS_MULTIPLIER;
+          drag.parent_box.ymin = start_yscr / H_DTS_MULTIPLIER + start_ypos;
+          drag.parent_box.xmax = start_xscr / H_DTS_MULTIPLIER + start_xpos;
+          drag.parent_box.ymax = start_yscr / H_DTS_MULTIPLIER + start_ypos + (exh - vih) / H_DTS_MULTIPLIER;
+        }
+
+        drag.workspace         = NULL;
+        drag.draw              = NULL;
+        drag.remove            = NULL;
+        drag.move              = NULL;
+
+        /* Call the Wimp so that the pointer gets appropriately constrained. */
+        /* This is a null handler, so window extent might change due to a    */
+        /* reformat etc.; if so, the constraing rectangle is *not* altered.  */
+        /* You need to restart the drag to get a new rectangle. Attempting   */
+        /* to change the rectangle can let Pointer Leaving events leak       */
+        /* through, which causes havok when the pointer leaves the window    */
+        /* during the drag.                                                  */
+
+        wimp_drag_box(&drag);
+
+        /* Set the pointer shape */
+
+        mouse_set_pointer_shape(Mouse_Shape_DTS);
+      }
+
+      if (!start_ctrl)
+      {
+        state.xscroll = start_xscr - (info.x - start_xpos);
+        state.yscroll = start_yscr - (info.y - start_ypos);
+      }
+      else
+      {
+        state.xscroll = start_xscr - (info.x - start_xpos) * H_DTS_MULTIPLIER;
+        state.yscroll = start_yscr - (info.y - start_ypos) * H_DTS_MULTIPLIER;
+      }
+
+      ChkError(wimp_open_window((WimpOpenWindowBlock *) &state));
+
+    /* Closure of 'if (choices.drag_to_scroll)' */
+    }
+
+  /* Closure of 'else' case to 'if (handle->nchildren)' */
   }
 
   return 0;
@@ -2792,6 +2967,55 @@ int handle_save_as_draw(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 }
 
 /*************************************************/
+/* handle_may_scroll()                           */
+/*                                               */
+/* Handles clicks on a MayScroll indicator.      */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+int handle_may_scroll(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  browser_data * ancestor;
+
+  /* Can't do anything if there's already a drag in progress */
+
+  if (drag_in_progress) return 0;
+
+  /* Find out the browser the MayScroll indicator is attached to */
+
+  if (toolbox_get_client_handle(0, idb->ancestor_id, (void *) &ancestor)) return 0;
+  if (!is_known_browser(ancestor))                                        return 0;
+  if (ancestor->may_scroll != idb->self_id)                               return 0;
+
+  /* The association is valid - call the drag handler */
+
+  drag_in_progress = 1;
+  ancestor->dragging = 1;
+
+  register_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_drags, ancestor);
+
+  /* Turn the indicator on */
+
+  _swix(Toolbox_ObjectMiscOp,
+        _INR(0,4),
+
+        0,
+        idb->self_id,
+        ToolAction_SetState,
+        0, /* (Assume component ID is zero) */
+        1);
+
+  /* Call it now to minimise the time during which the pointer */
+  /* could wander when it's meant to be constrained            */
+
+  handle_drags(0, NULL, NULL, ancestor);
+
+  return 1;
+}
+
+/*************************************************/
 /* handle_set_marker()                           */
 /*                                               */
 /* Remember the token and data offset of the     */
@@ -2850,6 +3074,20 @@ int handle_set_marker(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
     #endif
 
     return 0;
+  }
+
+  /* If this is an ancestor browser and it has frames, try using the */
+  /* highlighted frame instead.                                      */
+
+  if (!b->ancestor && b->nchildren)
+  {
+    if (is_known_browser(b->selected_frame)) b = b->selected_frame;
+    else
+    {
+      Beep;
+
+      return 1;
+    }
   }
 
   /* Set the marker */
@@ -2976,6 +3214,20 @@ int handle_clear_marker(int eventcode, ToolboxEvent * event, IdBlock * idb, void
     #endif
 
     return 0;
+  }
+
+  /* If this is an ancestor browser and it has frames, try using the */
+  /* highlighted frame instead.                                      */
+
+  if (!b->ancestor && b->nchildren)
+  {
+    if (is_known_browser(b->selected_frame)) b = b->selected_frame;
+    else
+    {
+      Beep;
+
+      return 1;
+    }
   }
 
   /* Clear the marker */
@@ -3284,7 +3536,11 @@ int handle_dialler_service(WimpMessage * m, void * handle)
 /* we don't know what to do with it.             */
 /*                                               */
 /* Parameters are as standard for a Toolbox      */
-/* event handler.                                */
+/* event handler. Only the event code and        */
+/* ID block are of direct use here, though the   */
+/* functions that this calls may use other items */
+/* - these must be checked individually if this  */
+/* may be important.                             */
 /*************************************************/
 
 int handle_miscellaneous_event(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)

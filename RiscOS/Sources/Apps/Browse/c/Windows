@@ -37,6 +37,7 @@
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "FetchHTML.h"
 #include "FetchPage.h"
+#include "Find.h"
 #include "FontManage.h"
 #include "Forms.h"
 #include "Frames.h"
@@ -62,7 +63,7 @@
 
 /* Static function prototypes */
 
-static void windows_check_reformat (browser_data * b, BBox * size, int old_width);
+static int windows_check_reformat (browser_data * b, BBox * size, int old_width);
 
 /* Locals */
 
@@ -87,9 +88,12 @@ static int hscroll_height = 0;
 /*             the browser_data struct to        */
 /*             compare against the width defined */
 /*             by the given BBox.                */
+/*                                               */
+/* Returns:    1 if a reformat was started, else */
+/*             0.                                */
 /*************************************************/
 
-static void windows_check_reformat(browser_data * b, BBox * size, int old_width)
+static int windows_check_reformat(browser_data * b, BBox * size, int old_width)
 {
   /* If the width has changed, need to reformat. Notice that the  */
   /* horizontal extent is forced up to at least a certain minimum */
@@ -110,9 +114,12 @@ static void windows_check_reformat(browser_data * b, BBox * size, int old_width)
 
     b->display_height = size->ymax - size->ymin - h1 - h2;
 
-    if (b->ancestor || b->full_screen) windows_set_tools(b, size, !b->ancestor, 0, 0, 0);
     reformat_format_from(b, -1, 1, -1);
+
+    return 1;
   }
+
+  return 0;
 
 // Blimey. This *really* needs sorting out. As for the windows_remember_size
 // call - which duplicates this functionality more or less! - you should NOT
@@ -332,6 +339,10 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
     if (last_browser) last_browser->next = b;
     last_browser = b;
 
+    /* Ensure the 'MayScroll' window ObjectId is clear to start with */
+
+    b->may_scroll = NULL_ObjectId;
+
     /* Sort out parent/child linking considerations */
 
     if (!real_parent)
@@ -516,6 +527,10 @@ _kernel_oserror * windows_create_browser(const char * url, browser_data * real_p
 
       ttop = toolbars_get_upper(b);
       tbot = toolbars_get_lower(b); /* (These are needed further down). */
+
+      /* Initialise any position marker buttons in the button bar */
+
+      markers_init_front_end(b);
 
       /* Read scroll bar choices */
 
@@ -907,6 +922,10 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
   {
     WimpGetWindowStateBlock state;
 
+    if (choices.refo_keep) ChkError(markers_remember_position(handle));
+
+    /* If the screen mode changed, re-open the window full screen */
+
     if (modechanged)
     {
       windows_open_full_screen(handle,
@@ -1010,6 +1029,8 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
       if (!handle->full_size)
       {
         int h1, h2;
+
+        if (choices.refo_keep) ChkError(markers_remember_position(handle));
 
         /* Toggle up to full size. First, remember the current (small) size. */
 
@@ -1116,11 +1137,14 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
         /* Resize any child frames and reformat if necessary */
 
         ChkError(frames_resize_frameset(handle, &b->open_window_request.visible_area));
+
         windows_check_reformat(handle, &b->open_window_request.visible_area, old_display_width);
       }
       else
       {
         int h1, h2;
+
+        if (choices.refo_keep) ChkError(markers_remember_position(handle));
 
         w = handle->small_size.visible_area;
 
@@ -1187,6 +1211,8 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
                                      &(b->open_window_request.visible_area),
                                      idb->parent_id,
                                      -1));
+
+        /* Flag that the window is no longer full size */
 
         handle->full_size = 0;
 
@@ -1282,6 +1308,8 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
            modechanged
          )
       {
+        if (choices.refo_keep) ChkError(markers_remember_position(handle));
+
         /* See comments on the previous line that called frames_resize_frameset; */
         /* for the ancestor, want to only resize frames if the ancestor resized, */
         /* unless in a non-nested Wimp variant.                                  */
@@ -1322,7 +1350,9 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
         if (!handle->nchildren)
         {
           BBox extent;
-//Printf("woo, resizing\n");
+
+          // Printf("Resizing...\n");
+
           if (w.xmax - w.xmin < handle->display_extent) w.xmin = 0, w.xmax = handle->display_extent;
 
           window_get_extent(0,idb->self_id,&extent);
@@ -1354,6 +1384,8 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
       }
       else
       {
+        // Printf("Moving or scrolling\n");
+
         /* Nothing has altered size; just move the window */
 
         toolbox_show_object(0,
@@ -1499,7 +1531,6 @@ int windows_remember_size(int eventcode, WimpPollBlock * b, IdBlock * idb, void 
 
             d->display_height = s.visible_area.ymax - s.visible_area.ymin - h1 - h2;
 
-            if (d->ancestor) windows_set_tools(d, &s.visible_area, 0, 0, 0, 0);
             reformat_format_from(d, -1, 1, -1);
           }
         }
@@ -1580,6 +1611,10 @@ void windows_close_browser(browser_data * handle)
   /* it and the Print Style window (again, if open).                   */
 
   ChkError(print_close(handle->self_id, 0));
+
+  /* Close the Find dialogue box, if open */
+
+  find_close();
 
   /* If there is an ancestor and it has a selected token, */
   /* is that token in this window? If so, want to clear   */
@@ -1777,6 +1812,19 @@ void windows_close_browser(browser_data * handle)
     }
   #endif
 
+  /* If there's a 'MayScroll' window attached, delete it */
+
+  if (handle->may_scroll != NULL_ObjectId)
+  {
+    show_error_ret(toolbox_delete_object(0, handle->may_scroll));
+
+    #ifdef TRACE
+      if (tl & (1u<<3)) Printf("\nDeleted object ID %p\n",(void *) handle->may_scroll);
+    #endif
+
+    handle->may_scroll = NULL_ObjectId;;
+  }
+
   /* Delete the window object. */
 
   ChkError(toolbox_delete_object(0,handle->self_id));
@@ -1784,6 +1832,8 @@ void windows_close_browser(browser_data * handle)
   #ifdef TRACE
     if (tl & (1u<<3)) Printf("\nDeleted object ID %p\n",(void *) handle->self_id);
   #endif
+
+  handle->self_id = NULL_ObjectId;
 
   /* Ensure any line list data relating to tables is freed */
 
@@ -2789,6 +2839,75 @@ _kernel_oserror * windows_check_tools(browser_data * b, BBox * box)
 
   if (s.visible_area.xmax - s.visible_area.xmin < extent.xmax - extent.xmin) hscroll = 1;
   if (s.visible_area.ymax - s.visible_area.ymin < extent.ymax - extent.ymin) vscroll = 1;
+
+  /* If we're configured for no scroll bars and hscroll or vscroll is */
+  /* set, create a 'MayScroll' indicator.                             */
+
+  if (
+       nested_wimp                    &&
+       choices.no_scroll_bars         &&
+       choices.show_may_scroll        &&
+       b->ancestor                    &&
+       b->may_scroll == NULL_ObjectId &&
+       (
+         hscroll ||
+         vscroll
+       )
+     )
+  {
+    /* Create the object */
+
+    _kernel_oserror * e = toolbox_create_object(0,
+                                                "MayScroll",
+                                                &b->may_scroll);
+
+    if (e)
+    {
+      /* Report any error */
+
+      b->may_scroll = NULL_ObjectId;
+      show_error_ret(e);
+    }
+    else
+    {
+      WimpGetWindowStateBlock state;
+      WindowShowObjectBlock   show;
+      int                     w, h;
+
+      /* Find out the visible area of the MayScroll indicator - */
+      /* we will preserve the settings as in the Res file.      */
+
+      window_get_wimp_handle(0,
+                             b->may_scroll,
+                             &state.window_handle);
+
+      RetError(wimp_get_window_state(&state));
+
+      w = state.visible_area.xmax - state.visible_area.xmin;
+      h = state.visible_area.ymax - state.visible_area.ymin;
+
+      /* Set up the Show block */
+
+      show.visible_area.xmin    = s.visible_area.xmax - w;
+      show.visible_area.ymin    = s.visible_area.ymax - h;
+      show.visible_area.xmax    = s.visible_area.xmax;
+      show.visible_area.ymax    = s.visible_area.ymax;
+      show.xscroll              = 0;
+      show.yscroll              = 0;
+      show.behind               = -1;
+      show.parent_window_handle = b->window_handle;
+      show.alignment_flags      = 0xaa0000; /* Link to top/right */
+
+      /* Show the indicator */
+
+      RetError(toolbox_show_object(Toolbox_ShowObject_AsSubWindow,
+                                   b->may_scroll,
+                                   Toolbox_ShowObject_FullSpec,
+                                   &show,
+                                   b->self_id,
+                                   NULL_ComponentId));
+    }
+  }
 
   if (!b->ancestor && !b->full_screen)
   {
