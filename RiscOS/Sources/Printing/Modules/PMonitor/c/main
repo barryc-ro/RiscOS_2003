@@ -1,0 +1,160 @@
+/* main.c */
+
+#include <stdio.h>
+#include "stdbool.h"
+#include <time.h>
+
+#include "swis.h"
+
+#include "AsmUtils/osvarlen.h"
+#include "DebugLib/DebugLib.h"
+#include "Global/RISCOS.h"
+#include "Global/UpCall.h"
+
+#include "counting.h"
+#include "header.h"
+#include "ink.h"
+#include "url.h"
+
+#define INK_SERVER_VAR "RemotePrinterQuery$LowInkLevel"
+#define INK_EXTRA_DATA NULL
+
+/* static variables */
+static bool upcallClaimed;
+
+static int inkMono, inkColour; /* Last notified ink levels */
+static int newMono, newColour; /* New levels */
+static bool fetchSucceeded;    /* When true, last notified can be updated from new levels */
+
+/* static function declarations */
+
+static void checkInk( void );
+
+/* static function definitions */
+
+static void checkInk( void )
+{
+  _kernel_oserror *err = NULL;
+  int length;
+  int type;
+  int session = 0;
+  int status;
+  const char *var = INK_SERVER_VAR;
+  char *url = NULL;
+
+  err = ink_levels( &newMono, &newColour );
+  if( err ) return err;
+
+  if(    ( newMono   == -1 || newMono   == inkMono )
+      || ( newColour == -1 || newColour == inkColour )
+    ) return NULL;
+
+  length = osvarlen( var ) + 1;
+  url = malloc( length );
+  
+  err = _swix( OS_ReadVarVal, _INR(0,4), var, url, length, 0, 0 );  
+  if( err ) return err;
+
+  return url_fetch( url, INK_EXTRA_DATA, &fetchSucceeded );
+}
+
+/* extern functions */
+
+void logWrite( char *text )
+{
+  _kernel_oserror *err = NULL;
+  FILE *f;
+
+  f = fopen( "<PMonitor$dir>.log", "a" );
+  if( f )
+  {
+    char *b = malloc( 200 );
+    char *p;
+
+    *b = 0;
+    err = _swix( OS_Word, _IN(0) | _IN(1), 14 , b); 
+    if( !err )
+    {
+      for( p = b; *p != 13; p++ );
+      *p = 0;
+      fprintf( f, "%s %s\n", b, text );
+    }
+    fclose( f );
+  }
+}
+
+/* Module entry points */
+
+_kernel_oserror *initialisation(const char *cmd_tail, int podule_base, void *pw)
+{
+  _kernel_oserror *err = NULL;
+
+  debug_initialise( "PMonitor", "ADFS::Malcolm.$.Work.Current.PMonitor.Debug", "PMonitor$Debug" );
+  debug_set_stamp_debug( false ); 
+  debug_set_device( FILE_OUTPUT );
+  debug_set_unbuffered_files( true );
+  
+  /* Register for upcall */
+  err = _swix(OS_Claim, _IN(0)|_IN(1)|_IN(2), UpCallV, (int)upcallVeneer, (int)pw);
+  upcallClaimed = err ? false : true;
+
+  /** Read the counts file from the server */
+
+  return err;
+}
+
+_kernel_oserror *termination(int fatal, int podule, void *pw)
+{
+  _kernel_oserror *err = NULL;
+
+  /* Release the upcall */
+  if ( upcallClaimed )
+  {
+    _swix(OS_Release, _IN(0)|_IN(1)|_IN(2), UpCallV, upcallVeneer, pw);
+    upcallClaimed = false;
+  }
+  /** Cancel any pending read of data from the printer */
+
+  return err;
+}
+
+_kernel_oserror *upcallHandler( _kernel_swi_regs *r, void *pw )
+{
+  _kernel_oserror *err = NULL;
+  int flags;
+  int *registers;
+
+  flags = r->r[1];
+  registers = (int *)r->r[2];
+
+  switch( r->r[0] )
+  {
+    case UpCall_PDumperAction:
+      counting_upcall( flags, registers );
+      if( registers[11] == PDUMPER_REASON_ABORT_JOB ) checkInk(); 
+      break;
+  }
+  return err;
+}
+
+_kernel_oserror *starCommandHandler(const char *argString, int argc, int cmdNo, void *pw)
+{
+  _kernel_oserror *err;
+  argString = argString; argc = argc; pw = pw;
+
+  dprintf(( "Star_5", "\nstarCommandHandler %i\n", cmdNo ));
+  
+  switch( cmdNo )
+  {
+    case 0: /* Print the contents of the counters */
+      err = counting_starCounts();
+      break;
+
+    case 1: /* Ink levels */
+      err = ink_starLevels();
+      break;
+  }
+  return err;
+}
+
+/* end of main.c */
