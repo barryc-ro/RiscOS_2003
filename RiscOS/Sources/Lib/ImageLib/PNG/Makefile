@@ -27,7 +27,7 @@ LD      = link
 LB      = libfile
 WIPE    = wipe
 
-CCFLAGS = -c -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -ffa -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -47,7 +47,31 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 INCLUDES  = -IC:,^.ZLib
-DFLAGS    = -DRISCOS -DPNG_DEBUG=0
+
+#
+# Symbols to predefine. Everything after the first
+# line simply strips down pnglib to the bare
+# minimum required for ImageLib. Pngtest won't
+# work with these defined...
+#
+DFLAGS    = -DRISCOS -DPNG_DEBUG=0 -DPNG_NO_STDIO\
+ -DPNG_READ_NOT_FULLY_SUPPORTED\
+ -DPNG_PROGRESSIVE_READ_SUPPORTED\
+ -DPNG_READ_EXPAND_SUPPORTED\
+ -DPNG_READ_PACK_SUPPORTED\
+ -DPNG_READ_PACKSWAP_SUPPORTED\
+ -DPNG_READ_16_TO_8_SUPPORTED\
+ -DPNG_READ_FILLER_SUPPORTED\
+ -DPNG_READ_GAMMA_SUPPORTED\
+ -DPNG_READ_USER_TRANSFORM_SUPPORTED\
+ -DPNG_READ_ANCILLARY_CHUNKS_NOT_SUPPORTED\
+ -DPNG_READ_bKGD_SUPPORTED\
+ -DPNG_READ_gAMA_SUPPORTED\
+ -DPNG_READ_sBIT_SUPPORTED\
+ -DPNG_READ_sRGB_SUPPORTED\
+ -DPNG_READ_tRNS_SUPPORTED\
+ -DPNG_WRITE_NOT_FULLY_SUPPORTED\
+ -DPNG_WRITE_ANCILLARY_CHUNKS_NOT_SUPPORTED
 
 #
 # Program specific options:

@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "swis.h"
 
@@ -23,7 +24,6 @@
 #include "internal.h"
 #include "sprite.h"
 
-#define PNG_INTERNAL  /* Give ourselves slightly more intimate access */
 #include "PNG/png.h"
 
 #include "png.h"
@@ -57,7 +57,7 @@ typedef unsigned char bool;
 
 static int osver;
 static int log2bpp;
-static png_bytep screen_to_1, screen_from_1, hack_to_screen, hack_to_1;
+static png_bytep screen_to_1, screen_from_1;
 static int ct32k_buffer[3];
 static char *ro310_2nd_table;
 
@@ -108,6 +108,7 @@ typedef struct png_loaddata
 static void info_callback(png_struct *, png_info *);
 static void row_callback(png_struct *, png_byte *, png_uint_32, int);
 static void end_callback(png_struct *, png_info *);
+static void png_premultiply_and_gamma_correct(png_structp png_ptr, png_row_infop row_info, png_bytep row);
 
 static void my_error_fn(png_struct *png_ptr, png_const_charp errmess)
 {
@@ -272,12 +273,6 @@ static _kernel_oserror *LoadPNG(Image *this, const char *data, int len, BBox *ch
 
     oldbudge = flex_set_budge(-1);
 
-    /*
-     * Set these up for our hacky premultiply routine...
-     */
-    hack_to_1 = load->file_to_1;
-    hack_to_screen = load->file_to_screen;
-
     png_process_data(load->png_ptr, load->info_ptr, (png_byte *) data, len);
 
     flex_set_budge(oldbudge);
@@ -288,6 +283,29 @@ static _kernel_oserror *LoadPNG(Image *this, const char *data, int len, BBox *ch
     return NULL;
 }
 
+static png_bytep make_gamma_table(png_struct *png_ptr, double g)
+{
+    png_bytep table;
+    int i;
+
+    table = malloc(256);
+    if (!table)
+        png_error(png_ptr, "Insufficient memory");
+
+    for (i = 1; i <= 254; i++)
+    {
+       table[i] = (png_byte)(pow((double)i / 255.0, g) * 255.0 + .5);
+    }
+    table[0] = 0;
+    table[255] = 255;
+
+    return table;
+}
+
+/*
+ * This routine is called as soon as the PNG library has received
+ * everything up to the first image data chunk.
+ */
 void info_callback(png_struct *png_ptr, png_info *info)
 {
     Image *this = (Image *) png_get_progressive_ptr(png_ptr);
@@ -297,38 +315,61 @@ void info_callback(png_struct *png_ptr, png_info *info)
     int pal_entries;
     _kernel_oserror *e;
     int r1, r2, r3;
-    png_color *palette;
+    png_colorp palette;
     int num_palette;
     bool have_mask;
     int riscos_rowbytes;
     png_bytep trans = NULL;
     int num_trans = 0;
     png_color_16p trans_values = NULL;
+    png_uint_32 width, height;
+    int bit_depth, color_type, interlace_type;
+    png_color_16p background;
+    #ifdef DO_pHYs
+    png_uint_32 res_x = 1, res_y = 1;
+    int unit_type = PNG_RESOLUTION_UNKNOWN;
+    #endif
 
-    /* First decide if we're going to do alpha processing */
-    if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA ||
-        info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+    /*
+     * Get the basic image information from the library
+     */
+    png_get_IHDR(png_ptr, info, &width, &height, &bit_depth, &color_type, &interlace_type, NULL, NULL);
+    png_get_PLTE(png_ptr, info, &palette, &num_palette);
+
+    /*
+     * First, decide if we're going to do full alpha processing (ie
+     * manual compositing onto the background). If the image has an
+     * alpha channel, then we do. Also, if the image is paletted
+     * with some palette entries semi-transparent, then we need
+     * to composite. This choice affects how we set up the library
+     * later.
+     */
+    if (color_type & PNG_COLOR_MASK_ALPHA)
     {
         this->full_alpha = 1;
     }
-    else if (info->valid & PNG_INFO_tRNS)
+    else if (color_type == PNG_COLOR_TYPE_PALETTE)
     {
-        png_get_tRNS(png_ptr, info, &trans, &num_trans, &trans_values);
-        if (info->color_type == PNG_COLOR_TYPE_PALETTE)
+        if (png_get_tRNS(png_ptr, info, &trans, &num_trans, &trans_values))
         {
             int i;
             for (i = 0; i < num_trans; i++)
-            {
                 if (trans[i] != 0 && trans[i] != 255)
                 {
                     this->full_alpha = 1;
                     break;
                 }
-            }
         }
     }
 
-    if (this->full_alpha || info->valid & PNG_INFO_bKGD)
+    /*
+     * If we're compositing, we will need to make ourselves some lovely gamma
+     * tables. Maybe pnglib could be persuaded to do these?
+     *
+     * We also generate them if we have a background chunk - one
+     * of the tables is used below.
+     */
+    if (this->full_alpha || png_get_valid(png_ptr, info, PNG_INFO_bKGD))
     {
         /* Make some extra gamma tables... */
         double g;
@@ -337,158 +378,140 @@ void info_callback(png_struct *png_ptr, png_info *info)
         /*
          * file gamma -> linear
          */
-        if (info->valid & PNG_INFO_gAMA)
-            g = 1.0 / info->gamma;
+        if (png_get_gAMA(png_ptr, info, &g))
+            g = 1.0 / g;
         else
             g = SCREEN_GAMMA;
 
-        load->file_to_1 = malloc(256);
-        if (!load->file_to_1)
-            png_error(png_ptr, "Insufficient memory");
-
-        for (i = 1; i <= 254; i++)
-        {
-           load->file_to_1[i] = (png_byte)(pow((double)i / 255.0,
-              g) * 255.0 + .5);
-        }
-        load->file_to_1[0] = 0;
-        load->file_to_1[255] = 255;
+        load->file_to_1 = make_gamma_table(png_ptr, g);
 
         /*
          * file gamma -> screen gamma
          */
-        if (info->valid & PNG_INFO_gAMA)
-            g = 1.0 / (info->gamma * SCREEN_GAMMA);
+        if (png_get_gAMA(png_ptr, info, &g))
+            g = 1.0 / (g * SCREEN_GAMMA);
         else
             g = 1.0;
 
-        load->file_to_screen = malloc(256);
-        if (!load->file_to_screen)
-            png_error(png_ptr, "Insufficient memory");
-
-        for (i = 1; i <= 254; i++)
-        {
-            load->file_to_screen[i] = (png_byte)(pow((double)i / 255.0,
-               g) * 255.0 + .5);
-        }
-        load->file_to_screen[0] = 0;
-        load->file_to_screen[255] = 255;
+        load->file_to_screen = make_gamma_table(png_ptr, g);
 
         /*
          * screen gamma -> linear
          */
         if (!screen_from_1)
-        {
-            screen_from_1 = malloc(256);
-            if (!screen_from_1)
-                png_error(png_ptr, "Insufficient memory");
-
-            g = 1.0 / SCREEN_GAMMA;
-
-            for (i = 1; i <= 254; i++)
-            {
-               screen_from_1[i] = (png_byte)(pow((double)i / 255.0,
-                  g) * 255.0 + .5);
-            }
-            screen_from_1[0] = 0;
-            screen_from_1[255] = 255;
-        }
+            screen_from_1 = make_gamma_table(png_ptr, 1.0 / SCREEN_GAMMA);
 
         /*
          * linear -> screen gamma
          */
         if (!screen_to_1)
-        {
-            screen_to_1 = (png_bytep) malloc(256);
-            if (!screen_to_1)
-                png_error(png_ptr, "Insufficient memory");
-
-            g = SCREEN_GAMMA;
-
-            for (i = 1; i <= 254; i++)
-            {
-                screen_to_1[i] = (png_byte)(pow((double)i / 255.0,
-                   g) * 255.0 + .5);
-            }
-            screen_to_1[0] = 0;
-            screen_to_1[255] = 255;
-        }
-
-        hack_to_1 = load->file_to_1;
-        hack_to_screen = load->file_to_screen;
+            screen_to_1 = make_gamma_table(png_ptr, SCREEN_GAMMA);
     }
 
-    /* Only 8 bits per channel under RISC OS */
-    if (info->bit_depth == 16)
+    /*
+     * If it's got 16-bits per channel (ie GG, RRGGBB or RRGGBBAA) we
+     * tell pnglib to strip it down to 8-bits per channel
+     */
+    if (bit_depth == 16)
         png_set_strip_16(png_ptr);
 
-    if (info->bit_depth < 8)
+    /*
+     * If it's got less than 8-bits per channel, then if we're
+     * compositing, tell the library to unpack it to one pixel
+     * per byte - this makes our lives easier. If we're not
+     * compositing, then we keep it packed, but reverse the
+     * pixel order to match RISC OS sprites
+     */
+    if (bit_depth < 8)
     {
         if (this->full_alpha)
-        {
-            /* Need 8bpp data for blending code */
             png_set_packing(png_ptr);
-        }
         else
             png_set_packswap(png_ptr);
     }
 
-    if ((info->color_type == PNG_COLOR_TYPE_RGB ||
-         info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && osver >= 0xA5)
+    /*
+     * If it's a true-colour image and we're not compositing, and
+     * we're on RISC OS 3.5 or later, check the sBIT chunk. If
+     * all channels contain 5-bits of data or less, we will
+     * output a 16-bpp sprite instead of a 32-bpp sprite. Pnglib
+     * can't do this, so we will do it ourselves in row_callback.
+     */
+    if ((color_type == PNG_COLOR_TYPE_RGB ||
+         color_type == PNG_COLOR_TYPE_RGB_ALPHA) && osver >= 0xA5)
     {
-        if (!this->full_alpha && (info->valid & PNG_INFO_sBIT))
+        png_color_8p sig_bit;
+
+        if (!this->full_alpha && png_get_sBIT(png_ptr, info, &sig_bit))
         {
-            if (info->sig_bit.red <= 5 && info->sig_bit.green <= 5 && info->sig_bit.blue <= 5)
+            if (sig_bit->red <= 5 && sig_bit->green <= 5 && sig_bit->blue <= 5)
                 load->convto16bit=1;
         }
     }
 
-    if (info->color_type == PNG_COLOR_TYPE_RGB)
+    /*
+     * If it's a RGB image, then the data will come out as RR GG BB. For
+     * a RISC OS sprite we need it to be RR GG BB 00. If we're converting
+     * to 16-bit later, we get the library to use 0xFF as the filler.
+     * This simplifies mask handling later.
+     */
+    if (color_type == PNG_COLOR_TYPE_RGB)
         png_set_filler(png_ptr, load->convto16bit ? 255 : 0, PNG_FILLER_AFTER);
 
-    /* Can't handle RGB data with transparency - need to know data
-     * values pre-gamma for palette/greyscale trick to work - get the library
+    /*
+     * Can't handle RGB data with transparency - need to know data
+     * values pre-gamma to handle the tRNS chunk. So we get the library
      * to turn it into RGBA. Also, 16-bit greyscale will have to be turned into
-     * grey+alpha...
+     * grey+alpha, because we've lost the least-significant byte of the
+     * pixel data. Greyscale of <=8bpp can be handled because we don't
+     * gamma-correct the data.
      */
-    if (info->valid & PNG_INFO_tRNS)
+    if (png_get_valid(png_ptr, info, PNG_INFO_tRNS))
     {
-        if (info->color_type == PNG_COLOR_TYPE_RGB ||
-            info->color_type == PNG_COLOR_TYPE_GRAY && info->bit_depth == 16)
+        if (color_type == PNG_COLOR_TYPE_RGB ||
+            color_type == PNG_COLOR_TYPE_GRAY && bit_depth == 16)
             png_set_expand(png_ptr);
     }
 
+    /*
+     * If it's a colour image, and we're not compositing, tell the
+     * library what gamma to use. If it's greyscale or we're
+     * compositing, we handle gamma ourselves, by correcting
+     * the palette or in png_premultiply_***, respectively.
+     */
     if (!this->full_alpha)
     {
-        if (info->color_type & PNG_COLOR_MASK_COLOR) /* We do greyscale ourselves */
+        if (color_type & PNG_COLOR_MASK_COLOR) /* We do greyscale ourselves */
         {
-            if (info->valid & PNG_INFO_gAMA)
-                png_set_gamma(png_ptr, SCREEN_GAMMA, info->gamma);
+            double gamma;
+
+            if (png_get_gAMA(png_ptr, info, &gamma))
+                png_set_gamma(png_ptr, SCREEN_GAMMA, gamma);
             else
                 png_set_gamma(png_ptr, SCREEN_GAMMA, 1.0 / SCREEN_GAMMA);
         }
     }
     else
     {
-        if (info->color_type != PNG_COLOR_TYPE_PALETTE)
-            png_set_premultiply_alpha(png_ptr);
+        if (color_type != PNG_COLOR_TYPE_PALETTE)
+            png_set_read_user_transform_fn(png_ptr, png_premultiply_and_gamma_correct);
     }
 
     /* Extract the background colour in a useful form */
-    if (info->valid & PNG_INFO_bKGD)
+    if (png_get_bKGD(png_ptr, info, &background))
     {
-        unsigned int bg_r = info->background.red;
-        unsigned int bg_g = info->background.green;
-        unsigned int bg_b = info->background.blue;
-        unsigned int bg_m = info->background.gray;
+        unsigned int bg_r = background->red;
+        unsigned int bg_g = background->green;
+        unsigned int bg_b = background->blue;
+        unsigned int bg_m = background->gray;
         unsigned int bg_i = 0x100;
 
-        switch (png_ptr->color_type)
+        switch (color_type)
         {
           case PNG_COLOR_TYPE_GRAY:
           case PNG_COLOR_TYPE_GRAY_ALPHA:
             bg_i = bg_m;
-            switch (info->bit_depth)
+            switch (bit_depth)
             {
               case 1:
                 bg_m *= 0xFF;
@@ -507,15 +530,15 @@ void info_callback(png_struct *png_ptr, png_info *info)
             break;
 
           case PNG_COLOR_TYPE_PALETTE:
-            bg_i = info->background.index;
-            bg_r = info->palette[bg_i].red;
-            bg_g = info->palette[bg_i].green;
-            bg_b = info->palette[bg_i].blue;
+            bg_i = background->index;
+            bg_r = palette[bg_i].red;
+            bg_g = palette[bg_i].green;
+            bg_b = palette[bg_i].blue;
             break;
 
           case PNG_COLOR_TYPE_RGB:
           case PNG_COLOR_TYPE_RGB_ALPHA:
-            if (info->bit_depth == 16)
+            if (bit_depth == 16)
             {
               bg_r >>= 8;
               bg_g >>= 8;
@@ -544,8 +567,11 @@ void info_callback(png_struct *png_ptr, png_info *info)
      *           24 bpp colour (with or without alpha, 32 bit packed)
      */
 
-    if (info->color_type == PNG_COLOR_TYPE_RGB ||
-        info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+    /* Get the transformed properties */
+    png_get_IHDR(png_ptr, info, &width, &height, &bit_depth, &color_type, &interlace_type, NULL, NULL);
+
+    if (color_type == PNG_COLOR_TYPE_RGB ||
+        color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
         if (osver >= 0xA5)
         {
@@ -571,7 +597,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     }
     else
     {
-        switch (info->bit_depth)
+        switch (bit_depth)
         {
             case 1: mode = 25; break;
             case 2: mode = 26; break;
@@ -580,74 +606,71 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
     }
 
-    this->width = info->width;
-    this->height = info->height;
+    this->width = width;
+    this->height = height;
 
-    #if 0
-    /* Don't support the pHYS chunk - it sucks */
-    if ((info->valid & PNG_INFO_pHYs) && info->phys_unit_type < PNG_RESOLUTION_LAST)
-    {
-        switch (info->phys_unit_type)
-        {
-          case PNG_RESOLUTION_UNKNOWN:
-            if (this->width_os==-1)
-            {
-                if (info->x_pixels_per_unit > info->y_pixels_per_unit)
-                    this->width_os = info->width * 2;
-                else
-                    this->width_os = info->width * 2 * info->y_pixels_per_unit / info->x_pixels_per_unit;
-            }
-            if (this->height_os==-1)
-            {
-                if (info->x_pixels_per_unit > info->y_pixels_per_unit)
-                    this->height_os = info->height * 2 * info->x_pixels_per_unit / info->y_pixels_per_unit;
-                else
-                    this->height_os = info->height * 2;
-            }
-            break;
+    #ifdef DO_pHYs
+    /* Don't support the pHYs chunk - it sucks */
+    png_get_pHYs(png_ptr, info, &res_x, &res_y, &unit_type);
 
-          case PNG_RESOLUTION_METER:
-            if (this->width_os==-1)
-                this->width_os = info->width * 180.0F / (info->x_pixels_per_unit * 0.0254F);
-            if (this->height_os==-1)
-                this->height_os = info->height * 180.0F / (info->y_pixels_per_unit * 0.0254F);
-            break;
-        }
-    }
-    else
-    #endif
+    switch (unit_type)
     {
+      case PNG_RESOLUTION_METER:
         if (this->width_os==-1)
-            this->width_os = info->width * 2;
+            this->width_os = width * 180.0F / (res_x * 0.0254F);
         if (this->height_os==-1)
-            this->height_os = info->height * 2;
-    }
+            this->height_os = height * 180.0F / (res_y * 0.0254F);
+        break;
 
-    if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
-        riscos_rowbytes = info->width;
-    else if (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+      default:
+        if (this->width_os==-1)
+        {
+            if (res_x > res_y)
+                this->width_os = width * 2;
+            else
+                this->width_os = width * 2 * res_y / res_x;
+        }
+        if (this->height_os==-1)
+        {
+            if (res_x > res_y)
+                this->height_os = height * 2 * res_x / res_y;
+            else
+                this->height_os = height * 2;
+        }
+        break;
+    }
+    #else
+    if (this->width_os==-1)
+        this->width_os = width * 2;
+    if (this->height_os==-1)
+        this->height_os = height * 2;
+    #endif
+
+    if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+        riscos_rowbytes = width;
+    else if (color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
         if (osver < 0xA5 && !this->full_alpha)
-            riscos_rowbytes = info->width;
+            riscos_rowbytes = width;
         else if (load->convto16bit)
-            riscos_rowbytes = info->width * 2;
+            riscos_rowbytes = width * 2;
         else
-            riscos_rowbytes = info->width * 4;
+            riscos_rowbytes = width * 4;
     }
     else
-        riscos_rowbytes = info->rowbytes;
+        riscos_rowbytes = png_get_rowbytes(png_ptr, info);
 
     mem = 16  /* Sprite area header size */
          +44; /* Sprite header size */
 
-    if ((info->color_type&~PNG_COLOR_MASK_ALPHA) == PNG_COLOR_TYPE_GRAY && !this->full_alpha)
-        num_palette = pal_entries = 1 << info->bit_depth;
-    else if (info->color_type == PNG_COLOR_TYPE_PALETTE)
+    if ((color_type&~PNG_COLOR_MASK_ALPHA) == PNG_COLOR_TYPE_GRAY && !this->full_alpha)
+        num_palette = pal_entries = 1 << bit_depth;
+    else if (color_type == PNG_COLOR_TYPE_PALETTE)
     {
-        num_palette = info->num_palette;
-        pal_entries = 1 << info->bit_depth;
+        png_get_PLTE(png_ptr, info, &palette, &num_palette);
+        pal_entries = 1 << bit_depth;
     }
-    else if (osver < 0xA5 && info->color_type == PNG_COLOR_TYPE_RGB)
+    else if (osver < 0xA5 && color_type == PNG_COLOR_TYPE_RGB)
     {
         num_palette = 0;
         pal_entries = 256;
@@ -659,28 +682,28 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
     load->spritewidth = (riscos_rowbytes+3)&~3;
 
-    mem += load->spritewidth * info->height;
+    mem += load->spritewidth * height;
 
-    if (!this->full_alpha || info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    if (!this->full_alpha || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
     {
        if (mode > 28)
-          load->maskwidth = ((info->width + 31) &~ 31) / 8;
+          load->maskwidth = ((width + 31) &~ 31) / 8;
        else
           load->maskwidth = load->spritewidth;
 
-       mem += load->maskwidth * info->height;
+       mem += load->maskwidth * height;
 
        have_mask = true;
 
        if (!this->full_alpha)
        {
            this->transparent = 1;
-           if (!(info->color_type & PNG_COLOR_MASK_ALPHA) && !(info->valid & PNG_INFO_tRNS))
+           if (!(color_type & PNG_COLOR_MASK_ALPHA) && !png_get_valid(png_ptr, info, PNG_INFO_tRNS))
            {
                if (this->flags & IMAGE_FAST)
                {
                    /* don't bother */
-                   mem -= load->maskwidth * info->height;
+                   mem -= load->maskwidth * height;
                    load->maskwidth = 0;
                    have_mask = false;
                    this->transparent = 0;
@@ -698,7 +721,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     {
         if (load->removemask)
         {
-            mem -= load->maskwidth * info->height;
+            mem -= load->maskwidth * height;
             have_mask = false;
             load->removemask = 0;
             this->transparent = 0;
@@ -756,13 +779,11 @@ void info_callback(png_struct *png_ptr, png_info *info)
         if (e)
             goto error;
 
-        palette = info->palette;
-
         if (num_palette == 0)
             goto leave_default_palette;
 
         /* If full_alpha, must be palette data with hard tRNS chunk */
-        if (this->full_alpha && info->color_type == PNG_COLOR_TYPE_PALETTE)
+        if (this->full_alpha && color_type == PNG_COLOR_TYPE_PALETTE)
         {
             /* We manipulate the palette (har har har).
              * 255 alpha -> colour gamma corrected ready for screen
@@ -803,8 +824,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
         else
         {
-            if (info->color_type == PNG_COLOR_TYPE_GRAY ||
-                info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+            if (color_type == PNG_COLOR_TYPE_GRAY ||
+                color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
             {
                 if (!this->full_alpha)
                 {
@@ -812,17 +833,18 @@ void info_callback(png_struct *png_ptr, png_info *info)
                     int g, end, step, do_gamma;
                     double gamma;
 
-                    if (info->valid & PNG_INFO_gAMA)
+                    if (png_get_gAMA(png_ptr, info, &gamma))
                     {
-                        gamma = 1.0 / (info->gamma * SCREEN_GAMMA);
-                        do_gamma = fabs(gamma - 1.0) >= PNG_GAMMA_THRESHOLD;
+                        gamma = 1.0 / (gamma * SCREEN_GAMMA);
+                        /* If the gamma difference < 0.05, don't bother doing correction */
+                        do_gamma = fabs(gamma - 1.0) >= 0.05;
                     }
                     else
                         do_gamma = 0;
 
                     this->private_data2[15] = this->private_data2[16] = 0;
 
-                    end = (1 << info->bit_depth) - 1;
+                    end = (1 << bit_depth) - 1;
                     step = 255 / end;
 
                     for (i = 1, g = step; i < end; i++, g += step)
@@ -862,18 +884,18 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
   leave_default_palette:
 
-    if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
     {
-        if (!flex_alloc((flex_ptr) &load->temp, info->width * 2))
+        if (!flex_alloc((flex_ptr) &load->temp, width * 2))
         {
             load->errmess = "Insufficient memory";
             longjmp(png_ptr->jmpbuf, 1);
         }
     }
-    else if ((osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    else if ((osver < 0xA5 && (color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
                   || load->convto16bit)
     {
-        if (!flex_alloc((flex_ptr) &load->temp, info->width * 4))
+        if (!flex_alloc((flex_ptr) &load->temp, width * 4))
         {
             load->errmess = "Insufficient memory";
             longjmp(png_ptr->jmpbuf, 1);
@@ -884,11 +906,11 @@ void info_callback(png_struct *png_ptr, png_info *info)
     if (have_mask)
     {
         load->mask_offset=16 + this->private_data2[13];
-        if (info->interlace_type == 1 && !load->removemask)
+        if (interlace_type == 1 && !load->removemask)
             this->mutable_mask = true;
     }
 
-    load->color_type = info->color_type;
+    load->color_type = color_type;
 
 
     if (load->have_bkgd)
@@ -933,9 +955,14 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
     PNGloaddata *load = (PNGloaddata *) this->private_data;
     png_info *info = load->info_ptr;
     png_byte *row, *mask_row, *our_row;
-    int y;
+    png_bytep trans;
+    int num_trans;
+    png_color_16p trans_values;
+    int y, color_type;
 
     int oldbudge = flex_set_budge(0);
+
+    color_type = png_get_color_type(png_ptr, info);
 
     /* Increase apparent height of sprite if necessary */
     if (row_num >= load->available_rows)
@@ -976,7 +1003,7 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
 
     /* Expand our separate mask + color data into the interleaved format the library
        expects... */
-    if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
     {
         int i;
         png_byte *dp, *sp, *mp;
@@ -984,7 +1011,7 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
         sp = row;
         mp = mask_row;
         dp = load->temp;
-        for (i = info->width; i; i--)
+        for (i = this->width; i; i--)
         {
             *dp++ = *sp++;
             *dp++ = *mp++;
@@ -995,20 +1022,20 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
     }
     else if (load->convto16bit)
     {
-        convert_row_15bit_to_24bit(load->temp, row, info->width);
+        convert_row_15bit_to_24bit(load->temp, row, this->width);
         our_row = row;
         row = load->temp;
     }
-    else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    else if (osver < 0xA5 && (color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
     {
-        convert_row_8bit_to_24bit(load->temp, row, mask_row, (unsigned int *) this->private_data2 + 15, info->width);
+        convert_row_8bit_to_24bit(load->temp, row, mask_row, (unsigned int *) this->private_data2 + 15, this->width);
         our_row = row;
         row = load->temp;
     }
 
     png_progressive_combine_row(png_ptr, row, new_row);
 
-    if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
     {
         /* And remerge... */
         int i;
@@ -1021,7 +1048,7 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
         dp = row;
         if (this->full_alpha)
         {
-            for (i = info->width; i; i--)
+            for (i = this->width; i; i--)
             {
                 *dp++ = *sp++;
                 *mp++ = *sp++;
@@ -1029,7 +1056,7 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
         }
         else
         {
-            for (i = info->width; i; i--)
+            for (i = this->width; i; i--)
             {
                 *dp++ = *sp++;
                 *mp++ = *sp++ ? 255 : 0;
@@ -1040,26 +1067,26 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
     {
         row = our_row;
         if (mask_row)
-            convert_32bit_alpha_to_mask(load->temp, mask_row, info->width);
-        convert_row_24bit_to_15bit(load->temp, row, info->width);
+            convert_32bit_alpha_to_mask(load->temp, mask_row, this->width);
+        convert_row_24bit_to_15bit(load->temp, row, this->width);
     }
-    else if (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+    else if (color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
         if (!this->full_alpha)
         {
-            if (osver >= 0xA5 && info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
-                convert_32bit_alpha_to_mask(row, mask_row, info->width);
+            if (osver >= 0xA5 && color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+                convert_32bit_alpha_to_mask(row, mask_row, this->width);
             else if (osver < 0xA5)
             {
                 row = our_row;
-                convert_row_24bit_to_8bit(load->temp, row, mask_row, (char *)ct32k_buffer[1], info->width);
+                convert_row_24bit_to_8bit(load->temp, row, mask_row, (char *)ct32k_buffer[1], this->width);
             }
         }
     }
-    else if (info->valid & PNG_INFO_tRNS)
+    else if (png_get_tRNS(png_ptr, info, &trans, &num_trans, &trans_values))
     {
         if (!this->full_alpha)
-            convert_trns_to_mask(row, mask_row, info->width, info->bit_depth, info->trans, info->num_trans, &info->trans_values, info->color_type);
+            convert_trns_to_mask(row, mask_row, this->width, png_get_bit_depth(png_ptr, info), trans, num_trans, trans_values, color_type);
     }
 
     flex_set_budge(oldbudge);
@@ -1294,13 +1321,15 @@ void convert_row_15bit_to_24bit(png_byte *row, const png_byte *data, unsigned in
     }
 }
 
-void png_premultiply_and_gamma_correct(png_row_infop row_info, png_bytep row)
+static void png_premultiply_and_gamma_correct(png_structp png_ptr, png_row_infop row_info, png_bytep row)
 {
+    Image *this = (Image *) png_get_progressive_ptr(png_ptr);
+    PNGloaddata *load = (PNGloaddata *) this->private_data;
     int a, r, g, b;
     png_uint_32 x;
 
-    png_bytep file_to_1 = hack_to_1;
-    png_bytep file_to_screen = hack_to_screen;
+    png_bytep file_to_1 = load->file_to_1;
+    png_bytep file_to_screen = load->file_to_screen;
 
     if (row_info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
