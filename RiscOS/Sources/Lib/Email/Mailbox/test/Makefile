@@ -156,45 +156,11 @@ OBJS =\
  o.Engine\
  o.main
 
-OBJSZ =\
- oz.column\
- oz.coord\
- oz.drag\
- oz.error\
- oz.folderwin\
- oz.gfx\
- oz.gfx_ll\
- oz.logon\
- oz.main\
- oz.message\
- oz.pop3\
- oz.screen\
- oz.sprite\
- oz.uiutils\
- oz.viewer\
 
 
 OBJSD =\
  od.Engine\
  od.main
-
-
-OBJSDZ =\
- odz.column\
- odz.coord\
- odz.drag\
- odz.error\
- odz.folderwin\
- odz.gfx\
- odz.gfx_ll\
- odz.logon\
- odz.main\
- odz.message\
- odz.pop3\
- odz.screen\
- odz.sprite\
- odz.uiutils\
- odz.viewer\
 
 
 # -----------------------------------------------------------------------------
