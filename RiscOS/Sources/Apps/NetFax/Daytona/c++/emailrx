@@ -9,6 +9,7 @@
  * 1998-02-25: BAL
  * Split up missing page report detection and generation.
  * Added printed page report (A.K.A. return-receipt, delivery confirmation)
+date * Added printed page report (A.K.A. return-receipt, delivery confirmation)
  *
  * 1998-03-03: BAL
  * Corrected 'success' return code in
@@ -129,13 +130,6 @@ extern "C"
 #define MaxReportSize           4096
 #define MessageBufferSize       1024
 #define ReportsPath             ("Daytona:Reports")
-
-#define MessageFlags_Download        0x00000001
-#define MessageFlags_Downloaded      0x00000002
-#define MessageFlags_Printing        0x00000004
-#define MessageFlags_Printed         0x00000008
-#define MessageFlags_JustPrinted     0x00000010
-#define MessageFlags_Partial         0x00000020
 
 
 
@@ -1029,8 +1023,8 @@ void document_t::tidy (void)
 
    Update a document's flags after a stage of processing has been completed.
 
-   Documents which have been downloaded have their download flag cleared since
-   they won't need to be downloaded again.
+   Documents which have been downloaded have their just downloaded flags cleared
+   and their download flag cleared since they won't need to be downloaded again.
 
    Documents which have their printed flag set have their just printed flag
    cleared.
@@ -1052,6 +1046,7 @@ void  document_t::update_flags (void)
     {
         if (message->flags.bits.downloaded)
         {
+            message->flags.bits.just_downloaded = 0;
             message->flags.bits.download = 0;
         }
 
@@ -1590,7 +1585,7 @@ int  netfax_fax_document_t::get_number_pages (const unsigned int  flags_mask,
         if ((message->flags.value & flags_mask) == flags_match)
         {
             number_pages += (message->nf_message_id.last_page_num -
-                             message->nf_message_id.last_page_num) + 1;
+                             message->nf_message_id.first_page_num) + 1;
         }
     }
 
@@ -1748,7 +1743,7 @@ char *  netfax_fax_document_t::generate_missing_page_report (
     }
 
     if (fputs (body,
-               file))
+               file) == EOF)
     {
         delete[] body;
         fclose (file);
@@ -1758,7 +1753,7 @@ char *  netfax_fax_document_t::generate_missing_page_report (
     delete[] body;
 
     if (fputs ("\n[END]\n",
-               file))
+               file) == EOF)
     {
         fclose (file);
         return NULL;
@@ -1781,8 +1776,8 @@ char *  netfax_fax_document_t::generate_missing_page_report (
 bool  netfax_fax_document_t::need_printed_page_report (void)
 {
     if (return_receipt_address != NULL &&
-        get_number_messages (MessageFlags_JustPrinted,
-                             MessageFlags_JustPrinted) > 0)
+        get_number_messages (MessageFlags_JustDownloaded,
+                             MessageFlags_JustDownloaded) > 0)
     {
         return true;
     }
@@ -1825,10 +1820,22 @@ int netfax_fax_document_t::printed_page_report (FILE *const         file,
     // from lack of time) why page_list should not be modified so it can write
     // to a file, thereby not being constrained by arbitrary maximium size;
 
+    // We want to list pages that have just been downloaded.  There is no
+    // possibility that a printed page report can be sent before the pages
+    // have actually been printed because the last thing the PrintQ does
+    // after successfully printing the documents is to transfer this printed
+    // page report into the SendQ.
+    //
+    // Ideally this should now be changed to hook onto the new message saying
+    // that a print job has been completed, and we could then
+    // write the report straight into the SendQ (this would be much tidier, more
+    // logical, reduce code size and complexity etc.), but unfortunately there
+    // is not enough time to do this.
+
     if (page_list (pages_list,
                    sizeof (pages_list),
-                   MessageFlags_JustPrinted,
-                   MessageFlags_JustPrinted))
+                   MessageFlags_JustDownloaded,
+                   MessageFlags_JustDownloaded))
     {
         return -1;
     }
@@ -2600,41 +2607,6 @@ int netfax_fax_document_t::page_list (char *const         string,
 
     return 0;
 }
-
-
-
-
-#if 0
-void netfax_fax_document_t::message_printed (void)
-{
-    unsigned int     last_page = 1;
-    message_t *      message;
-    list_iterator_t  i;
-
-    list_initialise_iterator (&i,
-                              message_list);
-
-    for (message = (message_t *) M_list_reset (i);
-         !M_list_finished (i);
-         message = (message_t *) M_list_next (i))
-    {
-        if (!message->flags.bits.printed ||
-            message->nf_message_id.first_page_num - last_page > 1)
-        {
-            return;
-        }
-
-        last_page = message->nf_message_id.last_page_num;
-    }
-
-    // All messages in document have been printed.  If no more are expected then
-    // this document can be deleted.
-    if (total_number_pages == last_page && nf_fax_flags.exact_number_pages)
-    {
-        flags.delete_pending = true;
-    }
-}
-#endif
 
 
 
@@ -3514,8 +3486,9 @@ extern char *emailrx_generate_report_from_message (char *  message_token,
 
 extern void  emailrx_message_downloaded (message_t *const     message)
 {
-    message->flags.bits.downloaded = 1;
-    message->flags.bits.download   = 0;
+    message->flags.bits.just_downloaded = 1;
+    message->flags.bits.downloaded      = 1;
+    message->flags.bits.download        = 0;
 }
 
 
@@ -3628,6 +3601,47 @@ extern int  emailrx_get_number_messages (document_handle     document,
 
 
 
+
+/* -----------------------------------------------------------------------------
+   emailrx_current_date_time
+
+   Write the current date and time into a buffer.
+
+   Inputs
+   buffer:      buffer to write date and time into
+   buffer_size: size of buffer
+
+   Returns
+   success: 0
+   failure: size of buffer required to hold date (including 0 terminator)
+            buffer will contain an empty string if buffer_size was >0
+ */
+
+extern int  emailrx_current_date_time (char *const   buffer,
+                                       const size_t  buffer_size)
+{
+    NFE_rcode  rc;
+    date       date_processed (FALSE,
+                               NULL,
+                               0,
+                               0,
+                               TRUE);
+
+    unsigned int  size = buffer_size;
+
+    rc = date_processed.GetUnfoldedBody (buffer,
+                                         size);
+    if (rc != NFE_COMPLETED)
+    {
+        if (buffer_size > 0)
+        {
+            buffer[0] = '\0';
+        }
+        return size;
+    }
+
+    return 0;
+}
 
 }    // end of C interface functions
 
