@@ -26,7 +26,7 @@ WIPE		= -wipe
 TRIMAOF		= aof.trimaof
 AOF2ALF		= aof.aof2alf
 
-CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} -throwback
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -NoCache -CloseExec -PreDefine "Desk_AS_EMBED_FNNAMES SETA 1" -quit
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
