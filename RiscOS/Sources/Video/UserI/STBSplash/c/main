@@ -73,6 +73,7 @@ static void boxZero( box *b );
 static _kernel_oserror *display( char *arg_string );
 static void imagePosition( imageinfo_str *image_info );
 static _kernel_oserror *position( _kernel_swi_regs *r );
+static void imageReplaced( void );
 
 static imageinfo_str  image_info;
 static misc_str       misc_info;
@@ -86,6 +87,15 @@ environment_str screen_info;
 /* These should be in a header file somewhere */
 #define STBState_State	0x4b405
 #define STBState_INIT	4
+
+static void imageReplaced( void )
+{
+  if( !image_info.replaced )
+  {
+    image_info.replaced = true;
+    image_info.oldBox = image_info.sprite;
+  }  
+}
 
 /* Callafter stuff *******************************************************/
 
@@ -129,6 +139,10 @@ _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
 
   UNUSED(pw);
   UNUSED(r);
+
+#if DEBUG > 0
+printf( "\nEntered via call back handler\n" );
+#endif
 
   /* This is safe to call since there */
   callback_status &= ~CALLBACK_ACTIVE;
@@ -195,15 +209,8 @@ _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
   /* Load the graphic */
   err = set_up_dynamic_area( &graphics, &image_info, STARTUP_IMAGE);
 
-  if(err==NULL)
-  {
-    /* Clear any previous graphic */
-    err = icon_clear( BLANK, &image_info.sprite );
-    if(err) error_setAsync(err);
-
-    /* Plot it with default text, even if clear failed */
-    err = plot_splash(STARTUP_TEXT);
-  }
+  /* Plot it with default text */
+  if(err==NULL) err = display(STARTUP_TEXT);
 
   if(err)
     error_setAsync(err);
@@ -223,6 +230,7 @@ _kernel_oserror *MyInit ( const char *cmd_tail, int podule_base, void *pw )
 
   graphics.allocated = 0;
   temp_jpeg.allocated = 0;
+  misc_info.text = NULL;
 
   regs.r[0]=STARTUP_TIMEOUT;
   regs.r[1]=(int)callafter_entry;
@@ -239,6 +247,7 @@ _kernel_oserror *MyInit ( const char *cmd_tail, int podule_base, void *pw )
   boxZero( &image_info.sprite );
   image_info.centreX = image_info.centreY = true;
   image_info.width = image_info.height = 0;
+  image_info.replaced = false;
   icon_boxPosition( &image_info.sprite, image_info.centreX, image_info.centreY );
 
   err = icon_init();
@@ -260,6 +269,8 @@ _kernel_oserror *MyFinal(int fatal, int podule, void *pw)
 
   if (temp_jpeg.allocated)
     dynamiclib_free(&temp_jpeg);
+
+  free( misc_info.text );
 
   /* Stop the callafter */
   if(callback_status & CALLAFTER_ACTIVE)
@@ -355,9 +366,9 @@ static _kernel_oserror *display( char *arg_string )
 {
   _kernel_oserror *err = NULL;
 
-  /* Clear any old stuff from the screen */
-  if( graphics.allocated ) err = icon_clear( BLANK, &image_info.sprite );
-  if( !err ) icon_clear( BLANK, NULL );
+
+
+  if( !err ) icon_clear( NULL );
 
   /* Plot the graphics */
   if( !err ) err = plot_splash(arg_string);
@@ -381,7 +392,7 @@ _kernel_oserror *cmd_handler(const char *arg_string, int argc, int cmd_no, void 
   memcpy( cmd, arg_string, length );
   cmd[ length ] = 0;
 
-#if debug == 1
+#if DEBUG > 0
 printf( "\nCommand: %d, [%s]\n", cmd_no, cmd );
 #endif
 
@@ -392,6 +403,8 @@ printf( "\nCommand: %d, [%s]\n", cmd_no, cmd );
       break;
       
     case CMD_STBSplash_Graphic:
+      imageReplaced();
+
       err = set_up_dynamic_area( &graphics, &image_info, cmd );
       break;
 
@@ -430,8 +443,11 @@ _kernel_oserror *set_up_dynamic_area( dynamiclib_str *graphics, imageinfo_str *i
 
   /* Free the dynamic area if it's already allocated. */
   if (graphics->allocated )
+  {
     dynamiclib_free( graphics );
 
+  }
+  
   /* Read the catalogue information */
   r.r[0] = 17;
   r.r[1] = (int) filename;
@@ -496,17 +512,12 @@ _kernel_oserror *set_up_dynamic_area( dynamiclib_str *graphics, imageinfo_str *i
 
 static void imagePosition( imageinfo_str *image_info )
 {
-  if( image_info->centreX )
-  {
-    image_info->sprite.x0 = ( (screen_info.width  << screen_info.x_eig) - image_info->width) / 2;
-    image_info->sprite.x1 = image_info->sprite.x0 + image_info->width;
-  }
+  image_info->sprite.x0 = (image_info->sprite.x0 + image_info->sprite.x1 - image_info->width) / 2;
+  image_info->sprite.x1 = image_info->sprite.x0 + image_info->width;
 
-  if( image_info->centreY )
-  {
-    image_info->sprite.y0 = ( (screen_info.height << screen_info.y_eig) - image_info->height) / 2;
-    image_info->sprite.y1 = image_info->sprite.y0 + image_info->height;
-  }
+  image_info->sprite.y0 = (image_info->sprite.y0 + image_info->sprite.y1 - image_info->height) / 2;
+  image_info->sprite.y1 = image_info->sprite.y0 + image_info->height;
+
   icon_boxPosition( &image_info->sprite, image_info->centreX, image_info->centreY );
 }
 
@@ -771,11 +782,15 @@ _kernel_oserror *plot_splash( char *text_in)
 {
   _kernel_swi_regs r;
   _kernel_oserror *err = NULL;
-  int text_x, text_y, /* x, y,*/  size_okay, adjusted_x_size, adjusted_y_size;
-/*  int scale[4]; */
+  int text_x, text_y, size_okay, adjusted_x_size, adjusted_y_size;
   char *tt = NULL;
 
-  static char *text = NULL;
+  /* Has image changed or been replaced? */
+  if( image_info.replaced )
+  {
+    err = icon_clear( &image_info.oldBox );
+    image_info.replaced = false;
+  }
 
   /* If new text, replace the old */
   if( text_in )
@@ -788,12 +803,12 @@ _kernel_oserror *plot_splash( char *text_in)
       if( *--tt == '"' ) *tt = 0;
     }
 
-    free( text );
-    text = malloc( strlen( text_in ) + 1 );
-    if( text == NULL ) return error_make( ERROR_MEMORY );
-    strcpy( text, text_in );
+    free( misc_info.text );
+    misc_info.text = malloc( strlen( text_in ) + 1 );
+    if( misc_info.text == NULL ) return error_make( ERROR_MEMORY );
+    strcpy( misc_info.text, text_in );
   
-    tt = strrchr(text, '"');
+    tt = strrchr(misc_info.text, '"');
     if (tt) *tt = 0;
   }
   
@@ -866,7 +881,7 @@ _kernel_oserror *plot_splash( char *text_in)
 
     /* The font is now allocated */
 
-    err = display_text(text, text_x, text_y, misc_info.text_alignment,
+    err = display_text(misc_info.text, text_x, text_y, misc_info.text_alignment,
                        &size_okay);
     if( err ) return err;
 
@@ -1264,38 +1279,45 @@ static int compare(const char *s1, const char *s2)
   return( *s2 == 0);
 }
 
+/* Change the position of the splash graphic */
 static _kernel_oserror *position( _kernel_swi_regs *r )
 {
-  /* Clear the old position */
-  icon_clear( BLANK, &image_info.sprite );
+  _kernel_oserror *err = NULL;
 
-  image_info.centreX = r->r[0] == -1;
+  /* Flag the old position for clearing at next STBSPlash_display */
+  imageReplaced();
 
-  if( !image_info.centreX )
+  if( !err )
   {
-    /* Convert to OS coordinates */
-    r->r[0] <<= screen_info.x_eig;
-    image_info.sprite.x0 = r->r[0] - image_info.width / 2;
-    image_info.sprite.x1 = image_info.sprite.x0 + image_info.width;
+    image_info.centreX = r->r[0] == -1;
+  
+    if( !image_info.centreX )
+    {
+      /* Convert to OS coordinates */
+      r->r[0] <<= screen_info.x_eig;
+      image_info.sprite.x0 = r->r[0] - image_info.width / 2;
+      image_info.sprite.x1 = image_info.sprite.x0 + image_info.width;
+    }
+  
+    image_info.centreY = r->r[1] == -1;
+  
+    if( !image_info.centreY )
+    {
+      /* Convert to OS coordinates */
+      r->r[1] <<= screen_info.y_eig;
+      image_info.sprite.y0 = r->r[1] - image_info.height / 2;
+      image_info.sprite.y1 = image_info.sprite.y0 + image_info.height;
+    }
+  
+    /* Force on screen and centre as needed */
+    icon_boxPosition( &image_info.sprite, image_info.centreX, image_info.centreY );
+
+    err = plot_splash( NULL );
   }
 
-  image_info.centreY = r->r[1] == -1;
+  if( !err ) err = icon_redraw( NULL );
 
-  if( !image_info.centreY )
-  {
-    /* Convert to OS coordinates */
-    r->r[1] <<= screen_info.y_eig;
-    image_info.sprite.y0 = r->r[1] - image_info.height / 2;
-    image_info.sprite.y1 = image_info.sprite.y0 + image_info.height;
-  }
-
-  /* Force on screen and centre as needed */
-  icon_boxPosition( &image_info.sprite, image_info.centreX, image_info.centreY );
-
-  plot_splash( NULL );
-  icon_redraw( NULL );
-
-  return NULL;
+  return err;
 }
 
 /*
