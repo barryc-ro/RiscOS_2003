@@ -22,6 +22,7 @@
 #
 HDRDIR = <hdr$dir>.Global
 HDIR   = <CExport$dir>
+LIBDIR = <Lib$Dir>
 
 # Generic options:
 #
@@ -153,6 +154,7 @@ Dirs:
         ${MKDIR} ${HDIR}.Global.h
         ${MKDIR} ${HDIR}.Interface.h
         ${MKDIR} ${HDIR}.Interface2.h
+        ${MKDIR} ${LIBDIR}
 
 clean:
 	${RM} ${FILETYPES}
