@@ -98,6 +98,8 @@ h.soundfile: Documents.def.soundfile
 hdr.soundfile: Documents.def.soundfile
         ${DEFMOD} -hdr > hdr.soundfile < Documents.def.soundfile
 
+o.main oz.main: h.modhdr
+
 o.soundfile: Documents.def.soundfile
 	${DEFMOD} -l -o DefMod < Documents.def.soundfile
 	LibFile -c -o o.soundfile -via viafile
@@ -131,6 +133,7 @@ install: rm.${COMPONENT}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} ${TARGET}
