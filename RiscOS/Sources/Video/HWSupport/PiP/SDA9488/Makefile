@@ -61,11 +61,11 @@ INCLUDES = -IC:,TCPIPLibs:,OS:
 
 # Program specific options:
 #
-COMPONENT = PIP
+COMPONENT = PIPControl
 TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
 DBGTARGET = rm.d${COMPONENT}
-EXPORTS   =
+EXPORTS   = ${EXP_C_H}.${COMPONENT}
 DIRS      = o._dirs
 
 OBJS      =  \
