@@ -24,7 +24,7 @@ GETVERS = perl bin.GetVersion
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
-TRFLAGS = ${THROWBACK} -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
+TRFLAGS = ${THROWBACK} -marko "{<" -markc ">}" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
 SQFLAGS = 
 
 #
@@ -80,15 +80,16 @@ resources_base:
 	${CP} NCFrescoRORes:Res         	${RESRES}.Res      ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${RESRES}.MimeMap  ${CPFLAGS}
 	${CP} NCFrescoRORes:Config      	${RESRES}.Config   ${CPFLAGS}
+	${CP} NCFrescoRORes:fontmap/txt 	${RESRES}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsalert   -o ${RESRES}.html.jsalert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsprompt  -o ${RESRES}.html.jsprompt  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsokcncl  -o ${RESRES}.html.jsokcncl  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt    -o ${RESRES}.html.prompt    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${RESRES}.html.okcncl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.password  -o ${RESRES}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${RESRES}.html.printopts ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${RESRES}.html.sslcert   ${TRFLAGS}
@@ -114,17 +115,16 @@ install:
 	${CP} NCFrescoRORes:Res         	${INSTALLDIR}.Res      ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${INSTALLDIR}.MimeMap  ${CPFLAGS}
 	-${CP} NCFrescoRORes:Config      	${INSTALLDIR}.Config   ${CPFLAGS}
+	${CP} NCFrescoRORes:fontmap/txt  	${INSTALLDIR}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLDIR}.html.histr     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsalert   -o ${INSTALLDIR}.html.jsalert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsprompt  -o ${INSTALLDIR}.html.jsprompt  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.jsokcncl  -o ${INSTALLDIR}.html.jsokcncl  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.optfonts  -o ${INSTALLDIR}.html.optfonts  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.opttext   -o ${INSTALLDIR}.html.opttext   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLDIR}.html.alert     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLDIR}.html.prompt    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLDIR}.html.okcncl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLDIR}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLDIR}.html.printopts ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTALLDIR}.html.sslcert   ${TRFLAGS}
