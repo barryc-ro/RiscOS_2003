@@ -4,11 +4,11 @@
 #
 # Paths
 #
-EXP_HDR = <cexport$dir>
-RESAPP = <resource$Dir>.App
-RESRES = <resource$Dir>.Resources
+EXP_HDR = <CExport$Dir>
+RESAPP = <Resource$Dir>.Apps.!NCFresco
+RESRES = <Resource$Dir>.Resources.NCFresco
 SRCCOMMON = Resources.Common
-SRCLOCALE = Resources.<System>.<Locale>
+SRCLOCALE = Resources.${UserIf}.${Locale}
 #
 # Generic options:
 #
@@ -42,22 +42,24 @@ install_rom: ${TARGET}
 clean:
         @echo ${COMPONENT}: cleaned
 
-resources1:
+resources:
+	${MKDIR} ${RESAPP}
+	${MKDIR} ${RESRES}
 	${CP} ${SRCCOMMON}.!BootROM    {RESAPP}.!Boot    ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!RunROM     {RESAPP}.!Run     ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!SpritesROM {RESAPP}.!Sprites ${CPFLAGS}
 	${CP} ${SRCCOMMON}.Welcome     {RESRES}.Welcome  ${CPFLAGS}
 	${CP} ${SRCCOMMON}.SetScrap    {RESRES}.SetScrap ${CPFLAGS}
 	${CP} ${SRCCOMMON}.MimeMap     {RESRES}.MimeMap  ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!RunROM     {RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!SpritesROM {RESAPP}.!Sprites ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Config      {RESRES}.Config   ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Messages    {RESRES}.Message  ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Res         {RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Sprites     {RESRES}.Sprites ${CPFLAGS}
+	${CP} ${SRCLOCALE}.SpritesROM  {RESRES}.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-resources:
-	${CP} Resources.* <resource$dir>.* ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+#resources:
+#	${CP} Resources.* <resource$dir>.* ${CPFLAGS}
+#       @echo ${COMPONENT}: resource files copied
 
 export: export_${PHASE}
 
