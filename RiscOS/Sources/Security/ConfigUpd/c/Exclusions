@@ -24,34 +24,14 @@
 #include "cu_utils.h"
 #include "cu_exclusn.h"
 #include "cu_errors.h"
+#include "cu_valid.h"
 
-static int exclusions_file_valid = -1; /* No attempt as been made to load file. */
+static bool exclusions_file_valid = -1; /* No attempt as been made to load file. */
 
 static bool parse_exclusions_file_line(const char* const line, const unsigned int line_number);
+static int return_nci_tag_number_from_tag_string(const char* const tag_string);
 
-
-
-
-#define EXCLUSION_RULE_TYPE_INCLUDED 1
-#define EXCLUSION_RULE_TYPE_EXCLUDED 2
-
-
-/* This file uses the queue functionality provided by TCPIPLibs inthe file sys.queue.h.
-   The code scans an exclusions file and places any rules found into a singly-linked lists. This list cmprises of rules for tags that must be present (included) or not be present (excluded).
-*/
-
-static SLIST_HEAD(list2, list) *inclusions = NULL;
-
-struct list
-{
-  SLIST_ENTRY(list) list_link; /* list macro glue */
-  int rule_type;         /* 1 = include, 2 = exclude */
-  int nci_tag_number;    /* The nci_tag number of the tag this rule represents. */
-  TARGET_TYPE target;    /* 0 = main bb, 1 = default bb, 2 = NVRAM. */
-  bool included;         /* Set to true if this flag was included. */
-  char* rule_text;       /* An additional rule (e.g. a DNS range ) */
-};
-
+inclusons_structure *inclusions = NULL;
 
 
 
@@ -67,6 +47,13 @@ bool read_exclusions_file(const char* const filename)
 
   dprintf(("", "read_exclusions_file(): reading filename %s\n", filename));
 
+  /* Ensure that the filename as a value. */
+  if (!filename)
+  {
+    dprintf(("", "read_exclusions_file(): filename is NULL\n"));
+    return (false);
+  }
+
   /* Open the file */
   dprintf (("", "read_exclusions_file(): Opening file %s.\n", filename));
   if ((fp = fopen(filename, "r")) == NULL)
@@ -81,7 +68,6 @@ bool read_exclusions_file(const char* const filename)
   while (fgets(line, LINE_BUFFER_SIZE, fp))
   {
     line_count++;
-    dprintf (("", "read_exclusions_file(): Line %d is \'%s\'", line_count, line));
 
     /* Malformed lines *must* stop the module from doing anything more. */
     if (!parse_exclusions_file_line(line, line_count))
@@ -94,18 +80,23 @@ bool read_exclusions_file(const char* const filename)
   {
     dprintf(("", "read_exclusions_file(): Error, exclusions file is invalid.\n"));
     /* Now do what we need to do... Remove the list so no rules are visible to the rest of the system. */
-    exclusions_file_valid = 0;
+    exclusions_file_valid = false;
     return (false);
   }
   else
   {
     dprintf(("", "read_exclusions_file(): exclusions file was valid. Rules are now available for use.\n"));
-    exclusions_file_valid = 1;
-
+    exclusions_file_valid = true;
   }
 
   /* Close the file */
   fclose(fp);
+
+  /* Check the validity of the data in the exclusions file... */
+  if (validate_exclusions_file()!=0)
+  {
+    return (false);
+  }
 
   return (true);
 }
@@ -242,25 +233,6 @@ static bool parse_exclusions_file_line(const char* const line, const unsigned in
     return (false);
   }
 
-#ifdef DEBUGLIB
-  dprintf(("", "Fragment lengths and contents:\n"));
-  for (loop=0; loop<=3; loop++)
-  {
-    char* foo = NULL;
-    char* foo2=NULL;
-    foo=(char*)rmalloc(strlen(fragment[loop])+1, "foo!");
-    foo2=RipNTrim(fragment[loop]);
-    strcpy(foo,foo2);
-    strcpy(fragment[loop], foo);
-    fragment_length[loop] = strlen(fragment[loop]);
-    dprintf(("", "Fragment %d: %d \'%s\'\n", loop, fragment_length[loop], fragment[loop]));
-    if (foo)
-    {
-      rmfree((unsigned char*)foo);
-    }
-  }
-#endif /* DEBUGLIB */
-
   /* The line should begin with either include: or exclude:, be a comment or a blank line. Find out which it is, otherwise it is rubbish. */
   if (strncmp(fragment[0], "include", 7) == 0)
   {
@@ -320,23 +292,6 @@ static bool parse_exclusions_file_line(const char* const line, const unsigned in
       dprintf(("", "parse_exclusions_file_line(): nci_tag_number for \'%s\' is %d\n", fragment[1], p->nci_tag_number));
     }
 
-    if (fragment_length[3] > 0) /* There is a value present */
-    {
-      p->rule_text = (char*)rmalloc(fragment_length[3], "exclusions list node contents");
-      if (!p->rule_text)
-      {
-        dprintf(("", "parse_exclusions_file_line(): Error allocating memory for node contents.\n"));
-      }
-      else
-      {
-        strcpy (p->rule_text, fragment[3]);
-      }
-    }
-    else
-    {
-      p->rule_text = NULL;
-    }
-
     /* Insert an item into the list. */
     SLIST_INSERT_HEAD(inclusions, p, list_link);
   }
@@ -348,10 +303,12 @@ static bool parse_exclusions_file_line(const char* const line, const unsigned in
 /* This routine should be called to clear up all memory allocated allocated for the exclusions file handling. */
 bool clear_exclusions_file(void)
 {
-  /* Clear all memory */
+  dprintf(("", "clear_exclusions_file()\n"));
+
+  /* Clear memory used by list. */
   clear_exclusions_list();
   /* Reset state of flag so that file has not been read. */
-  exclusions_file_valid = -1;
+  exclusions_file_valid = false;
 
   return (true);
 }
@@ -368,12 +325,9 @@ void debug_display_exclusions_list(void)
   SLIST_FOREACH(p, inclusions, list_link)
   {
     count++;
-    dprintf(("", "debug_display_exclusions_list(): Node %d is: %d %d %d \'\n", count, p->target, p->rule_type, p->nci_tag_number));
-    if (p->rule_text)
-    {
-      dprintf(("", "%s", p->rule_text));
-    }
-    dprintf(("", "\' %s\n", p->included?"Included":"Not included"));
+    dprintf(("", "debug_display_exclusions_list(): Node %d is: %d %d %d ", count, p->target, p->rule_type, p->nci_tag_number));
+    dprintf(("", " %s ", p->included?"Included":"Not included"));
+    dprintf(("", "\n"));
   }
 
   dprintf(("", "debug_display_exclusions_list(): There were %d nodes.\n", count));
@@ -385,40 +339,28 @@ void debug_display_exclusions_list(void)
 /* This routine clears the inclusion and exclusion lists, tidying up all memory as it goes. */
 void clear_exclusions_list(void)
 {
-  struct list *p, *next;
+  struct list *p, *next = NULL;
 
-  if (inclusions)
+  dprintf(("", "clear_exclusions_list(): Clearing data held in nodes.\n"));
+
+  /* Now free the memory of the nodes themsleves. */
+  dprintf(("", "clear_exclusions_list(): Clearing nodes.\n"));
+  p = SLIST_FIRST(inclusions);
+  while (p)
   {
-    /* Initially free all data held within the nodes. */
-    SLIST_FOREACH(p, inclusions, list_link)
+    next = SLIST_NEXT(p, list_link);
+    dprintf(("", "clear_exclusions_list(): Freeing node at %0p.\n", p));
+    if (p)
     {
-      if (p->rule_text)
-      {
-        rmfree((unsigned char*)p->rule_text);
-        p->rule_text = NULL;
-      }
-    }
-
-    /* Now free the memory of the nodes themsleves. */
-    p = SLIST_FIRST(inclusions);
-    while (p)
-    {
-      next = SLIST_NEXT(p, list_link);
       rmfree((unsigned char*) p);
-      p = next;
     }
-    inclusions = NULL;
+    p = next;
   }
+
+  inclusions = NULL;
 }
 
 
-
-
-/* This routine can be used to detect whether the exclusions file is valid or not. It returns -1 if no attempt to read thr exclusions file was mode, 0 if an attempt has been made and it was invalid, and 1 if an attempt has been made and it was valid. */
-int is_exclusions_file_valid(void)
-{
-  return (exclusions_file_valid);
-}
 
 
 
@@ -427,7 +369,7 @@ int is_exclusions_file_valid(void)
  is mentioned in the exclusions file. If it is present then it returns a
 pointer to the node in the list for this tag, otherwise it returns NULL. */
 
-static struct list* search_exclusions_file_for_tag(const int nci_tag)
+struct list* search_exclusions_file_for_tag(const int nci_tag)
 {
   struct list *p = NULL;
 
@@ -443,101 +385,6 @@ static struct list* search_exclusions_file_for_tag(const int nci_tag)
   }
 
   return (NULL);
-}
-
-
-
-/* This routine ensures that all the tags in the target are valid against the rules held in the exclusions file, i.e. that any included tags are present and that excluded ones are not. Also any extended rules (e.g. DNS ranges) need to be checked.
-   It returns 0 if all tags match, otherwise it returns non-zero. Any errors encountered should be added to the errors list. */
-
-unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
-{
-  unsigned int loop;
-
- /* Initially check that the same tag is not present as both an inclusion and an exclusion; this would obviously be an error.
-    We then need to do 2 parses:
-    1) Scan through all the tags in the CU file and ensure that they should all be present (i.e. none are excluded in the exclusions file);
-    2) Scan through the exclusions file and ensure that all tags that are included are present in the CU file.
-    As well as the above, we also need to ensure that any extended rule (for example DNS ranges) are validated.
- */
-
-  /* Ensure that the same tag is not mentioned in both exclusion and inclusion rules. Also ensure that if nci_tag > 500 it is an nvram target, otherwise a main or default bootblock target */
-  struct list *p = NULL;
-  SLIST_FOREACH(p, inclusions, list_link)
-  {
-    struct list *p_inner = NULL;
-    /* Perform nci_tag to target type checks. */
-    if (p->nci_tag_number >= 500 && p->target != E_TARGET_TYPE_NVRAM)
-    {
-      char error_string[255];
-      dprintf(("", "validate_bootblock_data(): Error: Target is inconsistent with nci_tag\n"));
-      sprintf(error_string, "nci_tag %0x is not an NVRAM tag.", p->nci_tag_number);
-      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, p->nci_tag_number);
-      return (-1);
-    }
-    if (p->nci_tag_number >= 500 && p->target == E_TARGET_TYPE_MAIN_BB)
-    {
-      char error_string[255];
-      dprintf(("", "validate_bootblock_data(): Error: Target is inconsistent with nci_tag\n"));
-      sprintf(error_string, "nci_tag %0x is not a main bootblock tag.", p->nci_tag_number);
-      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, p->nci_tag_number);
-      return (-1);
-    }
-    if (p->nci_tag_number >= 500 && p->target == E_TARGET_TYPE_DEFAULT_BB)
-    {
-      char error_string[255];
-      dprintf(("", "validate_bootblock_data(): Error: Target is inconsistent with nci_tag\n"));
-      sprintf(error_string, "nci_tag %0x is not a default bootblock tag.", p->nci_tag_number);
-      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, p->nci_tag_number);
-      return (-1);
-    }
-    /* Ensure that the same <target>:<tag> combination is not mentioned twice. */
-    SLIST_FOREACH(p_inner, inclusions, list_link)
-    {
-      dprintf(("", "validate_bootblock_data(): Node %p is: %d %d (%p %d %d)", p, p->rule_type, p->nci_tag_number, p_inner, p_inner->rule_type, p_inner->nci_tag_number));
-      /* Ensure we are not comparing the same node. */
-      if (p_inner == p)
-      {
-        continue;
-      }
-
-      if ((p->nci_tag_number == p_inner->nci_tag_number) && (p->target == p_inner->target))
-      {
-        char error_string[255];
-        dprintf(("", "validate_bootblock_data(): Error: The same tag number has two rules.\n"));
-        sprintf(error_string, "Tag %d has two exclusions rules.", p->nci_tag_number);
-        append_error(error_string, E_ERROR_EXCLUSIONS_TAG_PRESENT_MULTIPLY, p->nci_tag_number);
-        return (-1);
-      }
-    }
-  }
-
-  /* Check CU file tags are not excluded. */
-  for(loop=0; loop<MAX_TAG_CACHE; loop++)
-  {
-    if(bootblock->tag_cache->tag[loop].tag == NULL)
-      break; /* no more tags */
-
-    if(bootblock->tag_cache->tag[loop].bytes != 0) /* Tag has a value */
-    {
-      struct list *p = NULL;
-      /* Is this tag excluded or excluded in the exclusions file? */
-      p = search_exclusions_file_for_tag(bootblock->tag_cache->tag[loop].nci_tag);
-      if (p)
-      {
-        dprintf(("", "validate_bootblock_data(): tag %d is a %d in the exclusions file.\n", loop, p->rule_type));
-        if (p->rule_type == EXCLUSION_RULE_TYPE_EXCLUDED)
-        {
-          char error_string[255];
-          dprintf(("", "validate_bootblock_data(): Error: Attempt to alter tag %s (it is excluded in the exclusions file).\n", bootblock->tag_cache->tag[loop].tag));
-          sprintf(error_string, "Tag %s excluded in exclusions file.", bootblock->tag_cache->tag[loop].tag);
-          append_error(error_string, E_ERROR_EXCLUDED_TAG_INCLUDED,  bootblock->tag_cache->tag[loop].nci_tag);
-          return (loop);
-        }
-      }
-    }
-  }
-  return (0);
 }
 
 
@@ -564,3 +411,57 @@ bool is_tag_excluded(const unsigned int nci_tag_number, TARGET_TYPE target)
 
   return (false);
 }
+
+
+/* This routine free's the memory used by the exclusions filename. */
+void free_exclusions_file(void)
+{
+  /* Free any existing memory. */
+  if (exclusions_filename)
+  {
+    rmfree ((unsigned char*)exclusions_filename);
+    exclusions_filename = NULL;
+  }
+}
+
+
+
+/* This routine sets the exclusions filename to the string passed in. */
+void set_exclusions_file(const char* const filename)
+{
+  dprintf(("", "Setting exclusions file to %s\n", filename));
+
+  /* Free the memory if it is present. */
+  free_exclusions_file();
+
+  /* Allocate memory for string. */
+  exclusions_filename = (char*)rmalloc(strlen(filename)+1, "exclusions filename");
+  if (!exclusions_filename)
+  {
+    dprintf(("", "set_exclusions_file(): Error allocating memory.\n"));
+  }
+  else
+  {
+    strcpy(exclusions_filename, filename);
+  }
+}
+
+/* This routine returns an nci_tag number from the string passed in. If the
+string does not match a tag, then -1 is returned. */
+static int return_nci_tag_number_from_tag_string(const char* const tag_string)
+{
+  int return_value = -1;
+  int loop=0;
+  dprintf(("", "return_nci_tag_number_from_tag_string(): string is %s\n", tag_string));
+
+  for (loop=0; loop<SIZE_OF_BIGLIST; loop++)
+  {
+    if (strcmp(biglist[loop].name, tag_string) == 0) /* They match! */
+    {
+      return (biglist[loop].tag_number);
+    }
+  }
+
+  return (return_value);
+}
+

@@ -54,36 +54,40 @@
 #include "cu_utils.h"
 #include "cu_exclusn.h"
 #include "cu_errors.h"
+#include "cu_valid.h"
 #include "module.h"
 
 /*****************************************************************************
 * MACROS
 *****************************************************************************/
+typedef struct
+{
+  bool incremental_update;
+  char* return_url;
+  int session_id;
+} s_upgrade_file_flags;
+
 
 
 /* Forward prototypes */
 bool check_values(void);
 
 static bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, const unsigned int line_number);
-static int match_values(const char* const target, const char* const tag, const char* const value, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb);
+static bool parse_file_for_flags(const char* const memory_pointer, const int memory_area_size, s_upgrade_file_flags* upgrade_file_flags);
+static int match_values(const char* const target, const char* const tag, const char* const value, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, const unsigned int line_number);
 static int return_struct_position_from_ncitag_number(const int number, sc_bootblock_data_struct* bbdata);
 static bool write_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, int flags);
 static bool validate_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, int flags, const char* const filename);
 bool read_exclusions_file(const char* const filename);
+static void free_upgrade_file_flags(s_upgrade_file_flags* flags);
 
-static char* exclusions_filename = "Resources:$.Resources.configupd.exclude";
+char* exclusions_filename = NULL;
 
 /*****************************************************************************
 * Internal flags
 *****************************************************************************/
-static struct
-{
-  bool incremental_update;
-  char* return_url;
-  int session_id;
-} upgrade_file_flags;
 
-
+/* The biglist[] structure stores all the items that can be altered by the ConfigUpdate module. If tou wish to extend the CU system to include another NVRAM or bootblock tag, then it needs adding to this structure first. */
 field biglist[] =
 {
   {"ISPTelephoneNumber",             TagType_String, 32,  0x33, true},
@@ -130,7 +134,7 @@ field biglist[] =
    SESSION_ID
    It returns false if the file is malformed or does not contain the RETURN_URL or SESSION_ID.
 */
-static bool parse_file_for_flags(const char* const memory_pointer, const int memory_area_size)
+static bool parse_file_for_flags(const char* const memory_pointer, const int memory_area_size, s_upgrade_file_flags* upgrade_file_flags)
 {
   char* line = NULL;
   char* alt = NULL;
@@ -138,16 +142,6 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
   char* memory = (char*)memory_pointer;
 
   dprintf (("", "parse_file_for_flags(): Parsing memory area at %p.\n", memory_pointer));
-
-  /* Reset the upgrade_file_flags structure. */
-  upgrade_file_flags.session_id = 0;
-  if (upgrade_file_flags.return_url != NULL)
-  {
-    dprintf (("", "parse_file_for_flags(): Freeing upgrade file flags return_url\n"));
-    rmfree ((unsigned char*)upgrade_file_flags.return_url);
-  }
-  upgrade_file_flags.return_url = NULL;
-  upgrade_file_flags.incremental_update = false;
 
   /* Read the file line-by-line */
   do
@@ -175,7 +169,7 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
       /* Search the line for the magic keywords */
       if (strncmp(alt, "INCREMENTAL_UPDATE_BOOTBLOCK", 28) == 0)
       {
-        upgrade_file_flags.incremental_update = true;
+        upgrade_file_flags->incremental_update = true;
         dprintf(("", "parse_file_for_flags(): Incremental update set.\n"));
       }
 
@@ -185,17 +179,17 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
         dprintf(("", "parse_file_for_flags(): return_url spotted.\n"));
         /* Strip off the "return_url" string */
         pos = strstr(alt, "RETURN_URL=")+strlen("RETURN_URL=");
-        upgrade_file_flags.return_url=(char*)rmalloc(strlen(pos)+1, "Return URL storage");
-        strcpy(upgrade_file_flags.return_url, pos);
-        dprintf(("", "parse_file_for_flags(): return URL set to %s.\n", upgrade_file_flags.return_url));
+        upgrade_file_flags->return_url=(char*)rmalloc(strlen(pos)+1, "Return URL storage");
+        strcpy(upgrade_file_flags->return_url, pos);
+        dprintf(("", "parse_file_for_flags(): return URL set to %s.\n", upgrade_file_flags->return_url));
       }
 
       if (strncmp(alt, "SESSION_ID=", 11) == 0)
       {
         /* Strip off the session id number */
         char* pos = strstr(alt, "SESSION_ID=")+strlen("SESSION_ID=");
-        upgrade_file_flags.session_id = atoi(pos);
-        dprintf(("", "parse_file_for_flags(): Session ID set to %d.\n", upgrade_file_flags.session_id));
+        upgrade_file_flags->session_id = atoi(pos);
+        dprintf(("", "parse_file_for_flags(): Session ID set to %d.\n", upgrade_file_flags->session_id));
       }
     }
     else
@@ -208,7 +202,7 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
   while ((count < memory_area_size));
 
   /* Ensure the correct values have been set. */
-  if (!upgrade_file_flags.return_url)
+  if (!upgrade_file_flags->return_url)
   {
     /* Add the relevant error to the errors file. */
     char error_string[255];
@@ -216,7 +210,7 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
     append_error(error_string, E_ERROR_MANDATORY_FLAG_ABSENT, 1);
     return (false);
   }
-  if (upgrade_file_flags.session_id == 0)
+  if (upgrade_file_flags->session_id == 0)
   {
     /* Add the relevant error to the errors file. */
     char error_string[255];
@@ -362,7 +356,7 @@ bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data
     tag=RipNTrim(tag_buffer);
     strcpy(val, ptr+1);
     dprintf(("", "parse_line(): Tag is %s (length %d)  Val is %s\n", tag, tag_length, val));
-    if ((field_number = match_values(target, tag, val, main_bb, default_bb)) < 0)
+    if ((field_number = match_values(target, tag, val, main_bb, default_bb, line_number)) < 0)
     {
       char error_string[255];
       dprintf(("", "parse_line(): Error: Tag %s not recognised in target %s.\n", tag, target));
@@ -380,17 +374,22 @@ bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data
 
 /* This routine is the main routine that is called when reading in a
     Configuration Update file. It is called from the ConfigurationUpdate_
-    AcceptFile SWI. */
+    AcceptFile SWI handler. */
 bool read_configuration_file(const char* const memory_area, const int memory_area_size, const int configs_to_update)
 {
-  sc_bootblock_data_struct* default_bootblock;
-  sc_bootblock_data_struct* main_bootblock;
+  bool success = true;
+  sc_bootblock_data_struct* default_bootblock = NULL;
+  sc_bootblock_data_struct* main_bootblock = NULL;
+  s_upgrade_file_flags upgrade_file_flags;
 
   dprintf(("", "read_configuration_file()\n"));
   debug_rmstat();
 
   /* Clear all errors ready for new operation. */
   clear_error_structure();
+
+  /* Reset the upgrade_file_flags structure. */
+  free_upgrade_file_flags(&upgrade_file_flags);
 
   /* Parse a configuration file. */
   default_bootblock = (sc_bootblock_data_struct*)rmalloc(sizeof(sc_bootblock_data_struct), "Default bootblock");
@@ -400,15 +399,15 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
   {
     /* An error occured reading the exclusions file... */
     char error_string[255];
-    sprintf(error_string, "Could not open exclusions file %s", exclusions_filename);
+    sprintf(error_string, "Could not parse exclusions file %s", exclusions_filename);
     append_error(error_string, E_ERROR_EXCLUSIONS_FILE_ABSENT, -1);
-    dprintf(("", "validate_values(): Error: Error loading exclusions file %s.\n", exclusions_filename));
+    dprintf(("", "validate_values(): Error: Error parsing exclusions file %s.\n", exclusions_filename));
     return (false);
   }
 
   /* Obtain the flags from the file. */
   dprintf(("", "read_configuration_file(): Parsing file for flags.\n"));
-  if (!parse_file_for_flags(memory_area, memory_area_size))
+  if (!parse_file_for_flags(memory_area, memory_area_size, &upgrade_file_flags))
   {
     /* An error occured. */
     dprintf(("", "read_configuration_file(): Error: Error occured whilst parsing for flags. Aborting file load.\n"));
@@ -449,73 +448,33 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
     dprintf(("", "read_configuration_file(): Error whilst validating alterations.\n"));
   }
 
-  /* Now write all the values */
-  write_values(main_bootblock, default_bootblock, configs_to_update);
+  /* Only write all the values if there are no errors */
+  if (return_number_of_errors() == 0)
+  {
+    write_values(main_bootblock, default_bootblock, configs_to_update);
+  }
+  else
+  {
+    dprintf(("", "read_configuration_file(): Not writign data due to errors during parsing of files.\n"));
+    success = false;
+  }
 
   /* Free all allocated memory */
-  if (is_exclusions_file_valid() == 1)
-  {
-    /* Deallocate all memory pertaining to the exclusions file handling. */
-    clear_exclusions_file();
-  }
   free_sc_bootblock_data_struct(default_bootblock);
   free_sc_bootblock_data_struct(main_bootblock);
   free_nvram_tags_list();
   rmfree((unsigned char*)default_bootblock);
   rmfree((unsigned char*)main_bootblock);
-
+  free_upgrade_file_flags(&upgrade_file_flags);
+  clear_exclusions_file();
   /* Free any line buffer that may have been allocated... */
   free_line_buffer();
 
-  {
-    /* Display error(s) */
-    unsigned int number = 0;
-    char* retval = return_errors(&number);
-    if (retval)
-    {
-      dprintf(("", "read_configuration_file(): %d errors (%s)\n", number, retval));
-    }
-    else
-    {
-      dprintf(("", "read_configuration_file(): %d errors\n", number));
-    }
-
-    /* Display all errors in a debug build. */
-    debug_display_errors();
-    /* Clear all memory used by the errors code during this operation. */
-    clear_error_structure();
-  }
-
-  /* Check memory allocation (should not be anything allocated here). */
-  debug_rmstat();
-
-  return (true);
+  return (success);
 }
 
 
 
-
-
-
-/* This routine returns an nci_tag number from the string passed in. If the
-string does not match a tag, then -1 is returned. */
-int return_nci_tag_number_from_tag_string(const char* const tag_string)
-{
-  int return_value = -1;
-  int loop=0;
-  dprintf(("", "return_nci_tag_number_from_tag_string(): string is %s\n", tag_string));
-
-  for (loop=0; loop<SIZE_OF_BIGLIST; loop++)
-  {
-//    dprintf(("", "return_nci_tag_number_from_tag_string(): comparing %s and %s\n", biglist[loop].name, tag_string));
-    if (strcmp(biglist[loop].name, tag_string) == 0) /* They match! */
-    {
-      return (biglist[loop].tag_number);
-    }
-  }
-
-  return (return_value);
-}
 
 
 
@@ -526,7 +485,7 @@ in that structure which has an nci_tag number of 'number'. If the tag is not
 found, -1 is returned.
 */
 
-int return_struct_position_from_ncitag_number(const int number, sc_bootblock_data_struct* bbdata)
+static int return_struct_position_from_ncitag_number(const int number, sc_bootblock_data_struct* bbdata)
 {
   int loop=0;
   for (loop=0; loop < MAX_TAG_CACHE; loop++)
@@ -543,10 +502,9 @@ int return_struct_position_from_ncitag_number(const int number, sc_bootblock_dat
 
 
 
-
 /* This routine searches for the tag passed in against the list of fields.
     It returns the number of the tag in the list, or -1 if it is not matched. */
-int match_values(const char* const target, const char* const tag, const char* const value, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb)
+static int match_values(const char* const target, const char* const tag, const char* const value, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, const unsigned int line_number)
 {
   int field_number = 0;
   TARGET_TYPE target_type = E_TARGET_TYPE_NO_TARGET;
@@ -612,8 +570,8 @@ int match_values(const char* const target, const char* const tag, const char* co
           {
             char error_string[255];
             sprintf(error_string, "Unrecognised target %s", target);
-            append_error(error_string, E_ERROR_UNRECOGNISED_TARGET, -1);
-            dprintf(("", "match_values(): Unrecognised target.\n"));
+            append_error(error_string, E_ERROR_UNRECOGNISED_TARGET, line_number);
+            dprintf(("", "match_values(): Error: Unrecognised target on line %d\n", line_number));
             return (-1);
           }
         }
@@ -632,8 +590,8 @@ int match_values(const char* const target, const char* const tag, const char* co
         {
           char error_string[255];
           sprintf(error_string, "Bootblock tag %0x excluded from CU file.", target_bb->tag_cache->tag[tag_number].nci_tag);
-          append_error(error_string, E_ERROR_EXCLUDED_TAG_INCLUDED, target_bb->tag_cache->tag[tag_number].nci_tag);
-          dprintf(("","match_values(): Error: Tag %0x excluded.\n", target_bb->tag_cache->tag[tag_number].nci_tag));
+          append_error(error_string, E_ERROR_EXCLUDED_TAG_INCLUDED, line_number);
+          dprintf(("","match_values(): Error: Tag %0x excluded on line %d.\n", target_bb->tag_cache->tag[tag_number].nci_tag, line_number));
         }
 
         /* Write the new values into the structure */
@@ -771,22 +729,38 @@ bool validate_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct
   {
     dprintf(("", "validate_values(): Validating default bootblock values\n"));
     /* Go through all the default bootblock tags and ensure that the rules match. */
-    validate_bootblock_data(default_bb);
+    validate_bootblock_data(default_bb, E_TARGET_TYPE_DEFAULT_BB);
   }
 
   if (flags_bitfield & (1L << 1))
   {
     dprintf(("", "validate_values(): Validating main bootblock values\n"));
+    validate_bootblock_data(main_bb, E_TARGET_TYPE_MAIN_BB);
   }
 
   if (flags_bitfield & (1L << 2))
   {
     dprintf(("", "validate_values(): Validating NVRAM values\n"));
+    validate_nvram_data();
   }
 
   return (true);
 }
 
+
+
+
+static void free_upgrade_file_flags(s_upgrade_file_flags* flags)
+{
+  flags->session_id = 0;
+  if (flags->return_url != NULL)
+  {
+    dprintf (("", "free_upgrade_file_flags(): Freeing upgrade file flags return_url\n"));
+    rmfree ((unsigned char*)flags->return_url);
+  }
+  flags->return_url = NULL;
+  flags->incremental_update = false;
+}
 
 
 /****************************************************************************
