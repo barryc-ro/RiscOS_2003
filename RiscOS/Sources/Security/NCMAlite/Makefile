@@ -39,7 +39,7 @@ ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend -throwback
-INCLUDES= -IC:,TCPIPLibs: 
+INCLUDES= -IC:,TCPIPLibs: -IC:AsmUtils
 
 DIRS    = o._dirs
 
@@ -64,6 +64,7 @@ UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 LIBSD      = ${LIBDIR}.DebugLib.o.debuglibzm
+ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Rule patterns
@@ -92,7 +93,7 @@ BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	    ncma_utils.o ncma_dial.o kprintf.o  \
 	    ncma_bootb.o task.o \
 	    ncma_tags.o  ncma_cache.o ncma_uid.o ncma_net.o \
-	    usermode.o areacode.o dbugzm.o ncma_fx.o init.o
+	    areacode.o dbugzm.o ncma_fx.o init.o
 
 # Instrumentation targets.
 OBJSIO = io.module header.o io.vectors io.ncma_cmds io.ncma_swis \
@@ -100,7 +101,7 @@ OBJSIO = io.module header.o io.vectors io.ncma_cmds io.ncma_swis \
 	    io.ncma_utils io.ncma_dial io.kprintf  \
 	    io.ncma_bootb io.task \
 	    io.ncma_tags io.ncma_cache io.ncma_uid io.ncma_net \
-	    usermode.o areacode.o io.dbugzm io.ncma_fx io.init io.instlib
+	    areacode.o io.dbugzm io.ncma_fx io.init io.instlib
 
 # Preprocess targets.
 OBJSI  = i.module header.o i.vectors i.ncma_cmds i.ncma_swis \
@@ -108,7 +109,7 @@ OBJSI  = i.module header.o i.vectors i.ncma_cmds i.ncma_swis \
 	    i.ncma_utils i.ncma_dial i.kprintf  \
 	    i.ncma_bootb i.task \
 	    i.ncma_tags i.ncma_cache i.ncma_uid i.ncma_net \
-	    usermode.o areacode.o i.dbugzm i.ncma_fx i.init
+	    areacode.o i.dbugzm i.ncma_fx i.init
 
 
 ROMOBJS = ${BASEOBJS}
@@ -181,7 +182,7 @@ preprocess: ${OBJSI} ${DIRS}
 # Instrumentation target
 #
 instrument: ${OBJSIO} ${DIRS}
-          ${LD} -o rm.${COMPONENT} -module ${OBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
+          ${LD} -o rm.${COMPONENT} -module ${OBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
           @echo ${COMPONENT}: instrument build complete
 
 
@@ -190,7 +191,7 @@ instrument: ${OBJSIO} ${DIRS}
 # Executable target (static link)
 #
 ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
 
 #
 # Exported interface headers
@@ -202,15 +203,14 @@ ${EXP_C_H}.smtags:	h.smtags
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB}
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS} ${C++LIB}
 
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
