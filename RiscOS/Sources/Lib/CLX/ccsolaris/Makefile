@@ -88,6 +88,8 @@ clean:
 	-rm ${OBJALL}
 	-rm clx.a
 	-rm ${DERIVED}
+	-rm *.c
+	-rm *.h
 	@echo cleaned CLX
 
 realclean: clean
