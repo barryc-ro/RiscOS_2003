@@ -63,7 +63,7 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.<System>.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
 
 resources-None: resources_common
 	@
