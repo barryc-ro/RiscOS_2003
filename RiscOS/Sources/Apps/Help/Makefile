@@ -77,16 +77,22 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed {ROM}
 
+ifeq (${TYPE},BAS)
 resources: ${LDIR}.ROM.!RunLink
-        ${MKDIR} ${RESAPP}
+	${MKDIR} ${RESAPP}
+else
+resources: 
+endif
         ${MKDIR} ${RESDIR}
         |
+ifeq (${TYPE},BAS)
         ${CP} ${LDIR}.!Help         ${RESAPP}.!Help     ${CPFLAGS}
         ${CP} ${LDIR}.ROM.!Run      ${RESAPP}.!Run      ${CPFLAGS}
         |
         ${CP} ${LDIR}.ROM.!RunLink  ${RESDIR}.!RunLink  ${CPFLAGS}
-        ${CP} ${LDIR}.Messages      ${RESDIR}.Messages  ${CPFLAGS}
         ${CP} ${LDIR}.Templates     ${RESDIR}.Templates ${CPFLAGS}
+endif
+        ${CP} ${LDIR}.Messages      ${RESDIR}.Messages  ${CPFLAGS}
         |
         @echo ${COMPONENT}: resource files copied to Messages module
 
@@ -127,6 +133,7 @@ rm.Help: Hdr:SWIs
 rm.Help: Hdr:CPU.Generic26
 rm.Help: Hdr:IO.GenericIO
 rm.Help: Hdr:RISCOS
+rm.Help: Hdr:Machine.<Machine>
 rm.Help: Hdr:ModHand
 rm.Help: Hdr:Services
 rm.Help: Hdr:Proc
