@@ -4,7 +4,7 @@
 #
 # Paths
 #
-EXP_HDR = 
+EXP_HDR = <export$dir>
 
 #
 # Generic options:
@@ -72,7 +72,7 @@ all: rm.${COMPONENT}
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: 
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
