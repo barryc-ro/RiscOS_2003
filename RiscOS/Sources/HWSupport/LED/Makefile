@@ -56,7 +56,7 @@ TARGET    = ${TDIR}.${COMPONENT}
 RAMTDIR   = rm.${MACHINE}
 RAMTARGET = ${RAMTDIR}.${COMPONENT}
 OBJS      = header.o module.o veneer.o led.o
-EXPORTS   = 
+EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
 #
 # Rule patterns
