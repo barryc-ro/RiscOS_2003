@@ -107,7 +107,7 @@ ShowIOMDRegs	SETL    (IO_Type = "IOMD") :LAND: {TRUE} :LAND: STB	; show IOMD reg
 DontShowProgressColours	SETL	{TRUE} :LAND: STB		; Do not show the progress colour screens.
 								; Progress Colours will always be shown when using POST Box.
 								; Set to true for NC - Fault Report ANC-00159.
-								
+
 
 
 ts_Rom_bits     *       21                              ; Widest ROM address
@@ -359,6 +359,20 @@ ts_ROM_bvectors
         SetMode SVC32_mode,$tmp
         MEND
 
+ [ StrongARM_POST
+;  ensure 26-bit mode for StrongARM or ARM 8 (since there is no 26 bit configuration)
+        MACRO
+        Ensure26bit_ARM8A $tmp
+        ARM_read_ID $tmp
+        AND     $tmp, $tmp, #&F000
+        CMP     $tmp, #&A000
+        CMPNE   $tmp, #&8000
+        mrs     EQ, $tmp, CPSR_all
+        BICEQ   $tmp, $tmp, #&10
+        msr     EQ, CPSR_all, $tmp
+        MEND
+  ]
+
 ;
 ; Define an area of storage with the required set of data bus patterns
 ; These are used both for testing the complete width of the data bus
@@ -556,8 +570,13 @@ ts_User_startup    ROUT
         ADDS    r1,r1,r1                ; then shift it into carry
         BCC     ts_Self_test_end        ; POR bit clear - do soft reset.
 
-; it's a power-on reset, so assume we can't be in 32-bit mode
+; it's a power-on reset, so assume we can't be in 32-bit mode for ARM 6/7
 
+  [ StrongARM_POST
+    ; make sure we are in 26-bit mode (ARM 6/7 reset in 26-bit config)
+    ; note that MOV_fiq macro assumes 26-bit, so must sort this now
+    Ensure26bit_ARM8A r0
+  ]
         MOV_fiq r12_fiq, #R_HARD
         B       ts_Self_test_startup
         |
@@ -576,6 +595,11 @@ ts_User_startup    ROUT
 
 ts_Forced_startup  ROUT
 
+  [ StrongARM_POST
+    ; make sure we are in 26-bit mode (ARM 6/7 reset in 26-bit config)
+    ; note that MOV_fiq macro assumes 26-bit, so must sort this now
+    Ensure26bit_ARM8A r0
+  ]
         MOV_fiq r12_fiq, #R_TESTED
         B       ts_Self_test_startup
 
@@ -583,6 +607,11 @@ ts_Forced_startup  ROUT
 
 ts_Dealer_startup  ROUT
 
+  [ StrongARM_POST
+    ; make sure we are in 26-bit mode (ARM 6/7 reset in 26-bit config)
+    ; note that MOV_fiq macro assumes 26-bit, so must sort this now
+    Ensure26bit_ARM8A r4
+  ]
         MOV_fiq r12_fiq, #R_EXTERN
 
         LDR     r4,%FT02                ; make a pointer to signon string
@@ -626,7 +655,14 @@ ts_Self_test_startup ROUT
         CMPNES  r0,r1			; If not ID1, check for IOMD ID Code #3
         BNE     %FT10			; Not equal; not an ARM7500 or an ARM7500FE - skip
 
-; Here bceause its an ARM7500 'FE' variant
+  [ RO371Timings
+05
+        MOV     r0, #0                  ;Calling from POST
+        BL      TimeCPU                 ;just sets things according to assumed bus speeds for each IOMD id, in this case
+
+  | ; else if not RO371Timings
+
+; Here because its an ARM7500 'FE' variant
 ; Program the CPU, Memory and IO clock prescalers
 ; Set the prescalers to :-
 ;	CPUCLK divide by 2
@@ -692,6 +728,9 @@ ts_Self_test_startup ROUT
 	MOVNE	r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
         STRB    r0, [r2, #IOMD_ROMCR1]		; Otherwise program it the same
   ]
+
+ ] ;RO371Timings conditional
+
 ;
 10
  ]
@@ -750,14 +789,25 @@ DoROMCardThings	SETS	""
 	]
 	MOV	r1, #ts_VIDCPhys
 
- [ StrongARM
-   ;just too horrible to fix POST for StrongARM (Architecture 4) at the moment
-   ARM_read_ID r0
-   AND     r0,r0,#&F000
-   CMP     r0,#&A000              ;if we are a StrongARM...
-   LDREQ   r0,=C_WARMSTART        ;the colour that indicates no POST performed
-   STREQ   r0,[r1]
-   BEQ     ts_Hardstart           ;RISC OS - right now!
+ [ :LNOT: StrongARM_POST
+   ;skip POST for StrongARM or ARM8
+        ARM_read_ID r0
+        AND     r0,r0,#&F000
+        CMP     r0,#&A000              ;if we are a StrongARM...
+        CMPNE   r0,#&8000              ;or an ARM8...
+        LDREQ   r0,=C_WARMSTART        ;the colour that indicates no POST performed
+        STREQ   r0,[r1]
+        BEQ     ts_Hardstart           ;RISC OS - right now!
+ ]
+
+ [ ARM810support :LAND: (:LNOT: ARM810_POST)
+   ;just too horrible to fix POST for ARM 8 at the moment
+        ARM_read_ID r0
+        AND     r0,r0,#&F000
+        CMP     r0,#&8000              ;if we are an ARM 8
+        LDREQ   r0,=C_WARMSTART        ;the colour that indicates no POST performed
+        STREQ   r0,[r1]
+        BEQ     ts_Hardstart           ;RISC OS - right now!
  ]
 
         LDR	r0, =C_ARMOK     		; set initial screen colour
@@ -1363,6 +1413,27 @@ ts_CAMtest
 ;
 
 ts_restore_physical
+
+  [ StrongARM_POST
+    ;make sure ARM810 cache or StrongARM data cache is cleaned/flushed, because we are going to remap
+        ARM_read_ID r5
+        AND     r5,r5,#&F000
+        CMP     r5,#&8000
+        BNE     %FT22
+;ARM810
+;;;        ARM8_cleanflush_IDC r5  ;not implemented yet
+        B       %FT24
+22
+        CMP     r5,#&A000
+        BNE     %FT24
+;StrongARM
+;tricky...we'll read 16k of data in current ROM space, to act as clean and flush of current data
+        MOV     r3,pc
+        BIC     r3,r3,#31      ;32 byte aligned
+        ARMA_clean_DC r3,r5,r7
+24
+  ] ;StrongARM_POST
+
         MOV     r5, pc                          ; obtain current address
         SUB     r5, r5,#PhysSpace               ; adjust to point to unmapped version
         MOV     r5, r5, LSR #20                 ; divide by 1MB
@@ -1375,8 +1446,20 @@ ts_restore_physical
         ADD     r3, r3, #DRAMOffset_L1PT
         STR     r7, [r3, r5, LSL #2]            ; store replacement entry in L1 (not U,C or B)
 
+  [ StrongARM_POST
+    ;flush cache if ARM 6/7 (ARM 8,StrongARM already sorted, above)
+    ;flush TLB(s)
+        ARM_read_ID r4
+        AND      r4,r4,#&F000
+        CMP      r4,#&8000   ;ARM 8?
+        CMPNE    r4,#&A000   ;or StrongARM?
+        MCRNE    ARM_config_cp,0,R0,ARM67_cacheflush_reg,C0,0   ;flush 6/7 cache
+        MCRNE    ARM_config_cp,0,R0,ARM67_TLBflush_reg,C0,0     ;flush 6/7 TLB
+        MCREQ    ARM_config_cp,0,R0,ARM8A_TLB_reg,C7,0          ;flush 8/StrongARM TLB(s)
+  |
         SetCop  r7, CR_IDCFlush                 ; flush cache + TLB just in case
         SetCop  r7, CR_TLBFlush                 ; (data written is irrelevant)
+  ]
 
 ; The ROM should now be mapped at the present address less PhysSpace, which is where it
 ; would be if the MMU were turned off.
@@ -1385,11 +1468,16 @@ ts_restore_physical
         SUB     pc,pc,r4
         NOP                             ; this instruction is skipped
 
-        MOV     r7, #MMUC_D             ; Now turn the MMU off
+; now turn the MMU off, also ensures 26 bit mode, if ARM 6/7 (since P bit zero)
+        MOV     r7, #MMUC_D
         SetCop  r7, CR_Control
 
-        B       ts_VIDCtest
+  [ StrongARM_POST
+        Ensure26bit_ARM8A r7
+        MOV     r7, #MMUC_D    ;avoid corrupting r7, just in case
+  ]
 
+        B       ts_VIDCtest
 
 ;
 ; The VIDC tests check vertical blanking frequency in a fixed video
@@ -1793,16 +1881,16 @@ ts_665LEDaddr      *       (ts_PCaddress :OR: (&3f2 :SHL: 2))
 ;
         ADDS    r2,r2,r2
         BCC     %08
- [ STB       
+ [ STB
 	BL	ld_LED_Delay			; call delay routine }
 	BL	ld_LED_Delay			; call delay routine } One Seconds Worth
 	BL	ld_LED_Delay			; call delay routine }
 	BL	ld_LED_Delay			; call delay routine }
- |	
+ |
         MOV     r0,r7,LSL #2            ; then pause another second
 05      SUBS    r0,r0,#1
         BNE     %05
- ] 	
+ ]
 08
         ANDS    r2,r2,r2                ; all the bits displayed now ?
         BNE     %02
@@ -1888,7 +1976,7 @@ ts_IOinitab
         GET     TestSrc.Ioc
         GET     TestSrc.Cmos
         GET     TestSrc.Arm3
-        
+
         ; amg: 7/12/96 Renaissance. Once again I wish AASM could understand conditionals
         ;              around GETs
 
@@ -1905,7 +1993,7 @@ get_leddelay    SETS ""
 get_showiomdrs  SETS ""
 	]
 	$get_toggleled
-	$get_leddelay 
+	$get_leddelay
 	$get_showiomdrs
 
 	ALIGN	64		; JRH: Kernel seems happier if we do this!
