@@ -6,6 +6,17 @@
  * Idle timer was mistakenly being incremented twice in hangup check handler.
  * Removed reliance on Dialler for hangup check if dialler option is used on
  * command line.
+ *
+ * 1998-05-12: BAL
+ * Fixed bug in dual serial poll_handler: call to remove callback was passing
+ * address of handler function rather than veneer routine.  This call would
+ * obviously fail silently, but any pending callback would still go off.  This
+ * was resulting in PPP blocking heavily in certain situations.
+ *
+ * 1998-05-18: BAL
+ * Fixed another stupid bug: brackets missed off function call to serial_dcd in
+ * the hangup check for the DeviceFS variant of the module, so was taking address
+ * of function instead of calling it.
  */
 #include <stdlib.h>
 #include <stdio.h>
@@ -69,7 +80,6 @@ extern void splx(int);
   int serial_in = 0;
   int serial_out = 0;
   static int callback_pending = 0;
-  static int callafter_pending = 0;
   int start_callback_pending = FALSE;
 #endif
 
@@ -300,24 +310,16 @@ static void poll_cancel(void)
 
 static void poll_cancel (void)
 {
-    int interrupt_status = splhi ();
-
-
-    if (callafter_pending)
-    {
-        pdebug ((LOG_DEBUG, "removing callafter"));
-        _swix (OS_RemoveTickerEvent, _INR (0, 1), callafter_entry, module_wsp);
-        callafter_pending = FALSE;
-    }
-
     if (callback_pending)
     {
+        int interrupt_status = splhi ();
+
+
         pdebug ((LOG_DEBUG, "removing callback"));
         _swix(OS_RemoveCallBack, _INR (0, 1), poll_entry, module_wsp);
         callback_pending = FALSE;
+        restore_irqs (interrupt_status);
     }
-
-    restore_irqs (interrupt_status);
 }
 
 #endif
@@ -379,28 +381,11 @@ _kernel_oserror *poll_handler(_kernel_swi_regs *r, void *pw)
 
 #else
 
-_kernel_oserror *  callafter_handler (_kernel_swi_regs *  r,
-                                      void *              pw)
-{
-    NOT_USED (r);
-
-    _swix (OS_AddCallBack,
-           _INR (0, 1),
-
-           poll_entry,
-           pw);
-
-    callafter_pending = FALSE;
-    callback_pending = TRUE;
-
-    return NULL;
-}
-
-
-
-
 _kernel_oserror *poll_handler(_kernel_swi_regs *r, void *pw)
 {
+#if 1
+    unsigned int  start_time, end_time;
+#endif
     char buffer[256], *p=buffer;
     int bytes, bytes_not_done;
     int interrupt_status;
@@ -415,46 +400,36 @@ _kernel_oserror *poll_handler(_kernel_swi_regs *r, void *pw)
     NOT_USED(pw);
     NOT_USED(r);
 
+#if 1
+    _swix (OS_ReadMonotonicTime, _OUT (0), &start_time);
+#endif
 
-    e = _swix (OS_GBPB,
-               _INR (0, 3) | _OUT (3),
-
-               4,
-               serial_in,
-               buffer,
-               sizeof (buffer),
-
-               &bytes_not_done);
+    e = _swix (OS_GBPB, _INR (0, 3) | _OUT (3),
+               4, serial_in, buffer, sizeof (buffer), &bytes_not_done);
     if (e)
     {
         pdebug ((LOG_DEBUG, "error %d: %s", e->errnum, e->errmess));
         return NULL;
     }
-
     bytes = sizeof (buffer) - bytes_not_done;
     pdebug ((LOG_DEBUG, "read first block: %d bytes", bytes));
 
     while (bytes)
     {
-        p = buffer;
+        /*s=splhi();*/
+        p=buffer;
 
         while (bytes)
         {
-            pppinput (*p,
-                      0);
+            pppinput(*p, 0);
             bytes--;
             p++;
         }
 
-        e = _swix (OS_GBPB,
-                   _INR (0, 3) | _OUT (3),
+        /*splx(s);*/
 
-                   4,
-                   serial_in,
-                   buffer,
-                   sizeof (buffer),
-
-                   &bytes_not_done);
+        e = _swix (OS_GBPB, _INR (0, 3) | _OUT (3),
+                   4, serial_in, buffer, sizeof (buffer), &bytes_not_done);
         if (e)
         {
             pdebug ((LOG_DEBUG, "error %d: %s", e->errnum, e->errmess));
@@ -467,42 +442,35 @@ _kernel_oserror *poll_handler(_kernel_swi_regs *r, void *pw)
         if (bytes > 0)
         {
             /* If there is more data to read and a DeviceRxDataPresent upcall
-             * occurred while this function was executing then a callafter and
-             * possibly a callback will have been added.  However, these are no
-             * longer needed as the data relating to the upcall is being read
-             * anyway, so remove the callafter and callback.
+             * occurred while this function was executing then an upcall will
+             * have been added.  This is no longer necessary as the data it
+             * informed us about is just about to be read anyway, so remove the
+             * upcall.
              */
 
-            if (callback_pending || callafter_pending)
+            if (callback_pending)
             {
+                pdebug ((LOG_DEBUG, "about to remove callback"));
+                _swix (OS_RemoveCallBack, _INR (0, 1), poll_entry, pw);
+
+                /* atomic update of callback pending flag */
                 interrupt_status = splhi ();
-
-                if (callafter_pending)
-                {
-                    _swix (OS_RemoveTickerEvent,
-                           _INR (0, 1),
-
-                           callafter_entry,
-                           pw);
-
-                    callafter_pending = FALSE;
-                }
-
-                if (callback_pending)
-                {
-                    _swix (OS_RemoveCallBack,
-                           _INR (0, 1),
-
-                           poll_entry,
-                           pw);
-
-                    callback_pending = FALSE;
-                }
+                callback_pending = FALSE;    /* no callbacks waiting */
                 restore_irqs (interrupt_status);
+
+                pdebug ((LOG_DEBUG, "callback removed"));
             }
         }
     }
 
+#if 1
+    _swix (OS_ReadMonotonicTime, _OUT (0), &end_time);
+    if (end_time - start_time > 5)
+    {
+        syslog (LOG_INFO, "%u: %u - %u",
+                end_time - start_time, start_time, end_time);
+    }
+#endif
 
     return NULL;
 }
@@ -747,16 +715,8 @@ int upcall_handler (_kernel_swi_regs *r, void *pw)
                 return (1);    /* Pass on the call */
             }
 
-#if 0
             _swix (OS_AddCallBack, _INR (0, 1), poll_entry, pw);
             callback_pending = TRUE;    /* prevent multiple callback being added */
-#endif
-            if (!callafter_pending && !callback_pending)
-            {
-                if (_swix (OS_CallAfter, _INR (0, 2), 1, callafter_entry, pw))
-                    *((int *) 0x03010e00) = 1;
-                callafter_pending = TRUE;
-            }
             break;
 
         case 16:    /* DeviceThresAbove */
