@@ -29,9 +29,10 @@ CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
-MKDIR   = cdir
+MKDIR   = mkdir -p
 RM      = remove
 WIPE    = -wipe
+TOUCH   = create
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -55,6 +56,9 @@ OBJS =\
  o.jcomp\
  o.main\
  o.ModHdr
+
+DIRS =\
+ o._dirs
 
 #
 # Rule patterns
@@ -87,7 +91,7 @@ clean:
         ${RM} h.ModHdr
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS} ${DIRS}
         ${MKDIR} aof
         ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
 
@@ -98,14 +102,18 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-o.ModHdr: h.ModHdr
+o.ModHdr: h.ModHdr ${DIRS}
 	@|
 	
 h.ModHdr: cmhg.ModHdr
 	@|
 
-c.main: h.ModHdr
+c.main: h.ModHdr ${DIRS}
 	${CMHG} -p -o o.ModHdr cmhg.ModHdr -d h.ModHdr
+
+${DIRS}:
+	${MKDIR} o
+	${TOUCH} $@
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
