@@ -1342,14 +1342,18 @@ _kernel_oserror * history_fetch_backwards(browser_data * b, int new_view)
       if (tl & (1u<<16)) Printf("history_fetch_backwards: Can't go back any further, exitting\n");
     #endif
 
-   return NULL;
+    return NULL;
   }
 
   #ifdef TRACE
     if (tl & (1u<<16)) Printf("history_fetch_backwards: Proceeding\n");
   #endif
 
-  /* Step backwards */
+  /* Step backwards - even if we're going to open a new view, */
+  /* when the child inherits the parent's history this needs  */
+  /* to have been set up to make sure the child gains the     */
+  /* right position in the inherited history list. We will    */
+  /* correct the parent's history position later.             */
 
   b->history_current = (void *) (user->history_prev);
 
@@ -1375,12 +1379,24 @@ _kernel_oserror * history_fetch_backwards(browser_data * b, int new_view)
   }
   else
   {
+    _kernel_oserror * e;
+
     #ifdef TRACE
-      if (tl & (1u<<16)) Printf("history_fetch_backwards: Exitting through windows_create_browser\n");
+      if (tl & (1u<<16)) Printf("history_fetch_backwards: Exitting through windows_create_browser and browser_inherit\n");
     #endif
 
-    return windows_create_browser((char *) url, NULL, NULL, NULL, Windows_CreateBrowser_Normal);
+    RetError(windows_create_browser((char *) url, NULL, NULL, NULL, Windows_CreateBrowser_Normal));
+    RetError(browser_inherit(b, last_browser));
+
+    /* We didn't end up moving anywhere in b, and only stepped backwards */
+    /* so that the indirectly called history_inherit could work properly */
+    /* - so now make sure that b's current history position has not been */
+    /* altered.                                                          */
+
+    b->history_current = (void *) (user);
   }
+
+  return NULL;
 }
 
 /*************************************************/
@@ -1426,7 +1442,11 @@ _kernel_oserror * history_fetch_forwards(browser_data * b, int new_view)
     if (tl & (1u<<16)) Printf("history_fetch_forwards: Proceeding\n");
   #endif
 
-  /* Step forwards */
+  /* Step forwards - even if we're going to open a new view, */
+  /* when the child inherits the parent's history this needs */
+  /* to have been set up to make sure the child gains the    */
+  /* right position in the inherited history list. We will   */
+  /* correct the parent's history position later.            */
 
   b->history_current = (void *) (user->history_next);
 
@@ -1452,12 +1472,24 @@ _kernel_oserror * history_fetch_forwards(browser_data * b, int new_view)
   }
   else
   {
+    _kernel_oserror * e;
+
     #ifdef TRACE
-      if (tl & (1u<<16)) Printf("history_fetch_forwards: Exitting through windows_create_browser\n");
+      if (tl & (1u<<16)) Printf("history_fetch_forwards: Exitting through windows_create_browser and browser_inherit\n");
     #endif
 
-    return windows_create_browser((char *) url, NULL, NULL, NULL, Windows_CreateBrowser_Normal);
+    RetError(windows_create_browser((char *) url, NULL, NULL, NULL, Windows_CreateBrowser_Normal));
+    RetError(browser_inherit(b, last_browser));
+
+    /* We didn't end up moving anywhere in b, and only stepped forwards  */
+    /* so that the indirectly called history_inherit could work properly */
+    /* - so now make sure that b's current history position has not been */
+    /* altered.                                                          */
+
+    b->history_current = (void *) (user);
   }
+
+  return NULL;
 }
 
 /*************************************************/
@@ -2680,4 +2712,173 @@ history_save_error:
   free(local_path);
 
   RetLastE;
+}
+
+/*************************************************/
+/* history_find_match()                          */
+/*                                               */
+/* Takes a string from the given buffer and sees */
+/* if there's something in the global History    */
+/* that matches it in some way.                  */
+/*                                               */
+/* If it finds something, it writes it back to   */
+/* the buffer and returns 1.                     */
+/*                                               */
+/* Parameters: Pointer to the buffer holding the */
+/*             string to try and match;          */
+/*                                               */
+/*             Size of the buffer in bytes.      */
+/*                                               */
+/* Returns:    1 if the buffer is updated with a */
+/*             match string, else 0 (buffer      */
+/*             contents will be unaltered).      */
+/*************************************************/
+
+int history_find_match(char * buffer, int buffer_size)
+{
+  history_entry * entry         = history_base;
+  history_entry * lowest_entry  = NULL;
+  const char    * found         = NULL;
+  int             lowest_offset = -1;
+  int             lowest_diff   = 0;
+  int             this_offset   = 0;
+  int             got_one;
+
+  if (!buffer || !*buffer) return 0;
+
+  while (entry)
+  {
+    if (entry->url && entry->url->full)
+    {
+      got_one = 0;
+
+      /* Match in the host, if present */
+
+      if (entry->url->host)
+      {
+        /* See if we can find the string */
+
+        found = strstr(entry->url->host, buffer);
+
+        if (found)
+        {
+          /* If so, record the offset into the string where  */
+          /* the match was found and mark we've got a match. */
+
+          this_offset = found - entry->url->host;
+          got_one     = 1;
+        }
+      }
+
+      /* Match in the path, if nothing found in the host */
+
+      if (!got_one && entry->url->path)
+      {
+        found = strstr(entry->url->path, buffer);
+
+        if (found)
+        {
+          this_offset = found - entry->url->path;
+          got_one     = 1;
+        }
+      }
+
+      /* Match in the full URL, if all else fails */
+
+      if (!got_one)
+      {
+        found = strstr(entry->url->full, buffer);
+
+        if (found)
+        {
+          this_offset = found - entry->url->full;
+          got_one     = 1;
+        }
+      }
+
+      /* Match in the title, out of desperation! */
+
+      if (!got_one && entry->title)
+      {
+        found = strstr(entry->title, buffer);
+
+        if (found)
+        {
+          this_offset = found - entry->title;
+          got_one     = 1;
+        }
+      }
+
+      /* If found, have we not recorded an offset before, or is this offset  */
+      /* lower than any previously recorded? If so, remember the entry. This */
+      /* way, 'digital' will match 'www.digital.com' rather than             */
+      /* 'www.altavista.digital.com' regardless of where the entry is in the */
+      /* History. Matching the first one we come to would obviously rely on  */
+      /* the order of appearance in the list.                                */
+
+      if (got_one)
+      {
+        if (lowest_offset < 0 || this_offset <= lowest_offset)
+        {
+          int this_diff = strlen(entry->url->full) - strlen(buffer);
+
+          lowest_offset = this_offset;
+
+          /* Having found an entry that matches in the lowest part of the string */
+          /* so far, we also want to choose one which has the smallest string    */
+          /* length difference between itself and the given match string, which  */
+          /* is non-zero. This ensures we would go 'www.acorn.com/acorn/',       */
+          /* 'www.acorn.com/acorn/news/', 'www.acorn.com/acorn/news/releases/'   */
+          /* again regardless of the relative position of the entries in the     */
+          /* History list.                                                       */
+          /*                                                                     */
+          /* Of course, the whole thing is still fairly undetermined - whatever  */
+          /* the next directory is after you've found a match on the root of a   */
+          /* site (say) which happens to be the shortest will be the tree you    */
+          /* always end up fetching. But it's a reasonable start on this anyway, */
+          /* and the mists of time may well reveal that further enhancements are */
+          /* not necessary in practice.                                          */
+
+          if (this_offset < lowest_offset)
+          {
+            /* First thing, we've found a new lowest offset; so forget any previous */
+            /* string length differences.                                           */
+
+            lowest_diff = 0;
+          }
+
+          /* If we've not got a lowest difference yet, or we have a current difference */
+          /* and it's lower than the recorded lowest, then remember the difference and */
+          /* the entry that generated it.                                              */
+
+          if (!lowest_diff || (this_diff && this_diff < lowest_diff))
+          {
+            lowest_diff  = this_diff;
+            lowest_entry = entry;
+          }
+        }
+      }
+    }
+
+    /* Try the next item */
+
+    entry = entry->next;
+  }
+
+  /* Did we end up finding anything? */
+
+  if (lowest_entry && lowest_offset >= 0)
+  {
+    /* Yes - copy the full URL into the buffer and return, saying */
+    /* we updated the buffer contents.                            */
+
+    strncpy(buffer, lowest_entry->url->full, buffer_size);
+    buffer[buffer_size - 1] = 0;
+
+    return 1;
+  }
+
+  /* No - exit, saying we didn't touch the buffer contents. */
+
+  return 0;
 }

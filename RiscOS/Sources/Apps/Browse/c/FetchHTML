@@ -60,8 +60,9 @@ static char * fetch_buffer = NULL; /* Address of buffer for getting data from th
 /*                                               */
 /* Parameters: Pointer to URL to fetch;          */
 /*                                               */
-/*             Pointer to extra data for POST    */
-/*             etc.;                             */
+/*             Pointer to a pointer for extra    */
+/*             data for POST etc. (allows this   */
+/*             to be in a flex block);           */
 /*                                               */
 /*             Pointer to an int into which a    */
 /*             handle for this fetch will be     */
@@ -81,7 +82,7 @@ static char * fetch_buffer = NULL; /* Address of buffer for getting data from th
 /*             going via. a cache).              */
 /*************************************************/
 
-_kernel_oserror * html_get(char * url, char * extradata, int * handle, int method,
+_kernel_oserror * html_get(char * url, char ** extradata, int * handle, int method,
                            char * user, int allowparse, int proxy)
 {
   _kernel_oserror * e;
@@ -155,11 +156,11 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
     /* everything from Content-Type forwards may be stripped in the   */
     /* event of a redirection when the current fetch method is POST.  */
 
-    if (extradata)
+    if (extradata && *extradata)
     {
       int len;
 
-      len = strlen(extradata);
+      len = strlen(*extradata);
 
       /* Allocate space for the extra data, the anchor stored in up->extradata */
 
@@ -189,11 +190,11 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
 
         /* Copy the extra data under the CR+LF */
 
-        strcpy(up->extradata + 2, extradata);
+        strcpy(up->extradata + 2, *extradata);
 
-        /* Header entry for the extra data - again, the removal routines in the  */
-        /* fetcher's redirection code assume that this comes before Content-Type */
-        /* and the actual body content to make life easy there.                  */
+        /* Header entry for the extra data - again, the removal routines in the */
+        /* fetcher's redirection code assume that this comes after Content-Type */
+        /* and the body content comes after this, to make life easy there.      */
 
         sprintf(head, "Content-Length: %d", len);
 
@@ -222,7 +223,7 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
       }
     }
 
-    /* If user details are given, insert the appopriate header entry */
+    /* If user details are given, insert the appropriate header entry */
 
     if (user)
     {
@@ -239,11 +240,17 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
       }
     }
 
-    /* If we aren't to use a proxy, say so in the header */
+    /* If we aren't to use a proxy - actually, this is Intertalk-speak */
+    /* for no cache - say so in the header, in various ways.           */
 
     if (!proxy)
     {
-      ok = html_insert_header("X-NoProxy:", (flex_ptr) &up->extradata);
+      /* For Intertalk compatability first, most servers will get the */
+      /* second, and newer servers prefer the last.                   */
+
+      ok         = html_insert_header("X-NoProxy:",             (flex_ptr) &up->extradata);
+      if (ok) ok = html_insert_header("Pragma:no-cache",        (flex_ptr) &up->extradata);
+      if (ok) ok = html_insert_header("Cache-Control:no-cache", (flex_ptr) &up->extradata);
 
       if (!ok)
       {
@@ -273,7 +280,7 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
                       h,                     /* Session handle                 */
                       method,                /* Fetch method                   */
                       url,                   /* URL to get                     */
-                      up->extradata,         /* Any extra data for POST etc.   */
+                      &up->extradata,        /* Any extra data for POST etc.   */
                       NULL,                  /* (Would be a status word)       */
                       2);                    /* Mode; 2 = header and data      */
 
@@ -1185,15 +1192,18 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
             file = fopen("<Wimp$ScrapDir>.Headers", "ab");
 
-            if (!image) fprintf(file, "For URL '%s', received header:\r\n\r\n", url);
-            else        fprintf(file, "For image '%s', received header:\r\n\r\n", url);
-
-            for (byte = 0; byte < o; byte++)
+            if (file)
             {
-              fputc((int) (*((char *) (((int) *source) + byte))), file);
-            }
+              if (!image) fprintf(file, "For URL '%s', received header:\r\n\r\n", url);
+              else        fprintf(file, "For image '%s', received header:\r\n\r\n", url);
 
-            fclose(file);
+              for (byte = 0; byte < o; byte++)
+              {
+                fputc((int) (*((char *) (((int) *source) + byte))), file);
+              }
+
+              fclose(file);
+            }
           }
         #endif
 
@@ -1298,27 +1308,49 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
             *source = NULL;
 
             /* Ensure POST requests are now cleared (we shouldn't continue */
-            /* POSTing to redirected URLs)                                 */
+            /* POSTing to redirected URLs) - basically, we always redirect */
+            /* to a GET to be compatable with what everyone else does,     */
+            /* rather than what they say they should do...                 */
 
             if (up->method == URL_Method_http_POST)
             {
-              /* When the headers are build, the POST data (starting with a Content-Length */
-              /* entry) are put in first and everything else is inserted above it. As the  */
-              /* comments on this code say, this is organised so we can simplify things    */
-              /* here and just chop off everything at Content-Length and below, rather     */
-              /* than having to carefully remove the appropriate header lines and body.    */
+              /* When the headers are built, the POST data (starting with a Content-Type */
+              /* entry) is put in first and everything else is inserted above it. As the */
+              /* comments on this code say, this is organised so we can simplify things  */
+              /* here and just chop off everything at Content-Type and below, rather     */
+              /* than having to carefully remove the appropriate header lines and body.  */
 
               if (up->extradata)
               {
-                char * strip = strstr(up->extradata, "Content-Length");
+                int    len;
+                int    oldbudge;
+                char * strip;
+
+
+                oldbudge = flex_set_budge(0);
+
+                #ifdef DUMP_HEADERS
+                  {
+                    FILE * file;
+
+                    file = fopen("<Wimp$ScrapDir>.Headers", "ab");
+
+                    if (file)
+                    {
+                      fprintf(file, "Redirection from POST\r\nThere is this extra data before stripping POST-specific info:\r\n\r\n[%s]\r\n\r\n", up->extradata);
+
+                      fclose(file);
+                    }
+                  }
+                #endif
+
+                strip = strstr(up->extradata, "Content-Type: ");
 
                 if (strip)
                 {
-                  int len;
-
                   /* How much do we want to keep? */
 
-                  len = strstr(up->extradata, "Content-Length") - up->extradata; /* Don't use 'strip' in case flex shifted when 'len' was stacked */
+                  len = strip - up->extradata + 1; /* + 1 so we can put in a string terminator where the 'C' was */
 
                   #ifdef TRACE
                     {
@@ -1331,7 +1363,26 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
                   /* Resize the block */
 
                   flex_extend((flex_ptr) &up->extradata, len);
+
+                  *strip = 0;
                 }
+
+                #ifdef DUMP_HEADERS
+                  {
+                    FILE * file;
+
+                    file = fopen("<Wimp$ScrapDir>.Headers", "ab");
+
+                    if (file)
+                    {
+                      fprintf(file, "Redirection from POST\r\nThere is this extra data after stripping POST-specific info:\r\n\r\n[%s]\r\n\r\n", up->extradata);
+
+                      fclose(file);
+                    }
+                  }
+                #endif
+
+                flex_set_budge(oldbudge);
               }
 
               /* Change the fetch method to GET */
@@ -1366,7 +1417,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
                             handle,                /* Session handle                      */
                             up->method,            /* Fetch method                        */
                             redirect,              /* URL to get                          */
-                            up->extradata,         /* Extra data for POST etc.            */
+                            &up->extradata,        /* Extra data for POST etc.            */
                             NULL,                  /* We're ignoring the returned status  */
                             2);                    /* Mode 2 = fetch both header and data */
 
@@ -1623,7 +1674,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
                               handle,                /* Session handle                      */
                               up->method,            /* Fetch method                        */
                               redirect,              /* URL to get                          */
-                              up->extradata,         /* Extra data for POST etc.            */
+                              &up->extradata,        /* Extra data for POST etc.            */
                               NULL,                  /* We're ignoring the returned status  */
                               2);                    /* Mode 2 = fetch both header and data */
 
