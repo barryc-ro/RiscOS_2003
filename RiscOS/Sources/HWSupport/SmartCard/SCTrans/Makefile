@@ -71,10 +71,10 @@ TARGET    = aof.${COMPONENT}
 .SUFFIXES:   .od
 
 OBJS      =	o.sys o.com o.data o.api o.atr o.t0_sm o.t1 o.chan o.irqs \
-	  	o.serial o.header o.db
+	  	o.serial o.header o.db o.pmsdebug
 
 DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs \
-	  	od.serial od.header od.db
+	  	od.serial od.header od.db od.pmsdebug
 
 #
 # Rule patterns
