@@ -116,7 +116,7 @@ export_libs: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} o.dirs
         ${CP} ${COMPONENTZM} ${DEBUGLIB}.o.${COMPONENTZM} ${CPFLAGS}
         ${CP} ${LCOMPONENT}   ${DEBUGLIB}.o.${LCOMPONENT}   ${CPFLAGS}
         ${CP} ${LCOMPONENTZM} ${DEBUGLIB}.o.${LCOMPONENTZM} ${CPFLAGS}
-        ${CP} VersionNum ${DEBUGLIB}.VersionNum ${CPFLAGS}
+        ${CP} VersionNum ${DEBUGLIB}.LibVersion ${CPFLAGS}
 
 
 #
