@@ -44,6 +44,17 @@
 
 #include "LVFCtrl.h"
 
+/* Local variables */
+
+#ifdef FAST
+
+  /* Direct interface to MPEG system */
+
+  typedef void (*mpeg_fn_ptr)(unsigned int flags, bs_buffer * bsb);
+  static mpeg_fn_ptr mpeg_rx_direct;
+
+#endif
+
 /* Local functions */
 
 static _kernel_oserror * lvfctrl_read_block (session * s);
@@ -62,6 +73,44 @@ _kernel_oserror * lvfctrl_open_stream(session * s)
 {
   if (s->running == 0)
   {
+    #ifdef FAST
+
+      /* Find out where the direct call interface for us to the MPEG */
+      /* software is, if available                                   */
+
+      mpeg_rx_direct = NULL;
+
+      {
+        unsigned int * written;
+        unsigned int   statsin  [2];
+        unsigned int   statsout [3] = {0,0,0};
+
+        statsin[0] = 0x0C; /* Read MPEG direct call RX interface */
+        statsin[1] = -1;
+
+        if (
+             _swix(MPEGControl_Stats,
+                   _INR(0,4) | _OUT(3),
+
+                   0,
+                   s->mpegid,
+                   statsin,
+                   statsout,
+                   sizeof(statsout),
+
+                   &written)
+
+             == NULL
+           )
+        {
+          if (statsout[1] != 0 && written != statsout) mpeg_rx_direct = (mpeg_fn_ptr) statsout[2];
+        }
+      }
+
+      if (mpeg_rx_direct == NULL) return make_error(lvfgeneric_ERROR_MPEG_TOO_OLD, 0);
+
+    #endif
+
     buffers_allocate_main_buffer(s);
     if (s->carrier.buffer == NULL) return make_error(lvfgeneric_ERROR_MEMORY_EXHAUSTED, 0);
 
@@ -376,14 +425,29 @@ static _kernel_oserror * lvfctrl_read_block(session * s)
     {
       char * bptr = ((char *) buf) + sizeof(bs_buffer);
 
-      buf->bs_next    = NULL;                   /* We don't use this, the MPEG software does.       */
-      buf->bs_handle  = 0;                      /* If zero, flags = SWI to call...                  */
-      buf->bs_flags   = LVFGeneric_EmptyBuffer; /* ...so call LVFGeneric_EmptyBuffer please.        */
-      buf->bs_packets = 0;                      /* Must be zero on entry to MPEGControl_FullBuffers */
-      buf->bs_data    = bptr;
-      buf->bs_offset  = buf->bs_data;
-      buf->bs_len     = read;                   /* We rely on this being intact at all times.       */
-      buf->bs_session = s;                      /* This is also essential.                          */
+      #ifdef FAST
+
+        buf->bs_next          = NULL;                   /* We don't use this, the MPEG software does        */
+        buf->bs_handle        = (int) mpeg_entry;       /* Address of direct call routine                   */
+        buf->bs_flags         = (int) module_wsp;       /* Value for R12 on entry to routine                */
+        buf->bs_offset        = bptr;                   /* Pointer to data payload                          */
+        buf->bs_len           = read;                   /* We rely on this being intact at all times        */
+        buf->bs_packets       = (1u<<31);               /* Flag that we're using an extended interface      */
+        buf->bs_stream_handle = s->mpegid;              /* Required as part of the new interface            */
+        buf->bs_session       = s;                      /* Essential for us rather than the MPEG software   */
+
+      #else
+
+        buf->bs_next          = NULL;                   /* We don't use this, the MPEG software does.       */
+        buf->bs_handle        = 0;                      /* If zero, flags = SWI to call...                  */
+        buf->bs_flags         = LVFGeneric_EmptyBuffer; /* ...so call LVFGeneric_EmptyBuffer please.        */
+        buf->bs_offset        = bptr;                   /* Pointer to data payload                          */
+        buf->bs_len           = read;                   /* We rely on this being intact at all times.       */
+        buf->bs_packets       = (1u<<31);               /* Flag that we're using an extended interface      */
+        buf->bs_stream_handle = s->mpegid;              /* Required as part of the new interface            */
+        buf->bs_session       = s;                      /* Essential for us rather than the MPEG software   */
+
+      #endif
 
       /* Read a chunk */
 
@@ -392,17 +456,24 @@ static _kernel_oserror * lvfctrl_read_block(session * s)
 
                      4,
                      s->open,
-                     buf->bs_data,
+                     buf->bs_offset,
                      read));
 
       /* Send it to the MPEG software */
 
-      RetError(_swix(MPEGControl_FullBuffers,
-                     _INR(0,2),
+      #ifdef FAST
 
-                     0,
-                     s->mpegid,
-                     buf));
+        mpeg_rx_direct(0, buf);
+
+      #else
+
+        RetError(_swix(MPEGControl_FullBuffers,
+                       _INR(0,2),
+
+                       1, /* 1 -> understand 'new' MPEGTrans with stream handle field in bs_buffer */
+                       s->mpegid,
+                       buf));
+      #endif
     }
   }
 

@@ -46,7 +46,7 @@ MODSQZ		= modsqz
 CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 
-CFLAGS		= -c -depend !Depend ${INCLUDES} -zM -Wp -ffa -zps1
+CFLAGS		= -c -depend !Depend ${INCLUDES} -zM -Wp -ffca -zps1
 DFLAGS		= -D${SYSTEM} -DCOMPAT_INET4 -UDIRECTSWI ${EXTRAFLAGS}
 ROMFLAGS	= -DROM
 RAMFLAGS	= -UROM
@@ -60,8 +60,10 @@ DIRS		= o._dirs_
 #				defined. Otherwise, it'll only claim it for
 #				as long as any sessions exist (which should
 #				be more efficient).
+# FAST				Use the direct call interfaces to the MPEG
+#				system (requires new MPEG modules).
 
-EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV
+EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV -DFAST
 
 # -----------------------------------------------------------------------------
 # Libraries and objects lists
