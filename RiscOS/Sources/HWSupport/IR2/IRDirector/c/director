@@ -104,6 +104,7 @@ static unsigned char buffer[4], *next;	/* Read buffer and first free space */
 static void process_raw(unsigned int raw);
 static void process_tag_status_report(unsigned int raw);
 
+static char default_ir_registry_path[]="Resources:$.Resources.IR.";
 
 
 /*------------------------------------------------------------------------------
@@ -141,8 +142,10 @@ void Disable( void )
 static _kernel_oserror *Enable( void )
 {
     _kernel_oserror *err;
+    unsigned int regpath_exists;
     ioctl_t ioctlblock = { IOCTL_FIFO_TRIG, 0, 0, 0, 1, 4 };
     in_handle = out_handle = -1;		/* Reset handles */
+
 
     /* Reset tag stuff */
     tags_initialise_tags();
@@ -150,41 +153,63 @@ static _kernel_oserror *Enable( void )
     err = _swix(OS_Claim, _INR(0,2), UpcallV, module_upcall_entry, PrivateWord);
     if (err)
     {
-        printf("Enable:1:%d,%s\n",err->errnum,err->errmess);
+        DEBUGFN(2, db_printf("Enable:1:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
 
-    if (!err) err = _swix(OS_Find, _INR(0,1)|_OUT(0),
+    err = _swix(OS_Find, _INR(0,1)|_OUT(0),
                           SERIAL_INPUT, SERIAL_DEVICE, &in_handle);
     if (err)
     {
-        printf("Enable:2:%d,%s\n",err->errnum,err->errmess);
+        DEBUGFN(2, db_printf("Enable:2:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
 
 
     /* set fifo trigger level to 4 on input */
-    if (!err) err = _swix(OS_Args, _INR(0,2),
+    err = _swix(OS_Args, _INR(0,2),
                           OSArgs_IOCtl, in_handle, &ioctlblock);
     if (err)
     {
-        printf("Enable:3:%d,%s\n",err->errnum,err->errmess);
+        DEBUGFN(2, db_printf("Enable:3:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
-    if (!err) err = _swix(OS_Find, _INR(0,1)|_OUT(0),
+    err = _swix(OS_Find, _INR(0,1)|_OUT(0),
                           SERIAL_OUTPUT, SERIAL_DEVICE, &out_handle);
     if (err)
     {
-        printf("Enable:4:%d,%s\n",err->errnum,err->errmess);
+        DEBUGFN(2, db_printf("Enable:4:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
-    DEBUGFN(2, if (!err) db_printf("Handles: in=%d, out=%d, pw=%p\n",
+    DEBUGFN(2, db_printf("Handles: in=%d, out=%d, pw=%p\n",
                                    in_handle, out_handle, PrivateWord));
     if (err)
     {
-        printf("Enable:5:%d,%s\n",err->errnum,err->errmess);
+        DEBUGFN(2, db_printf("Enable:5:%d,%s\n",err->errnum,err->errmess));
         return err;
     }
+
+    err = _swix(OS_ReadVarVal,_INR(0,4)|_OUT(2),
+          "IRRegistry$Path",NULL,-1,0,0,
+          &regpath_exists);
+
+    if (err)
+    {
+        DEBUGFN(2, db_printf("Enable:5 and a half:%d,%s\n",err->errnum,err->errmess));
+    }
+
+
+    if ((!regpath_exists) || err)
+    {
+        err = _swix(OS_SetVarVal,_INR(0,4),
+                    "IRRegistry$Path",default_ir_registry_path,strlen(default_ir_registry_path),0,4);
+        if (err)
+        {
+            DEBUGFN(2, db_printf("Enable:6:%d,%s\n",err->errnum,err->errmess));
+            return err;
+        }
+    }
+
 
     if (!err)
     {
@@ -241,19 +266,27 @@ int ir_DeviceRxDataPresent(void)
     int extent, i, notok;
     unsigned char *first;
 
+DEBUGFN(3,db_printf("in IR_DeviceRxDataPresent\n"));
+
     /* Prevent re-entry */
     if (busy)
     {
         reentered = TRUE;
+DEBUGFN(3,db_printf("re-entered!\n"));
         return TRUE;
     }
     busy = TRUE;
 
+DEBUGFN(3,db_printf("still going\n"));
+
     /* How much data? */
     _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), OSArgs_Extent, in_handle, &extent);
 
+
+
     while (extent)
     {
+DEBUGFN(3,db_printf("extent = %d\n",extent));
     /* Get up to a (raw) packet's worth of data.
         * We should have 1 to 4 bytes in the buffer after this call */
         if (_swix(OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_OUT(2),
@@ -318,7 +351,7 @@ int ir_DeviceRxDataPresent(void)
         if (((next-buffer) == 4) ||
             ((buffer[0] & 0x0f) == CMD_IN_COMP_STATUS_REPORT))
         {
-/*            printf("#");*/
+            DEBUGFN(3,db_printf("#"));
             process_raw(*((unsigned int *) buffer));
             next = buffer;
         }
@@ -615,7 +648,7 @@ static void process(packet_t packet)
             ext_state[next_ext].ext_bits = (packet.reg_extended.num_hi << 24) |
                                            (packet.reg_extended.num_15 << 15) |
                                            (packet.reg_extended.num_lo << 16);
-            DEBUGFN(2, db_printf("Remembering extended info for tag %d\n",
+            DEBUGFN(2, db_printf("Remembering extended info for tag %x\n",
                                  ext_state[next_ext].ext_tag));
             next_ext = 1 - next_ext;
             break;
@@ -664,65 +697,27 @@ static void process(packet_t packet)
             */
             DEBUGFN(3,db_printf("looking in tag table...\n"));
             tag = tags_find_tag_by_registry_number(registry_number);
-            if (tag == NULL)
+            if ((tag == NULL)||(tag->driver_number == 7))
             {
+                DEBUGFN(3,db_printf("Adding new device %x to unknown device list\n",
+                                    registry_number));
 
-                DEBUGFN(3,db_printf("looking in registry...\n"));
-                /*
-                    We don't already have a reference to the driver...
-                    look in the registry
-                */
-                if (!reg_get_device_info(registry_number, &driver_number, NULL))
-                {
-                    /*
-                        We don't have a record of the device in the registry...
-                        associate with number 7, the default driver.
+                reg_add_unknown_device(registry_number,packet.reg_basic.new_tag);
+                _swix(OS_AddCallBack,
+                      _INR(0,1),
+                      reg_load_entry,
+                      PrivateWord);
 
-                        The business of re-associating the device with the
-                        correct driver will have to wait until the registry stuff
-                        is more advanced.
-                    */
-                    DEBUGFN(3,db_printf("failed to find entry in registry!\nassociating with default.\n"));
-                    driver_number = 7;
-                }
+                driver_number = -1;
             }
             else
             {
                 driver_number = tag->driver_number;
             }
 
-            DEBUGFN(3,db_printf("looking in driver list...\n"));
-            drv = drv_find_driver_by_driver_number(drv_driver_list, driver_number);
-            if (drv == NULL)
-            {
-                DEBUGFN(2,db_printf("Adding driver %d...\n",driver_number));
-                drv_driver_list = drv_add_driver(drv_driver_list, driver_number);
-                drv = drv_driver_list;
-                _swix(OS_AddCallBack,
-                      _INR(0,1),
-                      drv_load_entry,
-                      PrivateWord);
-            }
-
-            /*
-               If we still haven't got a reference to it,
-               something has gone horribly wrong.
-            */
-	    if (drv == NULL)
-	    {
-                DEBUGFN(1,db_printf("Failed to find driver\n"));
-	    }
-	    else
-	    {
-	        /*
-	            Now mark the tag as being assigned to this driver.
-
-	            If the tag is already assigned to a different driver,
-	            retire it.
-	        */
-
-	        tags_associate_tag(packet.reg_basic.new_tag, registry_number, driver_number);
-	    }
+            tags_associate_tag(packet.reg_basic.new_tag,
+                               registry_number,
+                               driver_number);
 
             break;
         }
@@ -733,32 +728,32 @@ static void process(packet_t packet)
             if (tag->registry_number != REG_UNASSIGNED_NUMBER)
             {
                 drv = drv_find_driver_by_driver_number(drv_driver_list,tag->driver_number);
-                if (drv != NULL)
+                if ((drv != NULL) && (drv->flags&DRIVER_FLAGS_INITIALISED))
                 {
-
-                    if (drv->flags&DRIVER_FLAGS_INITIALISED)
-                    {
-                        drv_send_data_packet(drv,tag->registry_number,tag->tag_number,packet.word);
-                    }
-                    else
-                    {
-                        DEBUGFN(3,db_printf("Saving packet %06x for registry %d\n",packet.word,tag->registry_number));
-                        drv_add_outstanding_packet(drv,tag->registry_number,tag->tag_number,packet.word);
-                    }
+                    drv_send_data_packet(drv,
+                                         tag->registry_number,
+                                         tag->tag_number,
+                                         packet.word);
                 }
                 else
                 {
-                    DEBUGFN(1,db_printf("Failed to find driver for device_number %08x\n",
-                                        tag->driver_number));
+                    DEBUGFN(3,db_printf("Saving packet %06x for registry %x\n",
+                                        packet.word,
+                                        tag->registry_number));
+
+                    reg_add_outstanding_packet(tag->registry_number,
+                                               tag->tag_number,
+                                               packet.word);
                 }
             }
             else
             {
-                DEBUGFN(1,db_printf("Received packet from device with unassigned tag %d!\n",
+                DEBUGFN(1,db_printf("Received packet from device with unassigned tag %x!\n",
                                     tag->tag_number));
             }
         }
     }
+    DEBUGFN(3,db_printf("\nLeaving process\n\n"));
 }
 
 
@@ -767,7 +762,7 @@ static void process(packet_t packet)
 
 
 
-/*------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------
 *
 * Process a tag status report
 *
