@@ -20,6 +20,7 @@
 #include <setjmp.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <ctype.h>
 
 #include <kernel.h>
@@ -36,9 +37,11 @@
 
 #include "Utils.h"
 
-/* Local definitions */
+/* Local definitions. MaxiumUniqueNames is an inclusive number for   */
+/* the highest numbered directory used by the unique name functions. */
 
 #define MillipointsPerOSUnit 400
+#define MaximumUniqueNames   128
 
 /* Locals */
 
@@ -183,7 +186,7 @@ static char * lookup_in_given(MessagesFD * control, const char * s, unsigned int
 /* Toolbox event handler.                                     */
 /**************************************************************/
 
-int report_toolbox_error(int eventcode,ToolboxEvent *event,IdBlock *idb,void *handle)
+int report_toolbox_error(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
   ChkError((_kernel_oserror *) &event->data);
 
@@ -862,7 +865,7 @@ _kernel_oserror * utils_set_display_field(ObjectId o, ComponentId c, const char 
   int    match;
 
   if (current == NULL) return errors_frontend_error(fee_out_of_memory,
-                                                    "utils_set_display_field");
+                                                    "4");
 
   /* Read the existant text */
 
@@ -921,7 +924,7 @@ _kernel_oserror * utils_set_writeable_field(ObjectId o, ComponentId c, const cha
   int    match;
 
   if (current == NULL) return errors_frontend_error(fee_out_of_memory,
-                                                    "utils_set_writeable_field");
+                                                    "5");
 
   /* Read the existant text */
 
@@ -1500,7 +1503,7 @@ _kernel_oserror * utils_canonicalise_path(const char * in, char ** out)
   *out = malloc(1 - required); /* (Yes, '1 - required' - see above!) */
 
   if (!*out) return errors_frontend_error(fee_out_of_memory,
-                                          "utils_canonicalise_path");
+                                          "6");
 
   RetError(_swix(OS_FSControl,
                  _INR(0, 5) | _OUT(5),
@@ -1534,10 +1537,15 @@ _kernel_oserror * utils_canonicalise_path(const char * in, char ** out)
 /* ensure that the directory structure you're addressing is   */
 /* present.                                                   */
 /*                                                            */
-/* Parameters: Pointer to the path to ensure is present.      */
+/* All items are given attributes "LWR/" on creation.         */
+/*                                                            */
+/* Parameters: Pointer to the path to ensure is present;      */
+/*                                                            */
+/*             true to include all items, i.e. the leafname   */
+/*             item is a directory too.                       */
 /**************************************************************/
 
-_kernel_oserror * utils_build_tree(const char * path)
+_kernel_oserror * utils_build_tree(const char * path, bool include_all)
 {
   char * temp;
   char * p;
@@ -1551,7 +1559,7 @@ _kernel_oserror * utils_build_tree(const char * path)
   temp = malloc(len + 1);
 
   if (!temp) return errors_frontend_error(fee_out_of_memory,
-                                          "utils_build_tree");
+                                          "7");
 
 retry:
 
@@ -1568,13 +1576,26 @@ retry:
     {
       *p = '\0';
 
-      if (!_swix(OS_File,
-                 _INR(0,1) | _IN(4),
+      if (
+           !_swix(OS_File,
+                  _INR(0,1) | _IN(4),
 
-                 8,
-                 temp,
-                 0))
+                  8,  /* Create directory */
+                  temp,
+                  0)
+           &&
+
+           !_swix(OS_File,
+                  _INR(0,1) | _IN(5),
+
+                  4,  /* Set attributes */
+                  temp,
+                  11) /* Bit pattern -> "LWR/" */
+         )
       {
+
+
+
         if (level) goto retry;
         else       break;
       }
@@ -1584,9 +1605,311 @@ retry:
   }
   while (p);
 
+  /* Top level item */
+
+  if (include_all)
+  {
+    _swix(OS_File,
+          _INR(0,1) | _IN(4),
+
+          8,
+          path,
+          0);
+
+    _swix(OS_File,
+          _INR(0,1) | _IN(5),
+
+          4,
+          path,
+          11);
+  }
+
   /* Finished */
 
   free(temp);
 
   return NULL;
+}
+
+/**************************************************************/
+/* utils_get_unique_name()                                    */
+/*                                                            */
+/* Generates a unique pathname in the given buffer, based on  */
+/* Wimp$ScrapDir. This is hopefully system-unique as the      */
+/* function keeps going until it can't find a file under the  */
+/* name it has constructed.                                   */
+/*                                                            */
+/* In the extremely unlikely event there are directories      */
+/* named "UTF00000" to "UTFFFFFF" inclusive in Scrap, the     */
+/* function bails, writing a single NUL byte into the start   */
+/* of the buffer to indicate the problem (well - the last     */
+/* directory is actually defined by MaximumUniqueNames at the */
+/* top of the file).                                          */
+/*                                                            */
+/* If the way the names returned are generated is altered,    */
+/* utils_find_archive must be updated too.                    */
+/*                                                            */
+/* Parameters: Pointer to the buffer;                         */
+/*                                                            */
+/*             Size of the buffer.                            */
+/*                                                            */
+/* Assumes:    Well it won't crash if you give it a NULL      */
+/*             buffer pointer or a buffer size of less than 2 */
+/*             bytes, but there's not exactly a huge amount   */
+/*             of worth in calling the function under those   */
+/*             conditions!                                    */
+/**************************************************************/
+
+void utils_get_unique_name(char * buffer, int buffer_size)
+{
+  int    filecount = 0;
+  int    type;
+  char * leaf;
+
+  if (!buffer || buffer_size < 2) return;
+
+  /* Clear the buffer first */
+
+  memset(buffer, 0, buffer_size);
+
+  /* Where's Scrap? (This is used by utils_find_archive too...) */
+
+  #define Save_ScrapPath "<Wimp$ScrapDir>."
+
+  /* Write '<Wimp$ScrapDir>.' (or whatever is defined above) to */
+  /* the buffer - +9 is 8 letters for the leafname (see code    */
+  /* below) plus 1 for a terminator.                            */
+
+  if (strlen(Save_ScrapPath) + 9 <= buffer_size) strcpy(buffer, Save_ScrapPath);
+  else return;
+
+  /* Append with a unique 8 letter leafname */
+
+  leaf = buffer + strlen(buffer);
+
+  do
+  {
+    sprintf(leaf, "UFT%05x", filecount++);
+
+    /* Can we find the file? */
+
+    type = 1;
+
+    _swix(OS_File,
+          _INR(0,1) | _OUT(0),
+
+          17, /* Read catalogue info for object */
+          buffer,
+
+          &type);
+
+    /* Keep going until we run out of files (!) or find an unused name */
+  }
+  while (type != 0 && filecount <= MaximumUniqueNames);
+
+  /* Woo - did we run out? */
+
+  if (filecount > MaximumUniqueNames)
+  {
+    *buffer = 0;
+    return;
+  }
+
+  /* Finished */
+
+  return;
+}
+
+/**************************************************************/
+/* utils_find_archive()                                       */
+/*                                                            */
+/* Assuming the naming strategy of utils_get_unique_name,     */
+/* run through directories looking for UID files matching     */
+/* the given UID. UID files are written with utils_write_uid. */
+/*                                                            */
+/* Needs a buffer for pathname construction, just as in       */
+/* utils_get_unique_name. On exit, if an archive has been     */
+/* found, the buffer will hold the path of the archive.       */
+/*                                                            */
+/* Parameters: Pointer to the buffer;                         */
+/*                                                            */
+/*             Size of the buffer;                            */
+/*                                                            */
+/*             Leaf name used for UID files including         */
+/*             preceeding ".";                                */
+/*                                                            */
+/*             UID to find.                                   */
+/*                                                            */
+/* Returns:    true if found, else false for not found or any */
+/*             internal error.                                */
+/**************************************************************/
+
+bool utils_find_archive(char * buffer, int buffer_size, const char * uid_leaf,  unsigned int uid)
+{
+  int            filecount = 0;
+  int            type;
+  unsigned int   len, ulen;
+  char         * leaf;
+  char         * uleaf;
+
+  if (!buffer || buffer_size < 2) return false;
+
+  /* Clear the buffer first */
+
+  memset(buffer, 0, buffer_size);
+
+  /* We pick up Save_ScrapPath from utils_get_unique_name */
+
+  if (strlen(Save_ScrapPath) + 9 <= buffer_size) strcpy(buffer, Save_ScrapPath);
+  else return false;
+
+  /* Append with a unique 8 letter leafname */
+
+  ulen  = strlen(uid_leaf);
+  len   = strlen(buffer);
+  leaf  = buffer + len;
+  uleaf = buffer + len + 8;
+
+  if (len + 8 + ulen >= buffer_size) return false; /* Make sure we can append the UID leaf later */
+
+  do
+  {
+    sprintf(leaf, "UFT%05x", filecount++);
+
+    /* Can we find the file? */
+
+    if (
+         _swix(OS_File,
+               _INR(0,1) | _OUT(0),
+
+               17, /* Read catalogue info for object */
+               buffer,
+
+               &type)
+
+         != NULL
+       )
+       return false;
+
+    if (type == 2) /* 2 -> Directory */
+    {
+      FILE          * f;
+      unsigned int    read;
+      unsigned char   buf[4];
+
+      /* Build the UID filename */
+
+      strcpy(uleaf, uid_leaf);
+
+      /* Open it, read the UID and compare */
+
+      f = fopen(buffer, "rb");
+
+      if (f != NULL)
+      {
+        read = fread(buf, 1, 4, f);
+        fclose(f);
+
+        if (read == 4 && ((buf[0]) | (buf[1] << 8) | (buf[2] << 16) | (buf[3]<<24)) == uid)
+        {
+          sprintf(leaf, "UFT%05x", filecount - 1);
+          return true;
+        }
+      }
+    }
+
+    /* Keep going until we run out of files */
+  }
+  while (filecount <= MaximumUniqueNames);
+
+  /* Finished */
+
+  return false;
+}
+
+/**************************************************************/
+/* utils_write_uid()                                          */
+/*                                                            */
+/* Write a file holding a given UID with attributes "LWR/".   */
+/*                                                            */
+/* Parameters: Full pathname of UID file to write;            */
+/*                                                            */
+/*             true to write a 'real' file, false to write a  */
+/*             dummy file;                                    */
+/*                                                            */
+/*             UID, used if the above is true.                */
+/**************************************************************/
+
+_kernel_oserror * utils_write_uid(const char * name, bool real, unsigned int uid)
+{
+  unsigned int      h;
+  _kernel_oserror * e = _swix(OS_Find,
+                              _INR(0,2) | _OUT(0),
+
+                              0x87, /* Create empty file with read/write access; use no path, error if there's a directory */
+                              name,
+                              0,
+
+                              &h);
+
+  if (e != NULL) return e;
+
+  /* If writing a dummy file, put a single zero byte in it; */
+  /* else write the full UID.                               */
+
+  if (real)
+  {
+    e = _swix(OS_BPut,
+              _INR(0,1),
+
+              (uid & 0xff),
+              h);
+
+    if (e == NULL) e = _swix(OS_BPut,
+                             _INR(0,1),
+
+                             (uid & 0xff00) >> 8,
+                             h);
+
+    if (e == NULL) e = _swix(OS_BPut,
+                             _INR(0,1),
+
+                             (uid & 0xff0000) >> 16,
+                             h);
+
+    if (e == NULL) e = _swix(OS_BPut,
+                             _INR(0,1),
+
+                             (uid & 0xff000000) >> 24,
+                             h);
+  }
+  else
+  {
+    e = _swix(OS_BPut,
+              _INR(0,1),
+
+              0,
+              h);
+  }
+
+  /* Close the file */
+
+  _swix(OS_Find,
+        _INR(0,1),
+
+        0, /* 0 -> Close file */
+        h);
+
+  /* Return any error from the above */
+
+  if (e) return e;
+
+  /* Exit via. setting file attributes */
+
+  return _swix(OS_File,
+               _INR(0,1) | _IN(5),
+
+               4, /* Write attributes */
+               name,
+               11); /* Bit pattern -> "LWR/" */
 }

@@ -20,7 +20,6 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
-STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -Wpc -depend !Depend ${THROWBACK} -ff ${INCLUDES} -DUSE_CHECKURL ${OPTS}
@@ -63,6 +62,7 @@ APP       = !${COMPONENT}
 
 OBJS = 		\
 o.crc32		\
+o.Dirs		\
 o.Errors	\
 o.FromROSLib	\
 o.Global	\
@@ -97,17 +97,17 @@ bbe-local: bbe-generic
 resources: ${TARGET}
 	${MKDIR} ${RESDIR}.^.Apps.${APP}
 	SetMacro UpgFetchRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
-        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} UpgFetchRes:* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
-        UnSet UpgFetchRes$path
-        @echo ${COMPONENT}: all complete
+	${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
+	${CP} UpgFetchRes:* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+	UnSet UpgFetchRes$path
+	@echo ${COMPONENT}: all complete
 
 
 install: ${TARGET}
 	${MKDIR} ${APP}
-        ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.$(USERIF).$(LOCALE).* ${APP}.* ${CPFLAGS}
-        @echo ${COMPONENT}: all complete
+	${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
+	${CP} Resources.$(USERIF).$(LOCALE).* ${APP}.* ${CPFLAGS}
+	@echo ${COMPONENT}: all complete
 
 
 clean:
@@ -121,8 +121,6 @@ clean:
         ${RM} o
         ${RM} aof
         ${RM} rm
-        @echo Stripping dependencies from makefile...
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 dirs:
