@@ -24,9 +24,10 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM ${INCLUDES} ${THROWBACK} ${DFLAGS} -wpc
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -39,14 +40,14 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-INETLIB=InetInc:^.^.libs.inetlib.inetlibzm
-SOCKLIB=InetInc:^.^.libs.socklib.socklibzm
+INETLIB=TCPIPLibs:o.inetlibzm
+SOCKLIB=TCPIPLibs:o.socklibzm
 #
 # Include files
 #
-INCLUDES = -IC:,InetInc:
+INCLUDES = -IC:,TCPIPLibs:
 
-DFLAGS   =
+DFLAGS   = -DCOMPAT_INET4
 
 #
 # Program specific options:
@@ -60,7 +61,7 @@ EXPORTS   = h.gopherpub
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} ${THROWBACK} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -75,7 +76,7 @@ rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
-	${CP} h.gopherpub ${EXP_HDR}.h.webgopher ${CPFLAGS}
+        ${CP} h.gopherpub ${EXP_HDR}.h.webgopher ${CPFLAGS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
@@ -88,6 +89,7 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -117,38 +119,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.files:	c.files
-o.files:	C:h.kernel
-o.files:	h.files
-o.gopher:	c.gopher
-o.gopher:	C:h.kernel
-o.gopher:	C:h.swis
-o.gopher:	h.tcplibs
-o.gopher:	InetInc:sys.h.types
-o.gopher:	InetInc:sys.h.socket
-o.gopher:	InetInc:h.errno
-o.gopher:	C:h.kernel
-o.gopher:	InetInc:net.h.if
-o.gopher:	InetInc:sys.h.mbuf
-o.gopher:	InetInc:net.h.if_arp
-o.gopher:	InetInc:sys.h.socket
-o.gopher:	InetInc:netinet.h.in
-o.gopher:	InetInc:sys.h.ioctl
-o.gopher:	InetInc:sys.h.ttychars
-o.gopher:	InetInc:sys.h.ttydev
-o.gopher:	InetInc:h.netdb
-o.gopher:	InetInc:netns.h.ns
-o.gopher:	InetInc:sys.h.time
-o.gopher:	InetInc:sys.h.time
-o.gopher:	h.socklib
-o.gopher:	InetInc:sys.h.types
-o.gopher:	InetInc:sys.h.socket
-o.gopher:	InetInc:sys.h.stat
-o.gopher:	InetInc:sys.h.time
-o.gopher:	InetInc:sys.h.uio
-o.gopher:	C:h.kernel
-o.gopher:	h.status
-o.gopher:	h.gopherpub
-o.gopher:	h.pads
-o.gopher:	h.gopher
-o.gopher:	h.files
