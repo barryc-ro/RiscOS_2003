@@ -219,6 +219,9 @@ ZeroPage            * &00000000
  [ HAL
 ; Sort out 26/32 bit versions
 SVCStackSize        * 32*1024
+IRQStackSize        *  8*1024
+ABTStackSize        *  8*1024
+UNDStackSize        *  8*1024
 
 RMAAddress          * &80000000 ; temporary - run time allocate
 ScreenEndAdr        * &A0000000 ; temporary - run time allocate
@@ -226,10 +229,12 @@ ScreenMaxSize       * 480*1024
 
 RMAMaxSize          * -1
 
-IO                  * &F0000000
+IO                  * &FA000000 ; works downwards
 HALWorkspace        * &FA000000
 IRQStackAddress     * &FA100000
 SVCStackAddress     * &FA200000
+ABTStackAddress     * &FA300000
+UNDStackAddress     * &FA400000
 PhysicalAccess      * &FAE00000
 CursorChunkAddress  * &FAFF0000
 L2PT                * &FB000000
@@ -238,6 +243,10 @@ SysHeapChunkAddress * &FB404000
 SysHeapAddress      * SysHeapChunkAddress
 SysHeapMaxSize      * &FB800000 - SysHeapAddress
 CAM                 * &FB800000
+
+IRQSTK              * IRQStackAddress + IRQStackSize
+ABTSTK              * ABTStackAddress + ABTStackSize
+UNDSTK              * UNDStackAddress + UNDStackSize
  |
 AplWorkMaxSize      * &01C00000 ; 28M
 RMAAddress          * &02100000
@@ -907,15 +916,21 @@ VDWSSize # 0
 ; *****************************************************************************
 ; Real workspace definition
 
-; locations used during reset only
-                ^       ZeroPage+&20
-InitKbdHandler  #       4
-InitKbdWs       #       16
-InitUsedStart   #       4
-InitUsedEnd     #       4
-InitClearRamWs  #       5*4
+; locations used during reset only. Not cleared by ClearPhysRAM, but
+; cleared later (just before DEFHAN).
+
+                ^       ZeroPage+&80    ; steer clear of FIQ code
+InitKbdHandler  #       4               ; pointer to IRQ handler (LDR PC'ed from IRQ HW vector)
+InitKbdWs       #       16              ; workspace for IRQ handler
+InitUsedStart   #       4               ; start of used pages (L2PT etc) not to be cleared
+InitUsedEnd     #       4               ; end of used pages
+InitUsedBlock   #       4               ; can't remember
+InitHALFlags    #       4               ; flags passed into OS_Start
+InitClearRamWs  #       10*4
                 AlignSpace 32           ; because we clear 32 at a time
 InitWsEnd       #       0
+
+        ASSERT  InitKbdHandler >= EndFiq - MOSROMVecs
 
 ; Basic kernel space - defined locations for external modules
 
@@ -1065,9 +1080,11 @@ LCD_Inverted    #       1       ; Added to support LCD palette inversion. 0=norm
                 ]
  [ HAL
                 AlignSpace
-HAL_EntryTable  #       4
+HAL_Descriptor  #       4
+HAL_Workspace   #       4
 HAL_WsSize      #       4
-ICache_Info     #       0
+
+ICache_Info     #       4
 ICache_NSets    #       4
 ICache_Size     #       4
 ICache_LineLen  #       1
@@ -1083,27 +1100,20 @@ DCache_LineLen  #       1
 DCache_Associativity #   1
  ]
 
+IOSystemType    #       1       ; 0 => old I/O subsystem, 1 => IOEB+82C710 system, 2..255 => ?
+
  [ StrongARM
 ProcessorType   #       1       ; Processor type (handles 600 series onwards)
-ProcessorFlags  #       1       ; Processor flags (IMB, Arch4 etc)
+                AlignSpace
+ProcessorFlags  #       4       ; Processor flags (IMB, Arch4 etc)
  ! 0, "ProcessorType  at  ":CC::STR:(ProcessorType)
  ! 0, "ProcessorFlags at  ":CC::STR:(ProcessorFlags)
  ]
-
-IOSystemType    #       1       ; 0 => old I/O subsystem, 1 => IOEB+82C710 system, 2..255 => ?
 
                 AlignSpace 32   ; skipped bit must end on 32-byte boundary (due to speedup)
 SkippedTablesEnd #      0
 
 
-
-AppSpaceDANode  #       DANode_NodeSize ; Dummy area node for application space (not on list)
-FreePoolDANode  #       DANode_NodeSize ; Area node for free pool
-SysHeapDANode   #       DANode_NodeSize ; Area node for system heap
-CDASemaphore    #       4               ; Semaphore for OS_ChangeDynamicArea - non-zero => routine threaded
-MMUControlSoftCopy #    4               ; Soft copy of ARM600/700 control register
-
-AplWorkSize * AppSpaceDANode + DANode_Size
 
 ProcVec_Start           #       0       ; Start of processor vector table
 ProcVec_Branch0         #       4       ; Branch through zero
@@ -1117,6 +1127,8 @@ ProcVec_End             #       0
 
 ProcVecPreVeneersSize   *       4*4     ; Space for preveneers for loading handler addresses from 0 page.
 ProcVecPreVeneers       #       ProcVecPreVeneersSize
+
+        ! 0, "Free space before DebuggerSpace = ":CC::STR:(&300-@)
 
         ASSERT  @ <= &300
                         #       (&300-@)
@@ -1136,6 +1148,14 @@ NVRamWriteSize  #       1               ; Size of writable region (256byte units
 
 
                 AlignSpace
+
+AppSpaceDANode  #       DANode_NodeSize ; Dummy area node for application space (not on list)
+FreePoolDANode  #       DANode_NodeSize ; Area node for free pool
+SysHeapDANode   #       DANode_NodeSize ; Area node for system heap
+CDASemaphore    #       4               ; Semaphore for OS_ChangeDynamicArea - non-zero => routine threaded
+MMUControlSoftCopy #    4               ; Soft copy of ARM600/700 control register
+
+AplWorkSize * AppSpaceDANode + DANode_Size
 
 EnvString         #     256
 
@@ -1161,7 +1181,7 @@ MaxCamEntry     #       4       ; maximum index into the cam map, ie
 
 RAMLIMIT        #       4
 
-                #       4       ; dummy slot where AplWorkSize used to be
+IOAllocPtr      #       4
 
 HiServ_ws       #       4
 HiServ          #       4
@@ -1639,9 +1659,11 @@ DefaultIRQ1V            |#|     DefIRQ1Vspace
  [ @-7*4 :AND: 15 <> 0
                         |#|     (@-7*4):AND:15
  ]
+ [ :LNOT: HAL32
 IRQSTK                  #       0       ; Overflow will give abort
  [ AssemblingArthur
  ! 0, "IRQ stack size ":CC::STR:(IRQSTK-CursorChunkAddress)
+ ]
  ]
 
  ASSERT @ > ( CursorChunkAddress + &1000 ) ; Check minimum stack

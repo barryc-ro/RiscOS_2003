@@ -1,24 +1,16 @@
-        GBLL    CacheOff
-CacheOff SETL {TRUE}
 
-; Sets $reg and sb up ready for CallHAL. $zero, if supplied, points to zero page (saves an instruction)
+; Set sb up ready for CallHAL.
         MACRO
-        AddressHAL $reg, $zero
- [ "$zero" = ""
-        MOV     $reg, #ZeroPage
-        LDR     $reg, [$reg, #HAL_Entries]
- |
-        LDR     $reg, [$zero, #HAL_Entries]
- ]
-        LDR     sb, =HAL_Workspace
+        AddressHAL
+        LDR     sb, =ZeroPage
+        LDR     sb, [sb, #HAL_Workspace]
         MEND
 
-; Calls the HAL. $rout is the routine, $hal is the register set up by AddressHAL.
+; Calls the HAL. $rout is the routine. sb must have been set up by AddressHAL
         MACRO
-        CallHAL $rout, $hal
-        LDR     ip, [$hal, #$rout * 4]
+        CallHAL $rout
         MOV     lr, pc
-        ADD     pc, $hal, ip
+        LDR     pc, [sb, #-(EntryNo_$rout+1) * 4]
         MEND
 
 a1      RN      0
@@ -35,24 +27,6 @@ sb      RN      9
 v7      RN      10
 v8      RN      11
 
-; Layouts of HAL and image headers
-
-                        ^       0
-HALDesc_Flags           #       4
-HALDesc_Start           #       4
-HALDesc_Size            #       4
-HALDesc_EntryTable      #       4
-HALDesc_Entries         #       4
-HALDesc_WorkspaceSize   #       4
-
-                        ^       0
-ImgDesc_MagicWord       #       4
-ImgDesc_Flags           #       4
-ImgDesc_Address         #       4
-ImgDesc_Size            #       4
-ImgDesc_EntryTable      #       4
-ImgDesc_Entries         #       4
-
 
 ; Fixed page allocation is as follows
 
@@ -61,7 +35,6 @@ DRAMOffset_FirstFixed   #       0
 DRAMOffset_ScratchSpace #       16*1024
 DRAMOffset_PageZero     #       16*1024
 DRAMOffset_L1PT         #       16*1024         ; L1PT must be 16K-aligned
-DRAMOffset_CAM          #       0
 DRAMOffset_LastFixed    #       0
 
 ARMv3   *       0
@@ -387,7 +360,7 @@ RISCOS_Start
         BNE     %BT60
 
         ADD     v1, a3, #DRAMOffset_PageZero - DRAMOffset_L1PT
-        ADD     v2, a3, #DRAMOffset_CAM - DRAMOffset_L1PT
+        ADD     v2, a3, #DRAMOffset_LastFixed - DRAMOffset_L1PT
         STR     a2, [v1, #RAMLIMIT]                     ; remember the RAM size
         MOV     lr, a2, LSR #12
         SUB     lr, lr, #1
@@ -407,31 +380,23 @@ RISCOS_Start
 ; v2 -> next address to allocate in v1 (may point at end of v1)
 ; v3 -> L1PT (or 0 if MMU on - not yet)
 
-; Allocate the CAM
-
-        MOV     a3, lr
-        LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
-        LDR     a1, =CAM
-        BL      Init_MapInRAM
-
 ; Allocate workspace for the HAL
 
-        LDR     lr, [sp, #2*4]                          ; recover pushed HAL header
+        ADD     a4, v3, #DRAMOffset_PageZero - DRAMOffset_L1PT
+        LDR     a3, [sp, #8]                            ; recover pushed HAL header
+        LDR     a1, =HALWorkspace
         LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
-        LDR     lr, [lr, #HALDesc_WorkspaceSize]
+        LDR     lr, [a3, #HALDesc_Workspace]            ; their workspace
+        LDR     ip, [a3, #HALDesc_NumEntries]           ; plus 1 word per entry
+        ADD     lr, lr, ip, LSL #2
         MOV     a3, lr, LSR #12                         ; round workspace up to whole
         MOV     a3, a3, LSL #12                         ; number of pages
         CMP     a3, lr
         ADDNE   a3, a3, #&1000
-        STR     a3, [a1, #HAL_WsSize]
-        LDR     a1, =HALWorkspace
+        STR     a3, [a4, #HAL_WsSize]                   ; Make a note of allocated space
+        ADD     ip, a1, ip, LSL #2                      ; Their workspace starts
+        STR     ip, [a4, #HAL_Workspace]                ; after our table of entries
         BL      Init_MapInRAM
-
-        ASSERT  ZeroPage = 0
-        LDR     a1, =HALWorkspace
-        MOV     a2, #0
-        LDR     a3, [a2, #HAL_WsSize]
-        BL      memset
 
 ; Bootstrap time. We want to get the MMU on ASAP. We also don't want to have to
 ; clear up too much mess later. So what we'll do is map in the three fixed areas
@@ -475,7 +440,7 @@ RISCOS_Start
         ADD     v6, v6, v7                      ; (v6,v8)=(start,end) of HAL
         ADD     v8, v6, lr
 
-        LDR     v7, [v5, #ImgDesc_Size]
+        LDR     v7, [v5, #OSHdr_ImageSize]
         ADD     v7, v5, v7                      ; (v5,v7)=(start,end) of RISC OS
 
         TEQ     v8, v5                          ; check contiguity (as in a ROM image)
@@ -498,8 +463,8 @@ RISCOS_Start
         B       %FT75
 
 70
-        ; HAL is separate. Map it in at the start of IO space
-        LDR     a2, =IO
+        ; HAL is separate. (We should cope with larger images)
+        LDR     a2, =ROM
         MOV     a1, v6
         SUB     ip, a2, a1                      ; change physical address passed in
         LDR     a3, [sp, #8]                    ; into logical address
@@ -523,6 +488,7 @@ RISCOS_Start
         ; We've now allocated all the pages we're going to before the MMU comes on.
         ; Note the end address (for RAM clear)
         ADD     a1, v3, #DRAMOffset_PageZero - DRAMOffset_L1PT
+        STR     v1, [a1, #InitUsedBlock]
         STR     v2, [a1, #InitUsedEnd]
 
         ; Fill in some initial processor vectors. These will be used during ARM
@@ -650,6 +616,11 @@ MMUon_nol1ptoverlap
         SUB     v1, v1, lr
         ADD     v1, v1, a1                              ; turn v1 from LogAddr to PhysAddr
 
+; Store the logical address of the HAL descriptor
+        LDR     a1, =ZeroPage
+        LDR     a2, [sp, #8]
+        STR     a2, [a1, #HAL_Descriptor]
+
         MOV     v3, #0                                  ; "MMU is on" signal
 
         BL      ARM_Analyse
@@ -657,14 +628,108 @@ MMUon_nol1ptoverlap
         MOV     a1, #L1_Fault
         BL      RISCOS_ReleasePhysicalAddress
 
-        BL      ConstructCAMfromPageTables
-
+        ASSERT  ZeroPage = 0
         LDR     a1, =HALWorkspace
+        MOV     a2, #0
+        LDR     a3, [a2, #HAL_WsSize]
+        BL      memset
 
+        LDR     a1, =IO
+        MOV     a2, #ZeroPage
+        STR     a1, [a2, #IOAllocPtr]
 
+        BL      SetUpHALEntryTable
+
+; Initialise the HAL
+        LDR     a1, =RISCOS_Header
+        AddressHAL
+        CallHAL HAL_Init
+
+; Start timer zero, at 100 ticks per second
+        MOV     a1, #0
+        CallHAL HAL_TimerGranularity
+
+        MOV     a2, a1
+        MOV     a1, #100
+        BL      __rt_udiv
+
+        MOV     a2, a1
+        MOV     a1, #0
+        CallHAL HAL_TimerSetPeriod
+
+; Remember some stuff that's about to get zapped
+        LDR     v8, =ZeroPage
+        LDR     v5, [v8, #RAMLIMIT]
+        LDR     v7, [v8, #MaxCamEntry]
+
+; Clear the memory.
         BL      ClearPhysRAM
 
-        BKPT    2
+; Put it back
+        STR     v5, [v8, #RAMLIMIT]
+        STR     v7, [v8, #MaxCamEntry]
+
+
+; Allocate the CAM
+        LDR     a3, [v8, #SoftCamMapSize]
+        LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
+        LDR     a1, =CAM
+        BL      Init_MapInRAM
+
+; Allocate the supervisor stack
+        LDR     a1, =SVCStackAddress
+        LDR     a2, =(AP_Read * L2_APMult) + L2_C + L2_B
+        LDR     a3, =SVCStackSize
+        BL      Init_MapInRAM
+
+ [ HAL32
+; Allocate the interrupt stack
+        LDR     a1, =IRQStackAddress
+        LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
+        LDR     a3, =IRQStackSize
+        BL      Init_MapInRAM
+ ]
+
+; Allocate the abort stack
+        LDR     a1, =ABTStackAddress
+        LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
+        LDR     a3, =ABTStackSize
+        BL      Init_MapInRAM
+
+; Allocate the undefined stack
+        LDR     a1, =UNDStackAddress
+        LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
+        LDR     a3, =UNDStackSize
+        BL      Init_MapInRAM
+
+; Allocate the system heap
+        LDR     a1, =SysHeapAddress
+        LDR     a2, =(AP_Full * L2_APMult) + L2_C + L2_B
+        LDR     a3, =32*1024
+        BL      Init_MapInRAM
+
+; Allocate the cursor/system/sound block
+        LDR     a1, =CursorChunkAddress
+        LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
+        LDR     a3, =32*1024
+        BL      Init_MapInRAM
+
+
+        MSR     CPSR_c, #F32_bit+I32_bit+IRQ32_mode
+        LDR     sp, =IRQSTK
+        MSR     CPSR_c, #F32_bit+I32_bit+ABT32_mode
+        LDR     sp, =ABTSTK
+        MSR     CPSR_c, #F32_bit+I32_bit+UND32_mode
+        LDR     sp, =UNDSTK
+        MSR     CPSR_c, #F32_bit+I32_bit+SVC2632
+        LDR     sp, =SVCSTK
+
+        BL      ConstructCAMfromPageTables
+
+        MOV     a1, #4096
+        STR     a1, [v8, #Page_Size]
+
+        B       Continue_after_HALInit
 
         LTORG
 
@@ -786,19 +851,17 @@ ConstructCAMfromPageTables
 ; On exit:
 ;    a1 -> next free page
 ;    v1, v2 updated
-;    ip corrupt (a2-a4 preserved)
 ;
 ; No out of memory check...
 
 Init_ClaimPhysicalPage
-        Push    "lr"
         MOV     a1, v2
-        LDMIA   v1, {ip, lr}
-        ADD     ip, ip, lr                      ; ip = end of this bank
-        CMP     v2, ip                          ; advance v2 to next bank if
+        LDMIA   v1, {a2, a3}
+        ADD     a2, a2, a3                      ; ip = end of this bank
+        CMP     v2, a2                          ; advance v2 to next bank if
         LDRHS   a1, [v1, #8]!                   ; this bank is fully used
         ADD     v2, a1, #4096
-        Pull    "pc"
+        MOV     pc, lr
 
 ; Allocate and map in some RAM.
 ;
@@ -1041,17 +1104,16 @@ AllocateL2PT
         ORR     a3, a1, #L1_Page + L1_U
   ]
         AND     lr, v8, #3
-        ORR     v5, a3, lr, LSL #10
-        STR     a3, [v6, v8, LSL #2]
+        ORR     a3, a3, lr, LSL #10
+        STR     a3, [v6, v8, LSL #2]            ; fill in the L1PT
 
-        TEQ     v3, #0                          ; MMU on?
-        MOVEQ   a1, a1                          ; then point at logical address
-        MOVNE   a1, v4                          ; else point at physical address
-        MOV     a2, #0
-        MOV     a3, #4*1024
-        BL      memset                          ; zero out 4K of L2PT
+        TEQ     v3, #0                          ; MMU off?
+        MOVNE   a1, v4                          ; if so, zero out the L2PT
+        MOVNE   a2, #0                          ; (if it's on then it will already
+        MOVNE   a3, #4*1024                     ; be clear from ClearPhysRAM, and
+        BLNE    memset                          ; it's not mapped in yet anyway)
 
-        SUB     a1, v4, #4*1024                 ; Map in the L2PT page itself
+        MOV     a1, v4                          ; Map in the L2PT page itself
         LDR     a2, =L2PT                       ; (will recurse...)
         ADD     a2, a2, v8, LSL #10
         BIC     a2, a2, #&C00
@@ -1145,6 +1207,10 @@ FindARMloop
         ADD     a2, v6, #DCache_Info
         BL      EvaluateCache
 
+        AND     a1, v2, #CT_ctype_mask
+        MOV     a1, a1, LSR #CT_ctype_pos
+        STRB    a1, [v6, #Cache_Type]
+
         MOV     v5, #0
 
         ; Test abort timing (base restored or base updated)
@@ -1174,12 +1240,9 @@ FindARMloop
         LDR     a1, [a1]                        ; If this aborts a1 will be left unchanged
         TEQ     a1, #0
         ORREQ   v5, v5, #CPUFlag_VectorReadException
+35      STR     v5, [v6, #ProcessorFlags]
 
-
-
-35
-
-30      Pull    "v1,v2,v6,pc"
+30      Pull    "v1,v2,v5,v6,pc"
 
 
 ; This routine works out the values LINELEN, ASSOCIATIVITY, NSETS and CACHE_SIZE defined in section
@@ -1315,7 +1378,7 @@ ClearPhysRAM ROUT
 
 ;now let us do the clear
         MOV     r0,#ZeroPage+InitClearRamWs             ;we can preserve r7-r9,r13 at logical address 52..67
-        STMIA   r0,{r7-r9,r13,lr}
+        STMIA   r0,{r4-r11,r13,lr}
         MOV     r8, #0
         MOV     r9, #0
         MOV     r13,#0
@@ -1339,7 +1402,7 @@ ClearPhysRAM ROUT
         CMP     r0, r11
         BHS     %FT18
 
-        BKPT    0
+        ;BKPT    0
 
         LDR     r1, [r8, #InitUsedEnd]
         TEQ     r0, r10                                 ; if at start of block, easy
@@ -1408,16 +1471,16 @@ ClearPhysRAM ROUT
         BNE     %BT10
 
 50      MOV     r1, #0
-        MOV     r4, #ZeroPage+InitClearRamWs
-        LDMIA   r4, {r7-r9,r13,r14}                     ;restore
+        MOV     r0, #ZeroPage+InitClearRamWs
+        LDMIA   r0, {r4-r11,r13,r14}                    ;restore
 
-        MOV     r4, #ZeroPage+InitUsedStart             ;clear our speed up workspace
+        MOV     r0, #ZeroPage+InitUsedStart             ;clear our speed up workspace
         ASSERT  InitUsedStart < InitUsedEnd
         ASSERT  InitUsedEnd < InitClearRamWs
         GBLA    finalclear
 finalclear      SETA InitUsedStart
         WHILE   finalclear < InitWsEnd
-        STMIA   r4!,{r1-r3,r12}
+        STMIA   r0!,{r1-r3,r12}
 finalclear      SETA finalclear + 16
         WEND
 
@@ -1468,48 +1531,6 @@ RamSkipTable
         EndSkipTables
 
 
-        ROUT
-memset
-        TEQ     a3, #0                                  ; return immediately if zero bytes
-        MOVEQ   pc, lr
-        TST     a1, #3                                  ; check for unaligned start
-        BNE     %FT80
-05      SUBS    a3, a3, #32                             ; if at least 32, do 32 at a time
-        BLO     %FT50
-
-        Push    "v1-v5"
-        AND     a2, a2, #&FF
-        ORR     a2, a2, a2, LSL #8
-        ORR     a2, a2, a2, LSL #16
-        MOV     a4, a2
-        MOV     v1, a2
-        MOV     v2, a2
-        MOV     v3, a2
-        MOV     v4, a2
-        MOV     v5, a2
-        MOV     ip, a2
-10      STMIA   a1!, {a2,a4,v1,v2,v3,v4,v5,ip}
-        SUBS    a3, a3, #32
-        BHS     %BT10
-        Pull    "v1-v5"
-
-50      ADDS    a3, a3, #32-4                           ; if at least 4, do 4 at a time
-        BMI     %FT70
-60      STR     a2, [a1], #4
-        SUBS    a3, a3, #4
-        BPL     %BT60
-
-70      ADDS    a3, a3, #4
-        MOVEQ   pc, lr
-
-80      STRB    a2, [a1], #1                            ; byte at a time until finished or
-        SUBS    a3, a3, #1                              ; aligned (if at end, will finish)
-        MOVEQ   pc, lr
-        TST     a1, #3
-        BNE     %BT80
-        B       %BT05
-
-
 InitProcVecs
         BKPT    &C000                                   ; Reset
         BKPT    &C004                                   ; Undefined Instruction
@@ -1522,6 +1543,61 @@ InitProcVecs
 InitProcVec_FIQ
         DCD     0
 InitProcVecsEnd
+
+RISCOS_MapInIO
+        Entry   "v1-v4"
+        MOV     a4, a3
+        AND     a3, a1, #L2_C
+        ORR     a3, a3, #AP_None * L2_APMult
+        MOV     a1, a2
+        Push    "a1,a3,a4"
+        BL      FindIOVirtualAddress
+        MOV     a2, a1
+        MOV     v4, a1
+        Pull    "a1,a3,a4"
+        MOV     ip, #ZeroPage
+        LDR     v1, [ip, #InitUsedBlock]
+        LDR     v2, [ip, #InitUsedEnd]
+        MOV     v3, #0
+        BL      Init_MapIn
+        MOV     a1, v4
+        EXIT
+
+; a1 = Physical address
+; a3 = flags
+; a4 = size
+FindIOVirtualAddress
+        MOV     a2, a4, LSR #12
+        TEQ     a4, a2, LSL #12
+        ADDNE   a2, a2, #1
+        MOV     a4, a2, LSL #12                         ; a4 = size rounded up
+
+        ORR     a2, a1, a4
+        MOVS    ip, a2, LSL #12                         ; EQ if megabyte aligned
+
+        MOV     ip, #ZeroPage
+        LDR     a3, [ip, #IOAllocPtr]
+        MOVEQ   a3, a3, LSR #20
+        MOVEQ   a3, a3, LSL #20
+        SUB     a1, a3, a4
+        STR     a1, [ip, #IOAllocPtr]
+        MOV     pc, lr
+
+
+SetUpHALEntryTable ROUT
+        LDR     a1, =ZeroPage
+        LDR     a2, [a1, #HAL_Descriptor]
+        LDR     a3, [a1, #HAL_Workspace]
+        LDR     a4, [a2, #HALDesc_Entries]
+        LDR     ip, [a2, #HALDesc_NumEntries]
+        ADD     a4, a2, a4                              ; a4 -> entry table
+        MOV     a2, a4                                  ; a2 -> entry table (increments)
+10      LDR     a1, [a2], #4
+        SUBS    ip, ip, #1                              ; decrement counter
+        ADD     a1, a4, a1                              ; convert offset to absolute
+        STR     a1, [a3, #-4]!                          ; store backwards below HAL workspace
+        BHI     %BT10
+        MOV     pc, lr
 
         END
 

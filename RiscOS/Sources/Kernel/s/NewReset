@@ -128,8 +128,8 @@ NotScreen
 ; r10 = page size
 ; r11 = ap + CB
 
+        LDR     r4, =FreePoolDANode
         MOV     r6, r11                         ; r6 = ap + CB
-        MOV     r4, #FreePoolDANode
         LDR     r7, [r4, #DANode_Base]
         LDR     r8, [r4, #DANode_Size]
         ADD     r7, r7, r8                      ; r7 -> end of free pool +1
@@ -519,6 +519,8 @@ vectorpoke_notSA_1
         BL      Processor_Type          ; Determines the processor type & stores it in page 0.
  ]
 
+Continue_after_HALInit
+
 ;StrongARM: OK, there is quite a bit of code poking below, to various addresses. We'll
 ;           defer IMB consideration till the poking's done, then do a full IMB (full
 ;           data cache clean). This avoids various little IMB's and removes chance of leaving
@@ -562,7 +564,6 @@ vectorpoke_notSA_1
         ORR     r0, r0, #SVC26_mode
         MSR     CPSR_c, r0
  ]
-
 
 ; Ensure any CMOS operation aborted
 
@@ -666,26 +667,38 @@ afterpokingaround_notSA
 ; Initialise CAO ptr to none.
 
         MOV     R0, #0
-        MOV     R1, #32*1024*1024       ; nothing will be here!!
+        LDR     R1, =DuffEntry          ; nothing will be here!!
         STR     R1, [R0, #Curr_Active_Object]
 
 KeyWait * 200000                 ; 1/5 sec wait (in microseconds)
+ [ HAL
+us      * 1
+ |
+us      * 2
+ ]
 
     [ KeyWait <> 0
 ; Check for keyboard there every 1/5 sec. but give up after 2 secs.
         MOV     r2, #IOC
         MOV     r3, #10                 ; Check for keyboard 10 times (2 secs max).
         MOV     r4, #InitKbdWs
+      [ HAL
+        AddressHAL
+      ]
 kbdwait
         LDRB    r5, [r4, #KB_There_Flag]
       [ EmulatorSupport
         ARM_on_emulator r0
-        MOVEQ   r0, #2
-        LDRNE   r0, =KeyWait*2          ; Wait 1/5 second (give keys down a chance to come in).
+        MOVEQ   r0, #us
+        LDRNE   r0, =KeyWait*us         ; Wait 1/5 second (give keys down a chance to come in).
       |
-        LDR     r0, =KeyWait*2          ; Wait 1/5 second (give keys down a chance to come in).
+        LDR     r0, =KeyWait*us         ; Wait 1/5 second (give keys down a chance to come in).
       ]
+      [ HAL
+        CallHAL HAL_CounterDelay
+      |
         BL      DoMicroDelay
+      ]
         TEQ     r5, #0                  ; If keyboard was there 1/5 second ago then
         BNE     kbdthere                ;   continue reset
         SUBS    r3, r3, #1              ; else wait a maximum of 2 seconds.
@@ -774,12 +787,22 @@ checkboot
 
 ; IF power-on bit set in IOC AND R/T/Del/Copy pressed THEN reset CMOS RAM
 ; note that memory cleared if POR, so key info has had plenty of time!
+ [ HAL
+        MOV     R0, #InitHALFlags
+        LDR     R1, [R0]
+        TST     R1, #OSStartFlag_POR
+        BEQ     no_cmos_reset
+        TST     R1, #OSStartFlag_NoCMOSReset
+        BNE     no_cmos_reset
+        TST     R1, #OSStartFlag_CMOSReset
+        BNE     cmos_reset
+ |
         MOV     R0, #IOC
         LDRB    R1, [R0, #IOCIRQSTAA]
         ANDS    R1, R1, #por_bit
         BEQ     no_cmos_reset
 
- [ CheckProtectionLink
+ [ CheckProtectionLink :LAND: :LNOT: HAL
         LDR     r0, =IOMD_MonitorType
 
 ; on Issue A's the protection bit is only weakly pulled up,
@@ -803,6 +826,8 @@ checkboot
   ]
  ]
 
+ ] ; HAL
+
         MOV     R0, #InitKbdWs
         LDR     R7, [R0, #R_Down_Flag]
         CMP     R7, #0
@@ -821,7 +846,11 @@ checkboot
 ; the sync, that would probably be a better algorithm.
 ; **************************************************************************
 
+ [ HAL
+        ! 0, "Sort out SetBorder for CMOS reset"
+ |
      SetBorder  R0, R1, 15, 0, 0        ; flash the border as warning!
+ ]
 
         MOVS    R3, R7, LSR #16         ; full reset or just system?
         MOVNE   R3, #-1                 ; Del or Copy does all RAM
@@ -829,8 +858,8 @@ checkboot
     [ ChecksumCMOS
         BL      ValChecksum             ; unless the CMOS ram's corrupt ..
         MOVNE   R3, #-1                 ; .. then blast it anyway.
- [ STB
 cmos_reset
+ [ STB
         ADD     sp, sp, #4              ; junk CannotReset flag from stack
  ]
         MOVNE   R0, #0                  ; even the econet station number
@@ -911,6 +940,10 @@ pounds_bleeding_Caspell
         MOVEQ   R1, #MonitorTypeAuto :OR: Sync_Separate ; if T or Copy
         BL      Write
 
+ [ HAL
+        ! 0, "Sort out 16-bit sound + PS/2 mouse CMOS reset selection"
+ |
+
  [ MorrisSupport
         MOV     R8, #IOMD_Base
 	LDRB	r0, [r8, #IOMD_ID0]
@@ -931,7 +964,7 @@ pounds_bleeding_Caspell
         B       Config16BitSound
   ]
 dont_program_mousetype
- ]
+ ] ; MorrisSupport
 
  [ Select16BitSound
         LDR     r0, =IOMD_MonitorType
@@ -961,6 +994,7 @@ Config16BitSound
 
 ConfigSoundDone
  ]
+ ] ; HAL
 
         ADR     R8, DefaultCMOSTable
 50
@@ -1693,6 +1727,8 @@ CopyDefaultIRQ1V
         LDR     R1, RealIRQHandler
         STR     R1, [R0, #&18]
 
+
+
  [ StrongARM
    ;for StrongARM, we need to do an IMB type thing for modifying code in vector area, and
    ;for copying irq handler code
@@ -1723,10 +1759,17 @@ furtherpoke_notSA
 
         MSR     CPSR_c, r2
  ]
+
         MOV     R1, #&100
         STR     R1, [R0, #RCLimit]
         STR     R0, [R0, #ReturnCode]
         STR     R0, [R0, #TickNodeChain]
+
+; clear the keyboard workspace (tidy!)
+        MOV     R0, #InitKbdHandler
+        MOV     R1, #0
+        MOV     R2, #InitWsEnd - InitKbdHandler
+        BL      memset
 
 ;now put in error handler and escape handler
         BL      DEFHAN
