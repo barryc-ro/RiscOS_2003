@@ -184,9 +184,9 @@ ${WIMPLIB}:
 ${RESF}: @.Resources.${LOCALE}.Messages
 	resgen messages_file ${RESF} Resources.${LOCALE}.Messages Resources.${COMPONENT}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${RESF}
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${RESF} ${CLIB}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${RESF}
+        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${RESF} ${CLIB}
         ${MSQZ} $@
         Access $@ RW/R
 

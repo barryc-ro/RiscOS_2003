@@ -137,9 +137,9 @@ ${RESF}: @.Resources.${LOCALE}.Res
 	resgen res_file ${RESF} Resources.${LOCALE}.Res Resources.${COMPONENT}.Res
 
 
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF}
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF} ${CLIB}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF}
+        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF} ${CLIB}
         Access $@ RW/R
 
 o.mainRAM: main.c

@@ -129,9 +129,9 @@ rom_link:
 ${RESF}: @.Resources.${LOCALE}.Messages
 	resgen messages_file ${RESF} Resources.${LOCALE}.Messages Resources.${COMPONENT}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF}
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF}
+        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
         Access $@ RW/R
 
 o.mainRAM: main.c

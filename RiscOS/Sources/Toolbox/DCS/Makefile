@@ -138,9 +138,9 @@ ${QUITRESF}: @.Resources.${LOCALE}.Quit.Res
 ${QUITMESS}: @.Resources.${LOCALE}.Quit.Messages
 	resgen quitmess_file ${QUITMESS} Resources.${LOCALE}.Quit.Messages Resources.Quit.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${ALLRESOURCES} 
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${ALLRESOURCES} ${CLIB}
 	${mkdir} rm
-        ${TLD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${ALLRESOURCES}
+        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${ALLRESOURCES} ${CLIB}
         Access $@ RW/R
 
 o.mainRAM: main.c
