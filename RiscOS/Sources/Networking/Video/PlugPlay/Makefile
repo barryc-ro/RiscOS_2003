@@ -9,17 +9,17 @@
 # Date		Name	Description
 # ====		====	===========
 # 03-Apr-2000	ADH	Created from Browse Makefile.
+# 28-Apr-2000	ADH	Significant alterations and extensions to support
+#			ROM and RAM module builds, and applications.
 
 # -----------------------------------------------------------------------------
 # Program specific options
 #
 
-# These are for builds where SYSTEM is not defined on the AMU command
-# line, e.g. ROM builds
-
-APP		= !PlugPlay
-MODULE		= rm.!PlugPlay
-ROM_MODULE	= aof.PlugPlay
+APP		= !${COMPONENT}
+MODULE		= rm.!${COMPONENT}
+ROM_MODULE	= aof.${COMPONENT}
+DIRS		= o._dirs_
 
 # Where are the resources?
 
@@ -56,7 +56,8 @@ WIPE		= -wipe
 AWK		= awk
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
-CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -Wpc
+AFLAGSRAMZ	= ${AFLAGS} -PD "REMOVE_RAMLOAD_CHECK SETL {TRUE}" -PD "UsePathForHelpMessages SETL {TRUE}"
+CFLAGS		= ${THROWBACK} -depend !Depend -ffa -Wpc ${INCLUDES}
 CPFLAGS		= ~cfr~v
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
@@ -98,19 +99,7 @@ INETLIB		= TCPIPLibs:o.inetlib
 SOCKLIB		= TCPIPLibs:o.socklib
 DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglib
 
-# ROM build libraries
-
-LIBSZ = \
- ${URILIB} \
- ${FLEXLIB}zm \
- ${EVENTLIB}m \
- ${TOOLBOXLIB} \
- ${WIMPLIB} \
- ${RENDERLIB} \
- ${INETLIB}zm \
- ${SOCKLIB}zm
-
-# RAM release build libraries
+# Application build libraries
 
 LIBS = \
  ${CLIB} \
@@ -123,7 +112,7 @@ LIBS = \
  ${INETLIB} \
  ${SOCKLIB}
 
-# RAM debug build libraries
+# Application debug build libraries
 
 LIBSD = \
  ${CLIB} \
@@ -136,6 +125,31 @@ LIBSD = \
  ${DEBUGLIB} \
  ${INETLIB} \
  ${SOCKLIB}
+
+# Module build libraries
+
+LIBSZ = \
+ ${URILIB} \
+ ${FLEXLIB}zm \
+ ${EVENTLIB}m \
+ ${TOOLBOXLIB} \
+ ${WIMPLIB} \
+ ${RENDERLIB} \
+ ${INETLIB}zm \
+ ${SOCKLIB}zm
+
+# Module debug build libraries
+
+LIBSDZ = \
+ ${URILIB} \
+ ${FLEXLIB}zm \
+ ${EVENTLIB}m \
+ ${TOOLBOXLIB} \
+ ${WIMPLIB} \
+ ${RENDERLIB} \
+ ${DEBUGLIB}zm \
+ ${INETLIB}zm \
+ ${SOCKLIB}zm
 
 
 # -----------------------------------------------------------------------------
@@ -160,6 +174,8 @@ FILES = \
 # -----------------------------------------------------------------------------
 # Include files (objects)
 #
+
+# RAM application "PlugPlay"
 
 OBJSPP = \
  opp.Filter		\
@@ -195,6 +211,47 @@ OBJSPPD = \
  o.ROSLib		\
  o.SetPW
 
+# RAM module "PlugPlay"
+
+OBJSPPRZ = \
+ opprz.Filter		\
+ opprz.FromROSLib	\
+ opprz.FullScreen	\
+ opprz.Global		\
+ opprz.Handlers		\
+ opprz.Main		\
+ opprz.ModeInfo		\
+ opprz.Overlay		\
+ opprz.PlugIn		\
+ opprz.Protocols	\
+ opprz.RMA		\
+ opprz.URLutils		\
+ opprz.Utils		\
+ o.FilterHelp		\
+ o.ROSLib		\
+ o.SetPW
+
+OBJSPPRDZ = \
+ opprdz.Filter		\
+ opprdz.FromROSLib	\
+ opprdz.FullScreen	\
+ opprdz.Global		\
+ opprdz.Handlers	\
+ opprdz.Main		\
+ opprdz.ModeInfo	\
+ opprdz.Overlay		\
+ opprdz.PlugIn		\
+ opprdz.Protocols	\
+ opprdz.RMA		\
+ opprdz.URLutils	\
+ opprdz.Utils		\
+ o.FilterHelp		\
+ o.ROSLib		\
+ o.SetPW
+
+# ROM module "PlugPlay"; same as RAM module but has "-DROM"
+# on CC command line
+
 OBJSPPZ = \
  oppz.Filter		\
  oppz.FromROSLib	\
@@ -209,23 +266,7 @@ OBJSPPZ = \
  oppz.RMA		\
  oppz.URLutils		\
  oppz.Utils		\
- o.ROSLib		\
- o.SetPW
-
-OBJSPPDZ = \
- oppdz.Filter		\
- oppdz.FromROSLib	\
- oppdz.FullScreen	\
- oppdz.Global		\
- oppdz.Handlers		\
- oppdz.Main		\
- oppdz.ModeInfo		\
- oppdz.Overlay		\
- oppdz.PlugIn		\
- oppdz.Protocols	\
- oppdz.RMA		\
- oppdz.URLutils		\
- oppdz.Utils		\
+ o.FilterHelp		\
  o.ROSLib		\
  o.SetPW
 
@@ -234,27 +275,32 @@ OBJSPPDZ = \
 # Rule patterns
 #
 
-.SUFFIXES: .o .opp .oppd .oppz .oppdz .s .c
+.SUFFIXES: .o .opp .oppd .oppz .opprz .opprdz .s .c
 
 .c.opp:;	@echo
-		@echo Compiling $<
+		@echo Compiling $< (application)
 		@echo ${PPFLAGS}
-		@${CC} ${CFLAGS} ${PPFLAGS}        -c -o $@ $<
+		@${CC} ${CFLAGS} ${PPFLAGS}        -c -UROM -DAPPLICATION -o $@ $<
 
 .c.oppd:;	@echo
-		@echo Compiling $< (debug)
+		@echo Compiling $< (debug application)
 		@echo ${PPFLAGSD}
-		@${CC} ${CFLAGS} ${PPFLAGSD}       -c -g -o $@ $<
+		@${CC} ${CFLAGS} ${PPFLAGSD}       -c -UROM -DAPPLICATION -g -o $@ $<
 
-.c.oppz:;		@echo
-		@echo Compiling $< (ROM)
+.c.oppz:;	@echo
+		@echo Compiling $< (ROM module)
 		@echo ${PPFLAGSZ}
-		@${CC} ${CFLAGS} ${PPFLAGSZ}       -c -zM -DROM -o $@ $<
+		@${CC} ${CFLAGS} ${PPFLAGSZ}       -c -zM -DROM -UAPPLICATION -o $@ $<
 
-.c.oppdz:;	@echo
-		@echo Compiling $< (ROM debug)
-		@echo ${PPFLAGSDZ}
-		@${CC} ${CFLAGS} ${PPFLAGSDZ}      -c -zM -DROM -o $@ $<
+.c.opprz:;	@echo
+		@echo Compiling $< (RAM module)
+		@echo ${PPFLAGS}
+		@${CC} ${CFLAGS} ${PPFLAGS}        -c -zM -UROM -UAPPLICATION -o $@ $<
+
+.c.opprdz:;	@echo
+		@echo Compiling $< (RAM debug module)
+		@echo ${PPFLAGSD}
+		@${CC} ${CFLAGS} ${PPFLAGSD}       -c -zM -UROM -UAPPLICATION -g -o $@ $<
 
 .s.o:;		@echo
 		@echo Assembling $<
@@ -270,11 +316,16 @@ all: ${FILES}
 	@echo ${COMPONENT}: Application built (RAM)
 
 rom: ${ROM_MODULE}
-	@echo ${COMPONENT}: Module built (ROM)
+	@echo ${COMPONENT}: Module built (ROM module)
+
+ram: ${MODULE}
+	@echo ${COMPONENT}: Module built (RAM module)
+
+ramd: ${MODULE}D
+	@echo ${COMPONENT}: Module built (RAM debug module)
 
 install_common: ${FILES}
 	@echo
-	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
 	-${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
 	-${CP} ${LDIR}.!Sprites23		${INSTDIR}.!Sprites23		${CPFLAGS}n
@@ -288,21 +339,37 @@ install_common: ${FILES}
 	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 
 install: install_common
-	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
-	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
+	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
+	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
+	${CP} ${LDIR}.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
 installd: install_common
-	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
-	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}~n
+	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
+	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
+	${CP} ${LDIR}.!RunD			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
-	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
+	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
+
+install_ram: install_common
+	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
+	${CP} ${LDIR}.RAM.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
+	${CP} ${LDIR}.RAM.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
+	@echo
+	@echo ${COMPONENT}: RAM module installed to ${INSTDIR}
+
+install_ramd: install_common
+	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
+	${CP} ${LDIR}.RAM.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
+	${CP} ${LDIR}.RAM.!RunD			${INSTDIR}.!Run			${CPFLAGS}~n
+	@echo
+	@echo ${COMPONENT}: RAM debug module installed to ${INSTDIR}
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
-	@echo ${COMPONENT}: Module installed (ROM)
+	@echo ${COMPONENT}: ROM Module installed to ${INSTDIR}
 
 resources:
 	${MKDIR} ${RESDIR}
@@ -325,43 +392,50 @@ resources:
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
 clean:
+	${WIPE}	rm		${WFLAGS}
 	${WIPE}	abs		${WFLAGS}
 	${WIPE}	aof		${WFLAGS}
 	${WIPE}	linked		${WFLAGS}
 	${WIPE}	o		${WFLAGS}
+	${WIPE}	oz		${WFLAGS}
 	${WIPE}	opp		${WFLAGS}
 	${WIPE}	oppd		${WFLAGS}
 	${WIPE}	oppz		${WFLAGS}
-	${WIPE}	oppdz		${WFLAGS}
-	${WIPE}	rm		${WFLAGS}
+	${WIPE}	opprz		${WFLAGS}
+	${WIPE}	opprdz		${WFLAGS}
 	${RM}	s.AppName
 	${RM}	s.ModuleWrap
-	${RM}	opp.dirs
+	${RM}	${DIRS}
 	@echo
 	@echo ${COMPONENT}: Cleaned
 
 clean_all: clean
+	@echo
 	${WIPE}	syms		${WFLAGS}
 	${WIPE}	Targets		${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Cleaned all
 
-opp.dirs:
+${DIRS}:
 	@${MKDIR} abs
 	@${MKDIR} aof
 	@${MKDIR} linked
 	@${MKDIR} o
+	@${MKDIR} oz
 	@${MKDIR} opp
 	@${MKDIR} oppd
 	@${MKDIR} oppz
-	@${MKDIR} oppdz
+	@${MKDIR} opprz
+	@${MKDIR} opprdz
 	@${MKDIR} rm
 	@${MKDIR} syms
 	@${MKDIR} Targets
-	@${MKDIR} Targets.PlugPlay
-	@${MKDIR} Targets.PlugPlay.!PlugPlay
-	create opp.dirs
-	stamp  opp.dirs
+	@${MKDIR} Targets.PlugPlayRM
+	@${MKDIR} Targets.PlugPlayRM.!PlugPlay
+	@${MKDIR} Targets.PlugPlayAp
+	@${MKDIR} Targets.PlugPlayAp.!PlugPlay
+	create ${DIRS}
+	stamp  ${DIRS}
 
 
 # -----------------------------------------------------------------------------
@@ -374,7 +448,10 @@ rom_link:
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-oppz.ModuleWrap: s.ModuleWrap s.AppName s.ResFiles
+o.ModuleWrap: s.ModuleWrap s.AppName s.ResFiles
+	${AS} ${AFLAGSRAMZ} s.ModuleWrap $@
+
+oz.ModuleWrap: s.ModuleWrap s.AppName s.ResFiles
 	${AS} ${AFLAGS} s.ModuleWrap $@
 
 s.ModuleWrap: ${WRAPPER}
@@ -389,26 +466,26 @@ s.AppName: ${LDIR}.Messages
 # Static dependencies
 #
 
-abs.!RI_PP: ${OBJSPP} ${LIBS} opp.dirs
+abs.!RI_PP: ${OBJSPP} ${LIBS} ${DIRS}
 	@echo
 	${LD} -s syms.!RI_PP -o $@ ${OBJSPP} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
-abs.!RI_PPD: ${OBJSPPD} ${LIBSD} opp.dirs
+abs.!RI_PPD: ${OBJSPPD} ${LIBSD} ${DIRS}
 	@echo
 	${LD} -debug -s syms.!RI_PPD -o $@ ${OBJSPPD} ${LIBSD}
 
-${MODULE}: oppz.ModuleWrap ${OBJSPPZ} ${LIBSZ} ${CLIB} opp.dirs
+${MODULE}: o.ModuleWrap ${OBJSPPRZ} ${LIBSZ} ${CLIB} ${DIRS}
 	@echo
-	${LD} -s syms.RAMMod -o $@ -module oppz.ModuleWrap ${OBJSPPZ} ${LIBSZ} ${CLIB}
+	${LD} -s syms.RAMMod -o $@ -module o.ModuleWrap ${OBJSPPRZ} ${LIBSZ} ${CLIB}
 
-${ROM_MODULE}: oppz.ModuleWrap ${OBJSPPZ} ${ROMCSTUBS} ${LIBSZ} opp.dirs
+${MODULE}D: o.ModuleWrap ${OBJSPPRDZ} ${LIBSDZ} ${CLIB} ${DIRS}
 	@echo
-	${LD} -s syms.ROMMod -o $@ -aof oppz.ModuleWrap ${OBJSPPZ} ${LIBSZ} ${ROMCSTUBS}
+	${LD} -s syms.ROMDMod -o $@ -module o.ModuleWrap ${OBJSPPRDZ} ${LIBSDZ} ${CLIB}
 
-${MODULE}D: oppdz.ModuleWrap ${OBJSPPDZ} ${LIBSZ} opp.dirs
+${ROM_MODULE}: oz.ModuleWrap ${OBJSPPZ} ${ROMCSTUBS} ${LIBSZ} ${DIRS}
 	@echo
-	${LD} -s syms.ROMDMod -o $@ -module oppz.ModuleWrap ${OBJSPPDZ} ${LIBSZ}
+	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSPPZ} ${LIBSZ} ${ROMCSTUBS}
 
 
 # -----------------------------------------------------------------------------
