@@ -12,6 +12,7 @@
 #include "tboxlibs/toolbox.h"
 #include "tboxlibs/wimplib.h"
 #include "tboxlibs/quit.h"
+#include "tboxlibs/wimp.h"
 
 #include "Email/Mailbox/WimpRegistry.h"
 #include "Email/Mailbox/Account.h"
@@ -45,6 +46,7 @@ _kernel_swi_regs regs;
 _kernel_oserror  *err;
 IdBlock idblock;
 bool appquit = false;
+int ourhandle;
 char *appname, *realname = 0, *emailaddr = 0;
 
 static int *msglist;
@@ -54,7 +56,7 @@ bool AppInit(void)
 
   char *size = 0;
   uint32 i, msgnum = 0;
-  int ourhandle, *regmsglist = 0;
+  int *regmsglist = 0;
   static int ourmessages[] =
   {
     0x4AF80,
@@ -116,7 +118,7 @@ bool AppInit(void)
   {
     /* real name and/or email address missing */
     dprintf(("Eng", "User details missing\n"));
-    state.init.rc = ENG_EBADUSERDETAILS;
+    state.init.rc = ENG_BADUSERDETAILS;
     state.init.substate = precreate;
   }
   else
@@ -148,26 +150,26 @@ bool AppInit(void)
 }
 
 
-void PreShutDown(void)
+void PreShutDown(WimpMessage *msg)
 {
 
   dprintf(("Eng", "Receiving PreQuit massage\n"));
-  /*
-  ** Do anything necessary before quitting,
-  ** e.g. if connected to mail server, disconnect.
-  ** Delete account objects.
-  ** Unlock all files.
-  ** Anything else?
-  */
 
-  if (state.popstatus == acctconnected)
+  if (state.state & PREQUIT)
   {
-    /* disconnect POP account */
+    /* prequit has already been done, we can ignore this time */
   }
 
-  if (state.smtpstatus == acctconnected)
+  else if ((state.popstatus == acctconnected) || (state.smtpstatus == acctconnected))
   {
-    /* disconnect SMTP account */
+    /* object to quit and disconnect from servers if connected */
+    msg->hdr.your_ref = msg->hdr.my_ref;
+    regs.r[0] = 19;
+    regs.r[1] = (int) msg;
+    _kernel_swi(Wimp_SendMessage,&regs,&regs);
+    dprintf(("Eng", "Objecting to shutdown\n"));
+    state.state |= PREQUIT;
+    PreDisconnect();
   }
 
 }
@@ -175,16 +177,48 @@ void PreShutDown(void)
 
 void ShutDown(void)
 {
+  
+  dprintf(("Eng", "Entering ShutDown\n"));
+  if ((state.popstatus == acctconnected) || (state.smtpstatus == acctconnected))
+  {
+    dprintf(("Eng", "Prompting to disconnect servers\n"));
+    ReportError("Please disconnect mailservers first");
+    appquit = false;
+  }
+  
+  else
+  {
+    static char storename[] = "<NCMailStore$Dir>.<NCMail$User>.*";
+    static char attr[] = "wr";
 
-  if (state.popstatus == acctcreated)
-    delete POPaccount;
+    if (state.popstatus == acctcreated)
+    {
+      dprintf(("Eng", "About to delete POP account\n"));
+      delete POPaccount;
+    }
 
-  if (state.smtpstatus == acctcreated)
-    delete SMTPaccount;
+    if (state.smtpstatus == acctcreated)
+    {
+      dprintf(("Eng", "About to delete SMTP account\n"));
+      delete SMTPaccount;
+    }
 
-  /* clean up if necessary */
-  dprintf(("Eng", "Shutting down app\n"));
-  appquit = true;
+    /* Unlock all files in user's store */
+    dprintf(("Eng", "About to unlock files\n"));
+    regs.r[0] = 24;
+    regs.r[1] = (int) storename;
+    regs.r[2] = (int) attr;
+    _kernel_swi(OS_FSControl,&regs,&regs);
+
+    dprintf(("Eng", "Shutting down app\n"));
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_UnRegisterMiscBlock(WimpRegistry::Instance());
+    MemCheck_OutputBlocksInfo();
+#endif
+
+    exit(0);
+  }
 }
 
 
@@ -248,7 +282,7 @@ void CreatePOPAccount(void)
   if (((popuser = GetSysVar("Inet$EmailPOP3User")) == 0) || ((poppassword = GetSysVar("Inet$EmailPOP3Password")) == 0) || ((pophostname = GetSysVar("Inet$EmailPOP3Hostname")) == 0))
   {
     state.init.substate = popacctfailure;
-    state.init.rc = ENG_EBADPOPDETAILS;
+    state.init.rc = ENG_BADPOPDETAILS;
     dprintf(("Eng", "Some POP account details missing\n"));
     return;
   }
@@ -263,7 +297,7 @@ void CreatePOPAccount(void)
   {
     /* error creating POP3 account */
     state.init.substate = popacctfailure;
-    state.init.rc = ENG_ENOPOPACCOUNT;
+    state.init.rc = ENG_NOPOPACCOUNT;
     dprintf(("Eng", "Error creating POP account, rc = %d\n",code));
   }
   else
@@ -287,7 +321,7 @@ void CreateSMTPAccount(void)
   if ((smtphostname = GetSysVar("Inet$EmailSMTPHostname")) == 0)
   {
     state.init.substate = smtpacctfailure;
-    state.init.rc = ENG_EBADSMTPDETAILS;
+    state.init.rc = ENG_BADSMTPDETAILS;
     dprintf(("Eng", "SMTP hostname missing\n"));
     return;
   }
@@ -299,7 +333,7 @@ void CreateSMTPAccount(void)
   {
     /* error creating SMTP account */
     state.init.substate = smtpacctfailure;
-    state.init.rc = ENG_ENOSMTPACCOUNT;
+    state.init.rc = ENG_NOSMTPACCOUNT;
     dprintf(("Eng", "Error creating SMTP account, rc = %d\n",code));
   }
   else

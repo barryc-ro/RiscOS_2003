@@ -28,10 +28,10 @@ extern "C" eng_rcode eng_connect(void)
 {
 
   if (state.connected)
-    return ENG_EALREADYCONNECTED;
+    return ENG_ALREADYCONNECTED;
 
   else if (state.state & CONNECT)
-    return ENG_EALREADYCONNECTING;
+    return ENG_ALREADYCONNECTING;
 
   else if (!(state.state & DISCONNECT))
   {
@@ -40,7 +40,7 @@ extern "C" eng_rcode eng_connect(void)
   }
 
   else
-    return ENG_EBUSY;
+    return ENG_BUSY;
 
 }
 
@@ -53,12 +53,12 @@ extern "C" eng_rcode eng_disconnect(void)
 {
 
   if (!state.connected)
-    return ENG_EALREADYDISCONNECTED;
+    return ENG_ALREADYDISCONNECTED;
 
   else if (state.state & DISCONNECT)
-    return ENG_EALREADYDISCONNECTING;
+    return ENG_ALREADYDISCONNECTING;
 
-  else if (state.state == IDLE)
+  else if ((state.state == IDLE) || (state.state & (PROCESSPOP | PROCESSSMTP)))
   {
     PreDisconnect();
     return ENG_RUNNING;
@@ -72,11 +72,13 @@ extern "C" eng_rcode eng_disconnect(void)
     */
     state.disconnectpending = true;
     if (state.state & SEND)
-      return ENG_ESENDINGMAIL;
+      return ENG_SENDINGMAIL;
     else if (state.state & RETRIEVEMSG)
-      return ENG_EFETCHINGMAIL;
+      return ENG_FETCHINGMESSAGE;
+    else if (state.state & (DOWNLOADHDR | DOWNLOADMSG))
+      return ENG_DOWNLOADINGMAIL;
     else  
-      return ENG_EBUSY;
+      return ENG_WILLDISCONNECTASAP;
   }
 }
 
@@ -103,7 +105,7 @@ extern "C" eng_rcode eng_get_number_of_messages(uint32 *total, uint32 *read, uin
     return ENG_COMPLETED;
   }
   else
-    return ENG_EUNPROCESSED;
+    return ENG_UNPROCESSED;
 
 }
 
@@ -121,10 +123,10 @@ extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
   if (ourmboxin->flags & MBOXPROCESSED)
   {
     *msg = ourmboxin->list;
-    return (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_EMBOXINCOMPLETE : ENG_COMPLETED;
+    return (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED;
   }
   else
-    return ENG_EUNPROCESSED;
+    return ENG_UNPROCESSED;
 
 }
 
@@ -141,15 +143,16 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
 {
 
   if (!(ourmboxin->flags & MBOXPROCESSED))
-    return ENG_EUNPROCESSED;
+    return ENG_UNPROCESSED;
 
-/*   if (state.state != IDLE) */
-/*     return ENG_EBUSY; */
+  if (state.state & (PROCESSPOP | RETRIEVEMSG))
+    return ENG_BUSY;
 
-  if ((state.download.msg = FindDescriptor(msg_id, ourmboxin)) == 0)
-    return ENG_EUNKNOWNID;
+  if ((state.retrieve.msg = FindDescriptor(msg_id, ourmboxin)) == 0)
+    return ENG_UNKNOWNID;
 
-  state.state |= (RETRIEVEMSG + DOWNLOADMSG);
+  dprintf(("Eng", "Message no. %d requested\n",msg_id));
+  state.state |= RETRIEVEMSG;
   callbacklist.getmsgfunc = func;
   callbacklist.getmsghandle = handle;
 
@@ -159,20 +162,25 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
   ** Otherwise user will be asked to confirm connection.
   */
 
-  if ((state.download.msg->flags & DOWNLOADED) && (FileExists(msg_id)))
+  if ((state.retrieve.msg->flags & DOWNLOADED) && (FileExists(msg_id)))
   {
     dprintf(("Eng", "File is already downloaded\n"));
-    state.download.substate = readytoparse;
+    state.retrieve.substate = readytoparse;
+  }
+
+  else if (state.retrieve.msg->flags & DOWNLOADING)
+  {
+    /* message is in process of being downloaded - do something! */
   }
 
   else
   {
     dprintf(("Eng", "Fetching file from server\n"));
-    state.download.msg->flags &= ~DOWNLOADED;
+    state.retrieve.msg->flags &= ~DOWNLOADED;
     if (state.connected)
-      state.download.substate = readytodownload;
+      state.retrieve.substate = readytoretrieve;
     else
-      state.download.substate = reqconnect;
+      state.retrieve.substate = reqconnect;
   }
 
   return ENG_RUNNING;
@@ -191,24 +199,25 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
 extern "C" eng_rcode eng_get_attachment(uint32 msg_id, uint32 ent_id, char *file, void *handle, eng_cbf_getentity func)
 {
 
-  if (state.state == IDLE)
-  {
-    callbacklist.getentfunc = func;
-    callbacklist.getenthandle = handle;
-    callbacklist.getentfile = file;
-    if ((state.retrieve.msg = FindDescriptor(msg_id, ourmboxin)) == 0)
-    {
-      dprintf(("Eng", "Unknown attachment\n"));
-      return ENG_EUNKNOWNENT;
-    }
-    
-    state.retrieve.ent = FindEntity(state.retrieve.msg, ent_id);
-    StartRetrieve();
+  if (!(ourmboxin->flags & MBOXPROCESSED))
+    return ENG_UNPROCESSED;
 
-    return ENG_RUNNING;
+  if (state.state & PROCESSPOP)
+    return ENG_BUSY;
+
+  callbacklist.getentfunc = func;
+  callbacklist.getenthandle = handle;
+  callbacklist.getentfile = file;
+  if ((state.retrieve.msg = FindDescriptor(msg_id, ourmboxin)) == 0)
+  {
+    dprintf(("Eng", "Unknown attachment\n"));
+    return ENG_UNKNOWNENT;
   }
-  else
-    return ENG_EBUSY;
+
+  state.retrieve.ent = FindEntity(state.retrieve.msg, ent_id);
+  StartRetrieve();
+
+  return ENG_RUNNING;
 
 }
 
@@ -225,12 +234,12 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, void *handle, eng_cbf_get
 {
 
   if (state.state & (CREATE | REPLY))
-    return ENG_EBUSY;
+    return ENG_BUSY;
 
   else if ((state.create.msg = NewDescriptor(0, ourmboxout)) == 0)
   {
     /* not enough memory for new message */
-    return ENG_ENOMEMORY;
+    return ENG_NOMEMORY;
   }
 
   state.state |= (msg_id > 0) ? REPLY : CREATE;
@@ -253,7 +262,7 @@ extern "C" eng_rcode eng_send_message(uint32 msg_id, char *bodyfile)
 {
 
   if (state.state & (CREATE | REPLY))
-    return ENG_EBUSY;
+    return ENG_BUSY;
 
   else
   {
@@ -319,10 +328,11 @@ extern "C" eng_rcode eng_mark_for_deletion(uint32 number, uint32 *message_list)
   state.mark.current = 0;
   state.mark.substate = readytomark;
   state.mark.rc = ENG_COMPLETED;
-  state.state |= DELETE;
+  state.state |= MARKDELETE;
   dprintf(("Eng", "About to mark %d messages for deletion\n",number));
 
   return ENG_RUNNING;
+
 }
   
 
@@ -343,7 +353,7 @@ extern "C" eng_rcode eng_register_prompt(void *handle, eng_cbf_prompt func)
 
 
 /*
-** eng_email_active() is called by the UI to notify the Engine
+** ENG_mail_active() is called by the UI to notify the Engine
 ** that user has entered or left the Email client.
 */
 
@@ -431,7 +441,7 @@ extern "C" void eng_confirm(bool conf)
   {
     /* Cancel RETRIEVEMSG state and clean up. */
     state.state &= ~(RETRIEVEMSG + DOWNLOADMSG);
-    (*callbacklist.getmsgfunc)(ENG_ECONNECTCANCELLED, 0, callbacklist.getmsghandle);
+    (*callbacklist.getmsgfunc)(ENG_CONNECTCANCELLED, 0, callbacklist.getmsghandle);
   }
 
 }

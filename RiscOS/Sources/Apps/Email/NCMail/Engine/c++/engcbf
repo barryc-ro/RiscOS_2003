@@ -39,13 +39,16 @@ void eng_line_change(uint32 status)
 
   switch (status)
   {
-    case DOWN : /* notify UI */
+    case DOWN :
 
       state.connected = false;
       state.state &= ~(CONNECT + DISCONNECT);
-/*       POPaccount->SetConnectionState(false); */
-/*       SMTPaccount->SetConnectionState(false); */
       ncmui_line_state(LINKDOWN);
+      if (state.state & PREQUIT)
+      {
+        /* reinstate the shutdown process */
+        appquit = true;
+      }
       break;
 
     case COMINGUP :
@@ -74,7 +77,7 @@ void eng_line_change(uint32 status)
         /* presumably abandon fetch a this point?*/
       }
 
-      (*callbacklist.statusfunc)(ENG_ECONNECTIONFAILED, callbacklist.statushandle, 0);
+      (*callbacklist.statusfunc)(ENG_CONNECTIONFAILED, callbacklist.statushandle, 0);
       break;
 
     case COMINGDOWN :
@@ -85,7 +88,7 @@ void eng_line_change(uint32 status)
 }
 
 
-void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
+void eng_mbox_cbfunc(MBoxOpCB *cb, void *h)
 {
   /*
   ** Generic function for receiving callbacks from Mailbox.
@@ -93,20 +96,19 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
   ** and route it accordingly.
   */
 
-  uint32 accttype = (uint32) handle;
+  uint32 handle = (uint32) h;
 
-  dprintf(("Eng", "Entering mbox callback func\n"));
   switch (cb->GetType())
   {
     case MBoxOpCB::Connect :
     {
       MBoxOpCB_connect *obj = (MBoxOpCB_connect *) cb;
       eng_rcode code = (eng_rcode) obj->rc;
-      dprintf(("Eng", "Receiving Connect callback for %s, rc = %d\n",((accttype == pop) ? "POP" : "SMTP"),code));
+      dprintf(("Eng", "Receiving Connect callback for %s, rc = %d\n",((handle == pop) ? "POP" : "SMTP"),code));
       if (code < 0)
       {
         /* error has occurred during connection to mail server */
-        if (accttype == pop)
+        if (handle == pop)
           state.popprocess.substate = connectfailure;
         else
           state.smtpprocess.substate = connectfailure;
@@ -114,7 +116,7 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
 
       else if (code == ENG_COMPLETED)
       {
-        if (accttype == pop)
+        if (handle == pop)
           state.popprocess.substate = connected;
         else
           state.smtpprocess.substate = connected;
@@ -132,11 +134,11 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
       MBoxOpCB_disconnect *obj = (MBoxOpCB_disconnect *) cb;
       eng_rcode code = (eng_rcode) obj->rc;
 
-      dprintf(("Eng", "Receiving Disconnect callback for %s, rc = %d\n",((accttype == pop) ? "POP" : "SMTP"),code));
+      dprintf(("Eng", "Receiving Disconnect callback for %s, rc = %d\n",((handle == pop) ? "POP" : "SMTP"),code));
       if (code < 0)
       {
         /* error has occurred during disconnection from mail server */
-        if (accttype == pop)
+        if (handle == pop)
           state.popprocess.substate = disconnectfailure;
         else
           state.smtpprocess.substate = disconnectfailure;
@@ -145,7 +147,7 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
       else if (code == ENG_COMPLETED)
       {
         /* disconnection has happened (presumably) */
-        if (accttype == pop)
+        if (handle == pop)
           state.popprocess.substate = disconnected;
         else
           state.smtpprocess.substate = disconnected;
@@ -163,8 +165,8 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
       MBoxOpCB_expunge *obj = (MBoxOpCB_expunge *) cb;
       eng_rcode code = (eng_rcode) obj->rc;
 
-      dprintf(("Eng", "Receiving Expunge callback for %s, rc = %d\n",((accttype == pop) ? "POP" : "SMTP"),code));
-      if ((code < 0) && (accttype == pop))
+      dprintf(("Eng", "Receiving Expunge callback for %s, rc = %d\n",((handle == pop) ? "POP" : "SMTP"),code));
+      if ((code < 0) && (handle == pop))
       {
         /* error has occurred during expunge */
         ourmboxin->flags |= MBOXINCOMPLETE;
@@ -173,13 +175,13 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
       else
       {
         /* expunge has happened (presumably) */
-        if (accttype == pop)
+        if (handle == pop)
           state.popprocess.substate = readytoprocess;
         else
           state.smtpprocess.substate = smtpdone;
       }
 
-      if (state.state & DELETE)
+      if (state.state & MARKDELETE)
       {
         state.state &= ~PROCESSPOP;
         state.mark.substate = readytodisplay;
@@ -192,11 +194,11 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
       MBoxOpCB_process *obj = (MBoxOpCB_process *) cb;
       eng_rcode code = (eng_rcode) obj->rc;
 
-      dprintf(("Eng", "Receiving Process callback for %s, rc = %d\n",((accttype == pop) ? "POP" : "SMTP"),code));
+      dprintf(("Eng", "Receiving Process callback for %s, rc = %d\n",((handle == pop) ? "POP" : "SMTP"),code));
       if (code < 0)
       {
         /* error has occurred during processing mailbox */
-        if (accttype == pop)
+        if (handle == pop)
         {
           state.popprocess.substate = processfailure;
           state.popprocess.rc = (eng_rcode) obj->rc;
@@ -210,7 +212,7 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
 
       else if (code == ENG_COMPLETED)
       {
-        if (accttype == pop)
+        if (handle == pop)
           state.popprocess.substate = popdone;
         else
           state.smtpprocess.substate = smtpdone;
@@ -273,21 +275,30 @@ void eng_mbox_cbfunc(MBoxOpCB *cb, void *handle)
     {
       MBoxOpCB_getmsg_file *obj = (MBoxOpCB_getmsg_file *) cb;
       eng_rcode code = (eng_rcode) obj->rc;
-      MessageDescriptor *msg = state.download.msg;
-      dprintf(("Eng", "Receiving GetMsgFile callback, rc = %d\n",code));
+      MessageDescriptor *msg = (handle == DOWNLOADMSG) ? state.download.msg : state.retrieve.msg;
+      dprintf(("Eng", "Receiving GetMsgFile callback for %s, rc = %d\n",(handle == DOWNLOADMSG) ? "DOWNLOAD" : "RETRIEVE",code));
       if (code < 0)
       {
         /* error has occurred while fetching headers */
-        state.download.substate = downloadfailure;
-        state.download.rc = code;
+        if (handle == DOWNLOADMSG)
+        {
+          state.download.substate = downloadfailure;
+          state.download.rc = code;
+        }
+        else
+        {
+          state.retrieve.substate = retrievefailure;
+          state.retrieve.rc = code;
+        }
       }
+
       else if (code == ENG_COMPLETED)
       {
         msg->flags &= ~DOWNLOADING;
         msg->flags |= DOWNLOADED;
         LockFile(msg->ID, false);
-        if (state.state & RETRIEVEMSG)
-          state.download.substate = readytoparse;
+        if (handle == RETRIEVEMSG)
+          state.retrieve.substate = readytoparse;
         else
         {
           state.download.msg = msg->next;
