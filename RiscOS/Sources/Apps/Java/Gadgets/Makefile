@@ -31,9 +31,10 @@ WIPE    = -wipe
 CD	= dir
 CHMOD	= access
 
-AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
-CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
+FEATURES   = -zM -zps1 -ffah ${DFLAGS}
+AFLAGS     = ${THROWBACK} -depend !Depend
+CFLAGS     = ${THROWBACK} -depend !Depend -c ${FEATURES} ${INCLUDES}
+CMHGFLAGS  = ${THROWBACK} -depend !Depend -p ${DFLAGS}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
 CHMODFLAGS = RW/R
@@ -104,10 +105,22 @@ HDR = h.ModHdr
 #
 
 .SUFFIXES:	.o .h .s .c .cmhg
-.c.o:;		${CC}   ${CFLAGS} -o $@ $<
-.cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $<
-.cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
-.s.o:;		${AS}   ${AFLAGS} $< $@
+
+.c.o:;		@echo
+		@echo Compiling $< ( ${FEATURES})
+		@${CC} ${CFLAGS} -o $@ $<
+
+.cmhg.o:;	@echo
+		@echo Generating module C veneers ( -p ${DFLAGS})
+		@${CMHG} ${CMHGFLAGS} $< -o $@
+
+.cmhg.h:;	@echo
+		@echo Generating module C veneers' header file ( -p ${DFLAGS})
+		@${CMHG} ${CMHGFLAGS} $< -d $@
+
+.s.o:;		@echo
+		@echo Assembling $<
+		@${AS} ${AFLAGS} -o $@ $<
 
 
 # ------------------------------------------------------------------------------
@@ -115,7 +128,8 @@ HDR = h.ModHdr
 #
 
 all: ${RAMTARGET}
-	@echo ${COMPONENT}: all complete
+	@echo
+	@echo ${COMPONENT}: Module built (RAM) in ${RAMTARGET}
 	
 
 # ------------------------------------------------------------------------------
@@ -123,23 +137,27 @@ all: ${RAMTARGET}
 #
 
 rom: ${ROMTARGET}
-        @echo ${COMPONENT}: rom complete
+	@echo
+        @echo ${COMPONENT}: Module built (ROM) in ${ROMTARGET}
 
 export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+	@echo
+        @echo ${COMPONENT}: No exports
 
 install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+	@echo
         ${WIPE} o.*      ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.*    ${WFLAGS}
 	${RM} ${HDR}
         ${RM} ${RAMTARGET}
         ${RM} ${ROMTARGET}
-        @echo ${COMPONENT}: cleaned
+        @echo
+        @echo ${COMPONENT}: Cleaned
         
 
 # ------------------------------------------------------------------------------
@@ -147,7 +165,9 @@ clean:
 #
 
 ${ROMTARGET}: ${OBJS} ${HDR} ${LIBS} ${ROMCSTUBS} 
-        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
+	@echo
+	@echo Linking $@ ( ${OBJS} )
+        @${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 
 # ------------------------------------------------------------------------------
@@ -164,8 +184,11 @@ rom_link:
 # Relocatable module target
 #
 
-${RAMTARGET}: ${OBJS} ${HDR} ${LIBS}
-        ${LD} -rmf -o $@ ${OBJS} ${LIBS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${HDR} ${LIBS} ${CLIB}
+	@echo
+	@echo Linking $@ ( ${OBJS} )
+        @${LD} -rmf -o $@ ${OBJS} ${LIBS} ${CLIB}
+        @echo
         ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
@@ -174,178 +197,3 @@ ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.TextGadget:	c.TextGadget
-o.TextGadget:	C:h.string
-o.TextGadget:	C:h.kernel
-o.TextGadget:	C:h.swis
-o.TextGadget:	tbox:h.toolbox
-o.TextGadget:	tbox:h.wimp
-o.TextGadget:	tbox:h.window
-o.TextGadget:	tbox:h.gadgets
-o.TextGadget:	tbox:h.wimplib
-o.TextGadget:	h.TextGadgets
-o.TextGadget:	h.ModHdr
-o.TextGadget:	h.glib
-o.TextGadget:	C:h.kernel
-o.TextGadget:	h.rmensure
-o.TextGadget:	h.TextArea
-o.TextGadget:	h.TextAreaP
-o.TextGadget:	h.modmem
-o.TextGadget:	h.TextArea
-o.TextGadget:	h.TextMan
-o.TextGadget:	h.MemMan
-o.TextGadget:	C:h.kernel
-o.TextGadget:	h.ScrollList
-o.TextGadget:	h.ScrollLisP
-o.TextGadget:	h.modmem
-o.TextGadget:	h.ScrollList
-o.TextGadget:	h.Scrollbar
-o.TextGadget:	h.ScrollbarP
-o.TextGadget:	h.modmem
-o.TextGadget:	h.Scrollbar
-o.TextGadget:	h.riscos_utils
-o.TextGadget:	tbox:h.toolbox
-o.TextGadget:	h.modmem
-o.TextArea:	c.TextArea
-o.TextArea:	C:h.kernel
-o.TextArea:	C:h.swis
-o.TextArea:	tbox:h.toolbox
-o.TextArea:	tbox:h.wimp
-o.TextArea:	tbox:h.window
-o.TextArea:	tbox:h.gadgets
-o.TextArea:	tbox:h.wimplib
-o.TextArea:	h.glib
-o.TextArea:	C:h.kernel
-o.TextArea:	h.string32
-o.TextArea:	h.riscos_utils
-o.TextArea:	tbox:h.toolbox
-o.TextArea:	h.TextGadgets
-o.TextArea:	h.TextArea
-o.TextArea:	h.TextAreaP
-o.TextArea:	h.modmem
-o.TextArea:	h.TextArea
-o.TextArea:	h.TextMan
-o.TextArea:	h.MemMan
-o.TextArea:	C:h.kernel
-o.TextArea:	h.Font
-o.TextArea:	h.Text
-o.TextArea:	h.Scrollbar
-o.TextArea:	h.ScrollbarP
-o.TextArea:	h.modmem
-o.TextArea:	h.Scrollbar
-o.TextArea:	h.ModHdr
-o.TextArea:	h.utils
-o.ScrollList:	c.ScrollList
-o.ScrollList:	C:h.kernel
-o.ScrollList:	C:h.swis
-o.ScrollList:	tbox:h.toolbox
-o.ScrollList:	tbox:h.wimp
-o.ScrollList:	tbox:h.window
-o.ScrollList:	tbox:h.gadgets
-o.ScrollList:	tbox:h.wimplib
-o.ScrollList:	h.glib
-o.ScrollList:	C:h.kernel
-o.ScrollList:	h.string32
-o.ScrollList:	h.riscos_utils
-o.ScrollList:	tbox:h.toolbox
-o.ScrollList:	h.Font
-o.ScrollList:	h.TextGadgets
-o.ScrollList:	h.ScrollList
-o.ScrollList:	h.ScrollLisP
-o.ScrollList:	h.modmem
-o.ScrollList:	h.ScrollList
-o.ScrollList:	h.ScrollLisS
-o.ScrollList:	h.modmem
-o.ScrollList:	h.ScrollList
-o.ScrollList:	h.debug
-o.ScrollList:	h.ModHdr
-o.ScrollList:	h.utils
-o.Scrollbar:	c.Scrollbar
-o.Scrollbar:	C:h.kernel
-o.Scrollbar:	C:h.swis
-o.Scrollbar:	tbox:h.toolbox
-o.Scrollbar:	tbox:h.wimp
-o.Scrollbar:	tbox:h.window
-o.Scrollbar:	tbox:h.gadgets
-o.Scrollbar:	tbox:h.wimplib
-o.Scrollbar:	h.glib
-o.Scrollbar:	C:h.kernel
-o.Scrollbar:	h.string32
-o.Scrollbar:	h.riscos_utils
-o.Scrollbar:	tbox:h.toolbox
-o.Scrollbar:	h.TextGadgets
-o.Scrollbar:	h.Scrollbar
-o.Scrollbar:	h.ScrollbarP
-o.Scrollbar:	h.modmem
-o.Scrollbar:	h.Scrollbar
-o.Scrollbar:	h.debug
-o.Scrollbar:	h.ModHdr
-o.Scrollbar:	h.Utils
-o.riscos_uti:	c.riscos_uti
-o.riscos_uti:	C:h.kernel
-o.riscos_uti:	C:h.swis
-o.riscos_uti:	tbox:h.wimp
-o.riscos_uti:	tbox:h.wimplib
-o.riscos_uti:	tbox:h.toolbox
-o.riscos_uti:	tbox:h.window
-o.riscos_uti:	tbox:h.gadgets
-o.riscos_uti:	h.riscos_utils
-o.riscos_uti:	tbox:h.toolbox
-o.riscos_gra: s.riscos_gra
-o.riscos_gra: hdr.SWINames
-o.Font: s.Font
-o.Font: hdr.SWINames
-o.debug: s.debug
-o.debug: hdr.SWINames
-o.TextMan:	c.TextMan
-o.TextMan:	C:h.kernel
-o.TextMan:	C:h.swis
-o.TextMan:	h.TextMan
-o.TextMan:	h.MemMan
-o.TextMan:	C:h.kernel
-o.MemMan:	c.MemMan
-o.MemMan:	C:h.swis
-o.MemMan:	C:h.kernel
-o.MemMan:	C:h.kernel
-o.MemMan:	h.MemMan
-o.MemMan:	C:h.kernel
-o.Text: s.Text
-o.Text: hdr.SWINames
-o.ScrollLisS: s.ScrollLisS
-o.ScrollLisS: hdr.SWINames
-o.Utils: s.Utils
-o.Utils: hdr.SWINames
-o.Utils: hdr.CVars
-o.TAsel_ven: s.TAsel_ven
-o.glib:	c.glib
-o.glib:	C:h.kernel
-o.glib:	C:h.swis
-o.glib:	h.glib
-o.glib:	C:h.kernel
-o.glib:	tbox:h.wimp
-o.glib:	tbox:h.toolbox
-o.glib:	tbox:h.window
-o.glib:	tbox:h.gadgets
-o.glib:	h.glibP
-o.glib:	tbox:h.toolbox
-o.glib:	tbox:h.window
-o.glib:	tbox:h.wimplib
-o.glib3:	c.glib3
-o.glib3:	C:h.kernel
-o.glib3:	C:h.swis
-o.glib3:	h.glib
-o.glib3:	C:h.kernel
-o.glib3:	tbox:h.wimp
-o.glib3:	tbox:h.toolbox
-o.glib3:	tbox:h.window
-o.glib3:	tbox:h.gadgets
-o.glib3:	h.glibP
-o.glib3:	tbox:h.toolbox
-o.glib3:	tbox:h.window
-o.glib3:	tbox:h.wimplib
-o.rmensure:	c.rmensure
-o.rmensure:	C:h.kernel
-o.rmensure:	C:h.swis
-o.rmensure:	h.rmensure
-o.string32:	c.string32
-o.string32:	h.string32
