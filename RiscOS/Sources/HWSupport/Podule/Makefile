@@ -15,6 +15,7 @@
 # Paths
 #
 EXP_HDR = <export$dir>
+EXP_CHDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -37,7 +38,8 @@ TOKENS   = Hdr:Tokens
 COMPONENT = Podule
 SOURCE    = s.GetAll
 TARGET    = rm.${MACHINE}.Podule
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   = ${EXP_HDR}.${COMPONENT} \
+            ${EXP_CHDR}.${COMPONENT}
 
 MESSAGESMOD = rm.PoduleMsgs
 MESSAGES  = Resources.${LOCALE}.Messages
@@ -79,6 +81,9 @@ s.HelpTokens: ${TOKENS} HelpTexts
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+${EXP_CHDR}.${COMPONENT}: h.${COMPONENT}
+        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 
 # 
@@ -177,3 +182,63 @@ rm.Omega.Podule: s.Errors
 rm.Omega.Podule: s.ROMExtend
 rm.Omega.Podule: HelpTexts
 rm.Omega.Podule: s.MsgCode
+rm.Morris.Podule: Hdr:ListOpts
+rm.Morris.Podule: Hdr:Macros
+rm.Morris.Podule: Hdr:System
+rm.Morris.Podule: Hdr:SWIs
+rm.Morris.Podule: Hdr:CPU.Generic26
+rm.Morris.Podule: Hdr:IO.GenericIO
+rm.Morris.Podule: Hdr:RISCOS
+rm.Morris.Podule: Hdr:Machine.<Machine>
+rm.Morris.Podule: Hdr:IO.IOMDL
+rm.Morris.Podule: Hdr:CMOS
+rm.Morris.Podule: Hdr:ModHand
+rm.Morris.Podule: Hdr:Debug
+rm.Morris.Podule: Hdr:Podule
+rm.Morris.Podule: Hdr:FSNumbers
+rm.Morris.Podule: Hdr:HighFSI
+rm.Morris.Podule: Hdr:NewErrors
+rm.Morris.Podule: Hdr:Services
+rm.Morris.Podule: Hdr:Tokens
+rm.Morris.Podule: Hdr:Proc
+rm.Morris.Podule: Hdr:Symbols
+rm.Morris.Podule: Hdr:MsgTrans
+rm.Morris.Podule: Hdr:PoduleReg
+rm.Morris.Podule: Time+Date
+rm.Morris.Podule: s.Module
+rm.Morris.Podule: s.Interface
+rm.Morris.Podule: s.Commands
+rm.Morris.Podule: s.Errors
+rm.Morris.Podule: s.ROMExtend
+rm.Morris.Podule: HelpTexts
+rm.Morris.Podule: s.MsgCode
+rm.Phoebe.Podule: Hdr:ListOpts
+rm.Phoebe.Podule: Hdr:Macros
+rm.Phoebe.Podule: Hdr:System
+rm.Phoebe.Podule: Hdr:SWIs
+rm.Phoebe.Podule: Hdr:CPU.Generic26
+rm.Phoebe.Podule: Hdr:IO.GenericIO
+rm.Phoebe.Podule: Hdr:RISCOS
+rm.Phoebe.Podule: Hdr:Machine.<Machine>
+rm.Phoebe.Podule: Hdr:IO.IOMDL
+rm.Phoebe.Podule: Hdr:CMOS
+rm.Phoebe.Podule: Hdr:ModHand
+rm.Phoebe.Podule: Hdr:Debug
+rm.Phoebe.Podule: Hdr:Podule
+rm.Phoebe.Podule: Hdr:FSNumbers
+rm.Phoebe.Podule: Hdr:HighFSI
+rm.Phoebe.Podule: Hdr:NewErrors
+rm.Phoebe.Podule: Hdr:Services
+rm.Phoebe.Podule: Hdr:Tokens
+rm.Phoebe.Podule: Hdr:Proc
+rm.Phoebe.Podule: Hdr:Symbols
+rm.Phoebe.Podule: Hdr:MsgTrans
+rm.Phoebe.Podule: Hdr:PoduleReg
+rm.Phoebe.Podule: Time+Date
+rm.Phoebe.Podule: s.Module
+rm.Phoebe.Podule: s.Interface
+rm.Phoebe.Podule: s.Commands
+rm.Phoebe.Podule: s.Errors
+rm.Phoebe.Podule: s.ROMExtend
+rm.Phoebe.Podule: HelpTexts
+rm.Phoebe.Podule: s.MsgCode
