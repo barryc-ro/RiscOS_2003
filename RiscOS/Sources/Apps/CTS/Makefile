@@ -289,6 +289,7 @@ install_common: ${FILES}
 	${CP} LocalRes:WebPages.27-3 		${INSTDIR}.WebPages.27-3 ${CPFLAGS}
 	${CP} LocalRes:WebPages.28-1 		${INSTDIR}.WebPages.28-1 ${CPFLAGS}
 	${CP} LocalRes:WebPages.28-2 		${INSTDIR}.WebPages.28-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.29 		${INSTDIR}.WebPages.29   ${CPFLAGS}
 	${CP} LocalRes:WebPages.30   		${INSTDIR}.WebPages.30   ${CPFLAGS}
 
 install: install_common
@@ -359,7 +360,8 @@ resources:
 	${CP} LocalRes:WebPages.27-2 	${RESDIR}.WebPages.27-2 ${CPFLAGS}
 	${CP} LocalRes:WebPages.27-3 	${RESDIR}.WebPages.27-3 ${CPFLAGS}
 	${CP} LocalRes:WebPages.28-1 	${RESDIR}.WebPages.28-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-2 	${RESDIR}.WebPages.28-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-2	${RESDIR}.WebPages.28-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.29	${RESDIR}.WebPages.29   ${CPFLAGS}
 	${CP} LocalRes:WebPages.30   	${RESDIR}.WebPages.30   ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
