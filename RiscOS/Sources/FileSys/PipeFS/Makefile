@@ -43,33 +43,20 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resource-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.PipeFS: Hdr:ListOpts
-rm.PipeFS: Hdr:Macros
-rm.PipeFS: Hdr:System
-rm.PipeFS: Hdr:SWIs
-rm.PipeFS: Hdr:CPU.Generic26
-rm.PipeFS: Hdr:IO.GenericIO
-rm.PipeFS: Hdr:RISCOS
-rm.PipeFS: Hdr:ModHand
-rm.PipeFS: Hdr:Services
-rm.PipeFS: Hdr:CMOS
-rm.PipeFS: Hdr:Proc
-rm.PipeFS: Hdr:FSNumbers
-rm.PipeFS: Hdr:HighFSI
-rm.PipeFS: Hdr:LowFSi
-rm.PipeFS: Hdr:NewErrors
-rm.PipeFS: Hdr:Variables
-rm.PipeFS: Hdr:Wimp
-rm.PipeFS: Hdr:UpCall
-rm.PipeFS: Hdr:MsgTrans
-rm.PipeFS: Version
-rm.PipeFS: Hdr:NDRDebug
