@@ -55,18 +55,3 @@ ${TARGET}: ${SOURCE}
         unset IKHG$Country
 
 # Dynamic dependencies:
-rm.IntKey: Source.IntKeyBody
-rm.IntKey: Hdr:ListOpts
-rm.IntKey: Hdr:Macros
-rm.IntKey: Hdr:System
-rm.IntKey: Hdr:SWIs
-rm.IntKey: Hdr:CPU.Generic26
-rm.IntKey: Hdr:IO.GenericIO
-rm.IntKey: Hdr:RISCOS
-rm.IntKey: Hdr:ModHand
-rm.IntKey: Hdr:Services
-rm.IntKey: Hdr:Proc
-rm.IntKey: !IKHG.Source.Chars.Latin1
-rm.IntKey: <Keyboard>.Source.KeyStruct
-rm.IntKey: UK.Source.UKPCKbd
-rm.IntKey: <Keyboard>.Source.USAKbd
