@@ -201,6 +201,12 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
 	if (diff & 4)		// left
 	    pMouData->cMouState |= b & 4 ? MOU_STATUS_B1DOWN : MOU_STATUS_B1UP;
 
+	if (pMouData->X > 0xFFFF)
+	    pMouData->X = 0xFFFF;
+
+	if (pMouData->Y > 0xFFFF)
+	    pMouData->Y = 0xFFFF;
+
 	LastB = b;
 	LastT = t;
 	LastX = x;

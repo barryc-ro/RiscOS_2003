@@ -20,6 +20,8 @@
 
 #define VERSION_STRING	Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
 
+#define SPLASH_FILE	APP_PATH "Splash"
+
 /* --------------------------------------------------------------------------------------------- */
 
 #define MESSAGE_WINFRAME_BASE	0x50F80

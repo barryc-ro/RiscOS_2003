@@ -5,6 +5,7 @@
  */
 
 #include "windows.h"
+#include "fileio.h"
 
 #include <ctype.h>
 #include <locale.h>
@@ -23,6 +24,7 @@
 #include "tboxlibs/event.h"
 #include "tboxlibs/wimplib.h"
 #include "tboxlibs/proginfo.h"
+#include "tboxlibs/gadgets.h"
 #include "tboxlibs/menu.h"
 
 #include "tbres.h"
@@ -46,6 +48,18 @@
 #define POLL_TIME	            100	/* 1 second */
 #define MIN_ESC_TIME	            50	/* cs */
 
+#ifdef DEBUG
+#define SPLASH_TIME		    100
+#else
+#define SPLASH_TIME		    500
+#endif
+
+#ifdef DEBUG
+#define VERSION		Module_MajorVersion " [" __TIME__ ":" __DATE__ "]" Module_MinorVersion
+#else
+#define VERSION		Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
+#endif
+
 /* --------------------------------------------------------------------------------------------- */
 
 static MessagesFD message_block;    /* declare a message block for use with toolbox initialise */
@@ -57,23 +71,38 @@ static int ToolBox_EventList[] =
     tbres_event_DISCONNECT,
     tbres_event_QUIT,
     tbres_event_SHOWING_ICON_MENU,
+    tbres_event_CONFIRM,
     ProgInfo_AboutToBeShown,
-    Quit_Quit,
-    Quit_Cancel,
     0
 };
 
 static int Wimp_MessageList[] =
 {
     Wimp_MDataLoad,
+    Wimp_MDataSave,
     Wimp_MDataOpen,
-    0
+    Wimp_MPreQuit,
+    Wimp_MQuit
 };
 
 static int event_mask =
     Wimp_Poll_PointerLeavingWindowMask
     | Wimp_Poll_PointerEnteringWindowMask
     | Wimp_Poll_PollWordNonZeroMask;
+
+static void *splash_ptr = NULL;
+static void *splash_coltrans = NULL;
+static ObjectId splash_id = NULL_ObjectId;
+static int splash_timer = 0;
+
+static Session current_session = NULL;
+
+static int scrap_ref = -1;
+
+static BOOL running = TRUE;
+static int quitting = 0;
+
+static ObjectId disconnect_id = NULL_ObjectId;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -86,7 +115,13 @@ static int cli_dopostmortem = FALSE;
 static int cli_remote_debug = FALSE;
 static int cli_file_debug = FALSE;
 
-static Session current_session = NULL;
+/* --------------------------------------------------------------------------------------------- */
+
+/* Forward references */
+
+static void splash_close(void);
+static void splash_force_top(void);
+static BOOL splash_check_close(void);
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -168,30 +203,10 @@ static int connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_bloc
     NOT_USED(handle);
 }
 
-static int disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
-                         void *handle)
-{
-    TRACE((TC_UI, TT_API1, "disconnect_handler:\n"));
-
-    kill_current_session();
-
-    return 1;
-    NOT_USED(event_code);
-    NOT_USED(event);
-    NOT_USED(id_block);
-    NOT_USED(handle);
-}
-
-#ifdef DEBUG
-#define VERSION		Module_MajorVersion " [" __TIME__ ":" __DATE__ "]" Module_MinorVersion
-#else
-#define VERSION		Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
-#endif
-
 static int proginfo_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    LOGERR(proginfo_set_version(0, id_block->self_id, VERSION));
+    LOGERR(displayfield_set_value(0, id_block->self_id, 0x82b404, VERSION));
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -235,18 +250,42 @@ static void cleanup(void)
 #endif
 }
 
-/* called from Quit_Quit toolbox event */
+/* called from disconnect confirm toolbox event */
 
-static int quit_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+static int confirm_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
     kill_current_session();
 
-    exit(EXIT_SUCCESS);
+    if (quitting != 0)
+	running = FALSE;
+
+    if (quitting == 2)
+	LOGERR(wimp_process_key(0x1FC));
+    
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
     NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+/* Called from Quit_Cancel event */
+
+static int try_disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
+{
+    TRACE((TC_UI, TT_API1, "disconnect_handler:\n"));
+
+    LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
+			       id_block ? id_block->self_id : NULL_ObjectId,
+			       id_block ? id_block->self_component : NULL_ComponentId));
+
+    quitting = 0;
+
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
     NOT_USED(handle);
 }
 
@@ -257,16 +296,16 @@ static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
 {
     if (current_session == NULL)
     {
-	quit_quit_handler(NULL, NULL, NULL, NULL);
+	running = FALSE;
     }
     else
     {
-	ObjectId d;
-	LOGERR(toolbox_create_object(0, (char *)tbres_QUIT_W, &d));
-	LOGERR(toolbox_show_object(0, d, Toolbox_ShowObject_Centre, NULL,
+	LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
 				   id_block ? id_block->self_id : NULL_ObjectId,
 				   id_block ? id_block->self_component : NULL_ComponentId));
+	quitting = 1;
     }
+
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -276,30 +315,51 @@ static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
 
 /* called from the PREQUIT message */
 
-static int quit_handler(WimpMessage *message, void *handle)
+static int pre_quit_handler(WimpMessage *message, void *handle)
 {
-    try_quit_handler(NULL, NULL, NULL, NULL);
+    if (current_session)
+    {
+	WimpMessage reply;
+
+	/* see if it is just us or others also */
+	quitting = message->hdr.size == 20 || (message->data.words[0] & 1) == 0 ? 2 : 1;
+
+	/* acknowledge the message to stop the quit */
+	reply = *message;
+	reply.hdr.your_ref = message->hdr.my_ref;
+	err_fatal(wimp_send_message(Wimp_EUserMessageAcknowledge, &reply,
+				    message->hdr.sender, 0, NULL));
+
+	/* open the query box */
+	LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL, NULL_ObjectId, NULL_ComponentId));
+    }
+
     return 1;
-    NOT_USED(message);
     NOT_USED(handle);
 }
 
-/* Called from Quit_Cancel event */
+/* called from the QUIT message */
 
-static int quit_cancel_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
-                         void *handle)
+static int quit_handler(WimpMessage *message, void *handle)
 {
-    LOGERR(toolbox_delete_object(0, id_block->self_id));
+    kill_current_session();
+
+    running = FALSE;
+
     return 1;
-    NOT_USED(event_code);
-    NOT_USED(event);
-    NOT_USED(id_block);
+    NOT_USED(message);
     NOT_USED(handle);
 }
 
 static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
 {
     DTRACE((TC_UI, TT_API1, "null_handler: sess %p\n", current_session));
+
+    if (splash_timer)
+    {
+	if (!splash_check_close())
+	    splash_force_top();
+    }
     
     if (current_session)
 	if (!session_poll(current_session))
@@ -313,6 +373,38 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
     NOT_USED(event_code);
     NOT_USED(event);
     NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+static int datasave_handler(WimpMessage *message, void *handle)
+{
+    WimpDataSaveMessage *msg = &message->data.data_save;
+
+    if (current_session)
+    {
+	msg_report(utils_msgs_lookup("conn"));
+	return 0;
+    }
+    
+    if (msg->file_type == filetype_ICA)
+    {
+	WimpMessage reply;
+
+	reply = *message;
+	reply.hdr.size = sizeof(WimpDataSaveAckMessage);
+	reply.hdr.action_code = Wimp_MDataSaveAck;
+	reply.hdr.your_ref = message->hdr.my_ref;
+	reply.data.data_save_ack.estimated_size = -1;
+	strcpy(reply.data.data_save_ack.leaf_name, "<Wimp$Scrap>");
+
+	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
+				    message->hdr.sender, 0, NULL));
+
+	scrap_ref = reply.hdr.my_ref;
+	return 1;
+    }
+
+    return 0;
     NOT_USED(handle);
 }
 
@@ -331,18 +423,28 @@ static int dataload_handler(WimpMessage *message, void *handle)
 	WimpMessage reply;
 
 	reply = *message;
+	reply.hdr.size = sizeof(WimpDataLoadAckMessage);
 	reply.hdr.action_code = Wimp_MDataLoadAck;
 	reply.hdr.your_ref = message->hdr.my_ref;
 
 	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
 				    message->hdr.sender, 0, NULL));
 
+	/* wait for splash screen to close */
+	while (!splash_check_close())
+	    ;
+
 	current_session = session_open(msg->leaf_name);
+
+	/* delete file if reference matches */
+	if (scrap_ref == message->hdr.your_ref)
+	    remove(msg->leaf_name);
 
 	return 1;
     }
 
     return 0;
+    NOT_USED(handle);
 }
 
 static int dataopen_handler(WimpMessage *message, void *handle)
@@ -360,11 +462,16 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 	}
 
 	reply = *message;
+	reply.hdr.size = sizeof(WimpDataLoadAckMessage);
 	reply.hdr.action_code = Wimp_MDataLoadAck;
 	reply.hdr.your_ref = message->hdr.my_ref;
 
 	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
 				    message->hdr.sender, 0, NULL));
+
+	/* wait for splash screen to close */
+	while (!splash_check_close())
+	    ;
 
 	current_session = session_open(msg->path_name);
 
@@ -373,6 +480,182 @@ static int dataopen_handler(WimpMessage *message, void *handle)
     return 0;
 
     NOT_USED(handle);
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+static int splash_redraw_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+    void *area, *sprite;
+    WimpRedrawWindowBlock redraw;
+    int more;
+    
+    area = splash_ptr;
+    sprite = (char *)splash_ptr + 16;
+
+    redraw.window_handle = event->redraw_window_request.window_handle;
+    LOGERR(wimp_redraw_window(&redraw, &more));
+
+    while (more)
+    {
+	/* plot sprite */
+	LOGERR(_swix(OS_SpriteOp, _INR(0,7),
+		     52 + 512,
+		     area, sprite,
+		     redraw.visible_area.xmin,
+		     redraw.visible_area.ymin,
+		     0,
+		     NULL,
+		     splash_coltrans));
+
+	LOGERR(wimp_update_window(&redraw, &more));
+    }
+    
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(handle);
+}
+
+static void splash_open(void)
+{
+    int fh = open(SPLASH_FILE, O_RDONLY | O_BINARY);
+    if (fh)
+    {
+	int len = _filelength(fh);
+	int w, h;
+	int screen_w, screen_h;
+	int x, y;
+	void *area, *sprite;
+	int coltrans_size;
+
+	TRACE((TC_UI, TT_API1, "splash_open: fh %d len %d", fh, len));
+	
+	/* load splash screen */
+	if (LOGERR(MemFlex_Alloc(&splash_ptr, len + 4)) == NULL)
+	{
+	    _kernel_oserror *e;
+
+	    *(int *)splash_ptr = len + 4;
+	    read(fh, (char *)splash_ptr + 4, len);
+
+	    /* check for sprite validity */
+	    e = LOGERR(_swix(OS_SpriteOp, _INR(0,1), 17 + 512, splash_ptr));
+	    if (e && e->errnum == 1822)
+		MemFlex_Free(&splash_ptr);
+	}
+	close(fh);
+
+	if (splash_ptr)
+	{
+	    /* read sprite and screen info */
+	    area = splash_ptr;
+	    sprite = (char *)splash_ptr + 16;
+	    LOGERR(_swix(OS_SpriteOp, _INR(0,2) | _OUTR(3,4),
+			 40 + 512, area, sprite,
+			 &w, &h));
+
+	    GetModeSpec(&screen_w, &screen_h);
+
+	    x = (screen_w - w)/2 * 2;
+	    y = (screen_h - h)/2 * 2;
+	
+	    /* open window if we are multitasking */
+	    if (cli_iconbar)
+	    {
+		WindowShowObjectBlock show;
+		LOGERR(toolbox_create_object(0, tbres_SPLASH_W, &splash_id));
+
+		show.visible_area.xmin = x;
+		show.visible_area.ymin = y;
+		show.visible_area.xmax = x + w*2;
+		show.visible_area.ymax = y + h*2;
+		show.xscroll = show.yscroll = 0;
+		show.behind = -1;
+		LOGERR(toolbox_show_object(0, splash_id, Toolbox_ShowObject_FullSpec, &show, NULL_ObjectId, NULL_ComponentId));
+	    
+		event_register_wimp_handler(splash_id, Wimp_ERedrawWindow, splash_redraw_handler, NULL);
+	    }
+	
+	    /* generate table */
+	    LOGERR(_swix(ColourTrans_GenerateTable, _INR(0,5) | _OUT(4),
+			 area, sprite,
+			 -1, -1,
+			 NULL, 1,
+			 &coltrans_size));
+
+	    if ((splash_coltrans = malloc(coltrans_size)) != NULL)
+	    {
+		/* generate table */
+		LOGERR(_swix(ColourTrans_GenerateTable, _INR(0,5),
+			     area, sprite,
+			     -1, -1,
+			     splash_coltrans, 1));
+
+		/* plot sprite */
+		LOGERR(_swix(OS_SpriteOp, _INR(0,7),
+			     52 + 512,
+			     area, sprite,
+			     x, y, 0,
+			     NULL,
+			     splash_coltrans));
+	    }
+
+	    splash_timer = clock() + SPLASH_TIME;
+	}
+    }
+}
+
+static void splash_force_top(void)
+{
+    if (splash_id)
+    {
+	WimpGetWindowStateBlock state;
+	    
+	LOGERR(window_get_wimp_handle(0, splash_id, &state.window_handle));
+	LOGERR(wimp_get_window_state(&state));
+	
+	if ((state.flags & WimpWindow_NotCovered) == 0)
+	{
+	    WindowShowObjectBlock show;
+	    show.visible_area = state.visible_area;
+	    show.xscroll = show.yscroll = 0;
+	    show.behind = -1;
+	    LOGERR(toolbox_show_object(0, splash_id, Toolbox_ShowObject_FullSpec, &show, NULL_ObjectId, NULL_ComponentId));
+	}
+    }
+}
+
+static void splash_close(void)
+{
+    MemFlex_Free(&splash_ptr);
+
+    free(splash_coltrans);
+    splash_coltrans = NULL;
+
+    if (splash_id != NULL_ObjectId)
+    {
+	event_deregister_wimp_handler(Wimp_ERedrawWindow, splash_id, splash_redraw_handler, NULL);
+    
+	LOGERR(toolbox_hide_object(0, splash_id));
+	LOGERR(toolbox_delete_object(0, splash_id));
+	splash_id = NULL_ObjectId;
+    }
+
+    splash_timer = 0;
+}
+
+static BOOL splash_check_close(void)
+{
+    if (!splash_timer)
+	return TRUE;
+    
+    if (clock() > splash_timer)
+    {
+	splash_close();
+	return TRUE;
+    }
+
+    return FALSE;
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -401,7 +684,7 @@ static int log_init(void)
 #if 1
    EMLogInfo.LogClass   = TC_UI | TC_TW;
    EMLogInfo.LogEnable  = 0;
-   EMLogInfo.LogTWEnable = 0;
+   EMLogInfo.LogTWEnable = TT_TW_res1;
 #else
    EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR;
@@ -416,8 +699,6 @@ static int log_init(void)
    return(rc);
 }
 #endif //DEBUG
-
-/* --------------------------------------------------------------------------------------------- */
 
 static void process_args(int argc, char *argv[])
 {
@@ -465,6 +746,8 @@ static void process_args(int argc, char *argv[])
 	 strsafe(cli_filename), cli_dopostmortem, cli_iconbar));
 }
 
+/* --------------------------------------------------------------------------------------------- */
+
 static void initialise(int argc, char *argv[])
 {
     int current_wimp, task;
@@ -481,7 +764,6 @@ static void initialise(int argc, char *argv[])
 #ifdef DEBUG
     log_init();
 #endif
-
     /* initialise toolbox first to get messages file */
     err_fatal(toolbox_initialise(0, 310, &Wimp_MessageList[0], ToolBox_EventList, APP_DIR,
 				     &message_block, &event_id_block,
@@ -502,18 +784,22 @@ static void initialise(int argc, char *argv[])
     /* initialise event library */
     err_fatal(event_initialise(&event_id_block));
 
+    /* put up splash screen */
+    splash_open();
+    
     /* attach quit handlers */
     err_fatal(event_register_message_handler(Wimp_MQuit, quit_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, Quit_Quit, quit_quit_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, Quit_Cancel, quit_cancel_handler, NULL));
+    err_fatal(event_register_message_handler(Wimp_MPreQuit, pre_quit_handler, NULL));
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_CONFIRM, confirm_handler, NULL));
 
     /* other general handlers */
     err_fatal(event_register_wimp_handler(0, Wimp_ENull, null_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
+    err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, disconnect_handler, NULL));
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, try_disconnect_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_QUIT, try_quit_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, ProgInfo_AboutToBeShown, proginfo_handler, NULL));
@@ -527,6 +813,8 @@ static void initialise(int argc, char *argv[])
 	int iconbar_id;
 	err_fatal(toolbox_create_object(0, tbres_ICON, &iconbar_id));
 	err_fatal(toolbox_show_object(0, iconbar_id, Toolbox_ShowObject_Default, NULL, NULL_ObjectId, NULL_ComponentId));
+
+	LOGERR(toolbox_create_object(0, tbres_DISCONNECT_W, &disconnect_id));
     }
 }
 
@@ -543,6 +831,9 @@ int main(int argc, char *argv[])
 
     if (cli_filename && cli_filename[0] != '\0')
     {
+	while (!splash_check_close())
+	    ;
+	
 	session_run(cli_filename);
 
 	if (!cli_iconbar)
@@ -552,7 +843,7 @@ int main(int argc, char *argv[])
     err_fatal(event_set_mask(event_mask));
 
     TRACE((TC_UI, TT_API1, "(1) Entering poll loop\n"));
-    while (TRUE)
+    while (running)
     {
 	int event_code;
 	WimpPollBlock poll_block;

@@ -11,7 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../inc/client.h"
 #include "../inc/clib.h"
+#include "../inc/debug.h"
+
 #include "fileio.h"
 
 int open(const char *filename, int mode)
@@ -30,24 +33,24 @@ int open(const char *filename, int mode)
             break;
     }
 
-    _swix(OS_Find, _IN(0)|_IN(1)|_OUT(0), flags, filename, &fhandle);
+    LOGERR(_swix(OS_Find, _IN(0)|_IN(1)|_OUT(0), flags, filename, &fhandle));
 
     return fhandle > 0 ? fhandle : -1;
 }
 
 int close(int fhandle)
 {
-    return _swix(OS_Find, _IN(0)|_IN(1), 0, fhandle) == NULL ? 0 : -1;
+    return LOGERR(_swix(OS_Find, _IN(0)|_IN(1), 0, fhandle)) == NULL ? 0 : -1;
 }
 
 int read(int fhandle, void *data, size_t size)
 {
-    return _swix(OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3), 4, fhandle, data, size) == NULL ? size : -1;
+    return LOGERR(_swix(OS_GBPB, _INR(0,3), 4, fhandle, data, size)) == NULL ? size : -1;
 }
 
 int write(int fhandle, void *data, size_t size)
 {
-    return _swix(OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3), 2, fhandle, data, size) == NULL ? size : -1;
+    return LOGERR(_swix(OS_GBPB, _INR(0,3), 2, fhandle, data, size)) == NULL ? size : -1;
 }
 
 long lseek(int fd, long lpos, int whence)
@@ -60,7 +63,7 @@ long lseek(int fd, long lpos, int whence)
         case SEEK_CUR:
         {
             int pos = 0;
-            _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 0, fd, &pos);
+            LOGERR(_swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 0, fd, &pos));
             lpos += pos;
             break;
         }
@@ -68,7 +71,7 @@ long lseek(int fd, long lpos, int whence)
         case SEEK_END:
         {
             int ext = 0;
-            _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 2, fd, &ext);
+            LOGERR(_swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 2, fd, &ext));
             lpos = ext - lpos;
             break;
         }
@@ -79,12 +82,12 @@ long lseek(int fd, long lpos, int whence)
 
 int flush(int fhandle)
 {
-    return _swix(OS_Args, _INR(0,1), 255, fhandle) ? 0 : -1;
+    return LOGERR(_swix(OS_Args, _INR(0,1), 255, fhandle)) ? 0 : -1;
 }
 
 int mkdir(const char *filename)
 {
-    return _swix(OS_File, _INR(0,1) | _IN(4), 8, filename, 0) ? 0 : -1;
+    return LOGERR(_swix(OS_File, _INR(0,1) | _IN(4), 8, filename, 0)) ? 0 : -1;
 }
 
 typedef struct
@@ -128,10 +131,10 @@ int _findnext(long handle, struct _finddata_t *info)
 
     do
     {
-	if (_swix(OS_GBPB, _INR(0,6) | _OUTR(3,4),
+	if (LOGERR(_swix(OS_GBPB, _INR(0,6) | _OUTR(3,4),
 		  10, fc->dir, buffer, 1, fc->index,
 		  sizeof(buffer), fc->leaf,
-		  &nread, &fc->index) != NULL)
+		  &nread, &fc->index)) != NULL)
 	    return -1;
     }
     while (nread != 1);
@@ -168,7 +171,7 @@ int _findclose(long handle)
 int _filelength(int fd)
 {
     int ext;
-    return _swix(OS_Args, _INR(0,1)|_OUT(2), 2, fd, &ext) ? -1 : ext;
+    return LOGERR(_swix(OS_Args, _INR(0,1)|_OUT(2), 2, fd, &ext)) ? -1 : ext;
 }
 
 /* eof fileio.c */

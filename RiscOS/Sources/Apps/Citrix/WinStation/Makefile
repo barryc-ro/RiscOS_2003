@@ -211,9 +211,9 @@ installrom: ${APPZ}
 	-${MKDIR} ${ROMDIR}/Resources/
 	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}
 	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Boot,feb
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Run,feb
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${ROMDIR}/Resources/${COUNTRY}

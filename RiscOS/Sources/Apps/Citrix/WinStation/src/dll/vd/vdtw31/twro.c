@@ -90,6 +90,7 @@ typedef struct
     sprite_area *area;
 
     int width, height, bpp;
+    int empty;
 } sprite_descr;
 
 typedef union
@@ -399,13 +400,12 @@ typedef struct
     int ppw;			// pixels per word
     unsigned mask;
     unsigned solid_colour;
-    int x_dir;
 
     /* set by line_init() and updated across line */
     unsigned *ptr;
     int phase;			// original bit offset of bit 0 of word/word_out
     unsigned word;	        // current word being read
-    unsigned word_out;		// current word to write
+    //unsigned word_out;		// current word to write
 } line_info;
 
 typedef unsigned (*pp_function)(unsigned d, unsigned s, unsigned p);
@@ -458,7 +458,7 @@ typedef unsigned (*pp_function)(unsigned d, unsigned s, unsigned p);
 #define rn_PC		15
 
 #define rn_PAT1		4	// 1 or 2 words of pre-rotated pattern data
-#define rn_PAT2		5
+#define rn_PAT2		5	// or solid colour replicated across word
 
 #define rn_DEST_P	6	// current destination ptr
 #define rn_DEST_P_END	7	// end of destination line
@@ -691,6 +691,41 @@ static void save_sprite(const sprite_descr *descr, const char *name)
 #define save_sprite(a,b)
 #endif
 
+
+#ifdef DEBUG
+static void dump_code(unsigned *code)
+{
+    extern int ghLogHandle;
+    extern int guLogFlags;
+
+    if (ghLogHandle != -1 && guLogFlags & LOG_FILE)
+    {
+	unsigned c, *cp = code;
+	do
+	{
+	    char *s;
+	    char buf[12];
+	    int n;
+
+	    c = *cp;
+
+	    n = sprintf(buf, "%08x: ", c);
+	    write( ghLogHandle, buf, n );
+
+	    _swix(Debugger_Disassemble, _INR(0,1) | _OUTR(1,2), c, cp, &s, &n);
+	    write( ghLogHandle, s, n );
+
+	    write( ghLogHandle, "\n", 1 );
+
+	    cp++;
+	}
+	while (c != code_MOV_pc_lr);
+    }
+}
+#else
+#define dump_code(c)
+#endif
+
 #if 0
 static int getlog2bpp(int bpp)
 {
@@ -805,6 +840,7 @@ static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palett
     descr->height = h;
     descr->bpp = bpp;
     descr->area = area;
+    descr->empty = TRUE;
 
     return area != NULL;
 }
@@ -924,6 +960,8 @@ static void fill_sprite(sprite_descr *descr, const void *bits, int in_line_lengt
 	copy_line_to_sprite(out, in, descr->bpp, descr->width);
     }
 
+    descr->empty = FALSE;
+    
     ASSERT((descr->bpp == 1), descr->bpp);
 }
 
@@ -951,13 +989,14 @@ static void set_sprite_palette(sprite_descr *descr, const ropalette *palette)
 
 /*
  * For this call the coordinates are already converted to OS coords, bottom left
+ * seems to have a problem sometimes in 16 colour mode???
  */
 
 static void fill_sprite_from_screen(sprite_descr *descr, int x, int y)
 {
     char buf[12];
 
-    TRACE((TC_TW, TT_TW_res3, "fill_sprite_from_screen: descr %p from OS %dx%d to %dx%d",
+    TRACE((TC_TW, TT_TW_res1, "fill_sprite_from_screen: descr %p from OS %dx%d to %dx%d",
 	   descr, x, y,
 	   x + descr->width*2 - 1,
 	   y + descr->height*2 - 1));
@@ -975,6 +1014,8 @@ static void fill_sprite_from_screen(sprite_descr *descr, int x, int y)
 	  0,	// no palette
 	  x, y,
 	  x + descr->width*2 - 1, y + descr->height*2 - 1));
+
+    descr->empty = FALSE;
 }
 
 /*
@@ -1035,6 +1076,8 @@ static void fill_sprite_from_dib(sprite_descr *descr, CONST BITMAPINFOHEADER *in
     {
 	copy_line_to_sprite(out_data, in_data, descr->bpp, descr->width);
     }
+
+    descr->empty = FALSE;
 }
 
 static void fill_dib_from_sprite(sprite_descr *descr, PBITMAPINFO info, void *bits, int start, int n_lines)
@@ -1110,7 +1153,7 @@ static void fill_palette_from_dib(sprite_descr *descr, CONST BITMAPINFOHEADER *h
     out_pal = (ropalette *)((char *)sprite + sizeof(sprite_header));
     out_pal_size = (sprite->image - sizeof(sprite_header)) / (2*sizeof(ropalette));
 
-    TRACE((TC_TW, TT_TW_res1, "fill_palette_from_dib: in_pal_size %d out_pal_size %d", in_pal_size, out_pal_size));
+    TRACE((TC_TW, TT_TW_res4, "fill_palette_from_dib: in_pal_size %d out_pal_size %d", in_pal_size, out_pal_size));
     
     for (i = 0; i < in_pal_size; i++)
     {
@@ -1133,7 +1176,7 @@ static void fill_palette_from_dib(sprite_descr *descr, CONST BITMAPINFOHEADER *h
     }
 
     i = out_pal_size - in_pal_size;
-    TRACE((TC_TW, TT_TW_res1, "fill_palette_from_dib: clear %d bytes", i));
+    TRACE((TC_TW, TT_TW_res4, "fill_palette_from_dib: clear %d bytes", i));
     if (i)
 	memset(out_pal, 0, 2*sizeof(unsigned)*i);
 }
@@ -1389,6 +1432,11 @@ static void uncache_dc(HDC dc)
     dc->data.local.text_col = UNSET_COLOUR;
     dc->data.local.bk_col = UNSET_COLOUR;
     dc->data.local.brush_solid = UNSET_COLOUR;
+
+    dc->data.current.fg_col = -1;
+    dc->data.current.bg_col = -1;
+    dc->data.current.action = -1;
+    memset(&dc->data.current.clip, 0, sizeof(dc->data.current.clip));
 }
 
 static void set_current_dc(HDC dc)
@@ -1615,7 +1663,7 @@ static void realize_brush(HDC dc)
 	{
 	    void *coltrans = get_colour_lookup_table(dc, &brush->data.sprite, brush->data.color_table_type);
 
-	    if (coltrans != NULL || brush->data.sprite.bpp != dc->data.bpp)
+	    if (coltrans != NULL || brush->data.sprite.bpp != dc->data.bpp || dc->data.brush_org.x || dc->data.brush_org.y)
 	    {
 		sprite_descr *sprite_out = &dc->data.realized.brush;
 		sprite_descr *sprite_in = &brush->data.sprite;
@@ -1623,17 +1671,23 @@ static void realize_brush(HDC dc)
 		if (create_sprite(sprite_out, BRUSH_WIDTH, BRUSH_HEIGHT, dc->data.bpp, FALSE))
 		{
 		    int restore[4];
+		    int x, y;
 
 		    switch_output_to_area(sprite_out->area, NULL, restore);
 
-		    LOGERR(_swix(OS_SpriteOp, _INR(0,7),
-				 52 + 512,
-				 sprite_in->area, first_sprite(sprite_in->area),
-				 0, 0, 0,
-				 NULL,
-				 coltrans));
+		    /* convert the brush to the current mode and palette and adjust its rotation */
+		    for (x = (int)-dc->data.brush_org.x; x < BRUSH_WIDTH; x += BRUSH_WIDTH)
+			for (y = (int)dc->data.brush_org.y; y > -BRUSH_HEIGHT; y -= BRUSH_HEIGHT)
+			    LOGERR(_swix(OS_SpriteOp, _INR(0,7),
+					 coltrans == NULL && brush->data.sprite.bpp == dc->data.bpp ? 34 + 512 : 52 + 512,
+					 sprite_in->area, first_sprite(sprite_in->area),
+					 x, y, 0,
+					 NULL,
+					 coltrans));
 
 		    restore_output(restore);
+
+		    sprite_out->empty = FALSE;
 		}    
 	    }	    
 
@@ -1816,48 +1870,11 @@ static void rop3_use(int rop3, BOOL *uses_source, BOOL *uses_pattern)
 	*uses_source = (a % 5) != 0 || (b % 5) != 0;
 }
 
-#if 0
-/*
- * Return either the original bitmap or one grabbed from the screen
- */
-
-static HBITMAP get_relevant_bitmap(HDC dc, bitblt_info *info, BOOL *delete_after)
-{
-    HBITMAP b = dc->data.bitmap;
-
-    if (b == NULL)
-    {
-	TRACE((TC_TW, TT_TW_res3, "get_relevant_bitmap: dc %p%s from OS %dx%d", dc, is_screen(dc), 
-				cvtx(dc, info->xSrc),
-				cvty(dc, info->ySrc + info->Height - 1)
-	    ));
-
-	switch_output(dc);
-	set_clip_full(dc);	// force it to be full screen
-	
-	// grab a sprite
-	b = CreateCompatibleBitmap(dc, info->Width, info->Height);
-
-	fill_sprite_from_screen(&b->data.sprite,
-				cvtx(dc, info->xSrc),
-				cvty(dc, info->ySrc + info->Height - 1));
-	
-	// mark to be deleted
-	*delete_after = TRUE;
-
-	// reset the offsets
-	info->xSrc = info->ySrc = 0;
-    }
-
-    return b;
-}
-#endif
-
 static void copyrectangle(HDC dc, const bitblt_info *info)
 {
     region_rect *context;
     
-    TRACE((TC_TW, TT_TW_res3, "copyrectangle:"));
+    TRACE((TC_TW, TT_TW_res1, "copyrectangle:"));
 
     switch_output(dc);
 
@@ -1888,7 +1905,7 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
     int x, y, reason;
     region_rect *context;
     
-    TRACE((TC_TW, TT_TW_res3, "plotbitmap: dc %p bitmap %p action %d", dc, bitmap, action));
+    TRACE((TC_TW, TT_TW_res1, "plotbitmap: dc %p bitmap %p action %d", dc, bitmap, action));
 
     ASSERT(bitmap, 0);
     
@@ -1978,9 +1995,9 @@ static void tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
     x1 = cvtx(dc, info->xDest + info->Width);
     y1 = cvty(dc, info->yDest - 1);
 
-    TRACE((TC_TW, TT_TW_res4, "tilesolidbrush: dc %p brush %p colour %d (%x) rop2 %d action %d",
+    TRACE((TC_TW, TT_TW_res1, "tilesolidbrush: dc %p brush %p colour %3d (0x%08x) rop2 %2d action %d",
 	   dc, brush, dc->data.current.fg_col, brush->data.colour, rop2, dc->data.current.action));
-    TRACE((TC_TW, TT_TW_res3, "tilesolidbrush: OS %d,%d %d,%d", x0, y0, x1, y1));
+    TRACE((TC_TW, TT_TW_res4, "tilesolidbrush: OS %d,%d %d,%d", x0, y0, x1, y1));
 
     context = NULL;
     while (set__clip(dc, info->rgn, &context))
@@ -2007,12 +2024,12 @@ static BOOL tilebitmapbrush(HDC dc, const bitblt_info *info, int rop3)
      * return false if we can't */
     switch (rop3 >> 16)
     {
-    case 0x0F:
-	action = plotaction_XOR;
-	break;
-
     case 0x0A:
 	action = plotaction_ANDNOT;
+	break;
+
+    case 0x5A:
+	action = plotaction_XOR;
 	break;
 
     case 0xA0:
@@ -2035,7 +2052,7 @@ static BOOL tilebitmapbrush(HDC dc, const bitblt_info *info, int rop3)
 	return FALSE;
     }
 
-    TRACE((TC_TW, TT_TW_res4, "tilebrush: dc %p brush %p org %d,%d", dc, dc->data.brush, dc->data.brush_org.x, dc->data.brush_org.y));
+    TRACE((TC_TW, TT_TW_res1, "tilebitmapbrush: dc %p brush %p org %d,%d", dc, dc->data.brush, dc->data.brush_org.x, dc->data.brush_org.y));
 
     switch_output(dc);
 
@@ -2056,10 +2073,10 @@ static BOOL tilebitmapbrush(HDC dc, const bitblt_info *info, int rop3)
     {
 	int x, y, xs, ys, xe, ye;
 
-	xs = cvtx(dc, (context->rect.left &~ 7) - dc->data.brush_org.x);
+	xs = cvtx(dc, (context->rect.left &~ 7)/* - dc->data.brush_org.x*/);
 	xe = cvtx(dc, context->rect.right);
 
-	ys = cvty(dc, (context->rect.top &~ 7) - dc->data.brush_org.y + (BRUSH_HEIGHT-1));
+	ys = cvty(dc, (context->rect.top &~ 7)/* - dc->data.brush_org.y*/ + (BRUSH_HEIGHT-1));
 	ye = cvty(dc, context->rect.bottom + (BRUSH_HEIGHT-1));
 
 	TRACE((TC_TW, TT_TW_res3, "tilebrush: sprite OS %d,%d %d,%d reason %d", xs, ys, xe, ye, reason));
@@ -2092,194 +2109,6 @@ static BOOL tilebitmapbrush(HDC dc, const bitblt_info *info, int rop3)
     }
 
     return TRUE;
-}
-
-static void line_ptr(line_info *line, sprite_descr *sprite, int y)
-{
-    if (sprite->area)
-    {
-	sprite_header *hdr = first_sprite(sprite->area);
-
-	line->data = (unsigned *)sprite_data(hdr) + (hdr->width + 1) * y;
-	line->bpp = sprite->bpp;
-    }
-    else
-    {
-	line->data = NULL;
-	line->bpp = 0;
-    }
-}
-
-static void dc_line_ptr(line_info *line, HDC dc, int y)
-{
-    if (dc->gdi.tag == OBJ_DC)
-    {
-	line->data = (unsigned *)((char *)dc->data.display_start + y * dc->data.line_length);
-	line->bpp = dc->data.bpp;
-    }	
-    else if (dc->data.bitmap)
-    {
-	line_ptr(line, &dc->data.bitmap->data.sprite, y);
-    }
-    else
-    {
-	line->data = NULL;
-	line->bpp = dc->data.bpp;
-    }
-}
-
-static void line_init(line_info *line, const void *coltrans, int x)
-{
-    if (line->data)
-    {
-	line->ppw = 32 / line->bpp;
-	line->mask = (1 << line->bpp) - 1;
-	line->coltrans = (const char *)coltrans;
-
-	line->phase = (x & (line->ppw - 1)) * line->bpp;
-	line->ptr = line->data + (x * line->bpp / 32);
-
-	line->word_out = line->word = *(line->ptr);
-
-	if (line->x_dir > 0)
-	{
-	    line->word >>= line->phase;
-	    line->word_out &= ~(((unsigned) -1) << line->phase);
-	}
-	else
-	{
-	    line->word <<= (32 - line->phase - line->bpp);
-	    line->word_out &= (((unsigned) -1) << line->phase);
-
-	    if (line->phase == 0)
-		line->phase = 32;
-	}
-
-	TRACE((TC_TW, TT_TW_res5, "line_init: line %p x %4d: ppw %d mask %2x line start %p current %p phase %d word base %08x in %08x out %08x",
-	       line, x, line->ppw, line->mask, line->data, line->ptr, line->phase, *(line->ptr), line->word, line->word_out));
-    }
-    else
-    {
-	line->phase = 0;
-	line->word = 0;
-#ifdef DEBUG
-	{
-	    int i;
-	    for (i = 0; i < 32; i += line->bpp)
-		line->word |= line->solid_colour << i;
-	}
-#endif
-    }
-}
-
-static int pixel(line_info *line)
-{
-    unsigned pixel;
-
-    if (line->data)
-    {
-	if (line->x_dir > 0)
-	{
-	    /* mask off bottom pixels */
-	    pixel = line->word & line->mask;
-
-	    /* increment phase and get new word or shift down existing word */
-	    if ((line->phase += line->bpp) == 32)
-	    {
-		line->word = *(++line->ptr);
-		line->phase = 0;
-	    }
-	    else
-	    {
-		line->word >>= line->bpp;
-	    }
-	}
-	else
-	{
-	    /* mask off bottom pixels */
-	    pixel = line->word >> (32 - line->bpp);
-
-	    /* decrement phase and get new word or shift up existing word */
-	    if ((line->phase -= line->bpp) == 0)
-	    {
-		line->word = *(--line->ptr);
-		line->phase = 32;
-	    }
-	    else
-	    {
-		line->word <<= line->bpp;
-	    }
-	}
-	
-	/* optionally lookup in colour table */
-	if (line->coltrans)
-	    pixel = line->coltrans[pixel];
-    }
-    else
-    {
-	pixel = line->solid_colour;
-    }
-    
-    TRACE((TC_TW, TT_TW_res5, "pixel: line %p pixel %2x phase %2d word %8x", line, pixel, line->phase, line->word));
-
-    return pixel;
-
-}
-
-static void pixel_out(line_info *line, unsigned pixel)
-{
-    TRACE((TC_TW, TT_TW_res5, "p_out:               pixel %2x phase %2d word %8x", pixel, line->phase, line->word_out));
-
-    if (line->x_dir > 0)
-    {
-	line->word_out |= (pixel & line->mask) << ((line->phase - line->bpp) & 31);
-
-	if (line->phase == 0)
-	{
-	    TRACE((TC_TW, TT_TW_res5, "p_out: write %08x", line->word_out));
-
-	    line->ptr[-1] = line->word_out;	// subtract 1 because we've just loaded a new word at this point
-	    line->word_out = 0;
-	}
-    }
-    else
-    {
-	line->word_out |= (pixel & line->mask) << ((line->phase + line->bpp) & 31);
-
-	if (line->phase == 32)
-	{
-	    TRACE((TC_TW, TT_TW_res5, "p_out: write %08x", line->word_out));
-
-	    line->ptr[1] = line->word_out;
-	    line->word_out = 0;
-	}
-    }	
-}
-
-static void pixel_flush(line_info *line)
-{
-    if (line->x_dir > 0)
-    {
-	if (line->phase != 0)
-	{
-	    line->word_out |= line->word << line->phase;
-	    
-	    TRACE((TC_TW, TT_TW_res5, "p_fls: write %08x", line->word_out));
-	
-	    line->ptr[0] = line->word_out;
-	}
-    }
-    else
-    {
-	if (line->phase != 32)
-	{
-	    line->word_out |= line->word << line->phase;
-	    
-	    TRACE((TC_TW, TT_TW_res5, "p_fls: write %08x", line->word_out));
-	
-	    line->ptr[0] = line->word_out;
-	}
-    }
 }
 
 
@@ -2323,6 +2152,7 @@ static int get_operand(int *parse_string)
 /*
  * This function constructs an ARM assembler function to implement the given ROP.
  * The routine is pretty well optimal for a single pixel function.
+ * It will also work as well for a batch of pixels packed into a word.
  */
 
 static int rop3_function(unsigned *code, int rop3)
@@ -2438,74 +2268,165 @@ static int rop3_function(unsigned *code, int rop3)
 
 static pp_function make_function(int rop3)
 {
-#ifdef DEBUG
-    extern int ghLogHandle;
-    extern int guLogFlags;
-#endif
-    unsigned *code;
+    unsigned *code = code_array;
 
-    code = code_array;
     code += rop3_function(code, rop3);
-    
+
     *code = code_MOV_pc_lr;	// note, no increment so SWI gets inclusive size
-
-#ifdef DEBUG
-    if ( ghLogHandle != -1 && guLogFlags & LOG_FILE)
-    {
-	unsigned c, *cp = code_array;
-	do
-	{
-	    char *s;
-	    char buf[12];
-	    int n;
-
-	    c = *cp;
-
-	    n = sprintf(buf, "%08x: ", c);
-	    write( ghLogHandle, buf, n );
-
-	    _swix(Debugger_Disassemble, _INR(0,1) | _OUTR(1,2), c, cp, &s, &n);
-	    write( ghLogHandle, s, n );
-
-	    write( ghLogHandle, "\n", 1 );
-
-	    cp++;
-	}
-	while (c != code_MOV_pc_lr);
-    }
-#endif
 
     LOGERR(_swix(OS_SynchroniseCodeAreas, _INR(0,2), 1, code_array, code));
 
+    dump_code(code_array);
+    
     return (pp_function)code_array;
 }
 
-static void complex_blt(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3)
+static void line_ptr(line_info *line, sprite_descr *sprite, int y)
+{
+    if (sprite->area)
+    {
+	sprite_header *hdr = first_sprite(sprite->area);
+
+	line->data = (unsigned *)sprite_data(hdr) + (hdr->width + 1) * y;
+	line->bpp = sprite->bpp;
+	line->mask = (1 << line->bpp) - 1;
+    }
+    else
+    {
+	line->data = NULL;
+	line->bpp = 0;
+    }
+}
+
+static void dc_line_ptr(line_info *line, HDC dc, int y)
+{
+    if (dc->gdi.tag == OBJ_DC)
+    {
+	line->data = (unsigned *)((char *)dc->data.display_start + y * dc->data.line_length);
+	line->bpp = dc->data.bpp;
+	line->mask = (1 << line->bpp) - 1;
+    }	
+    else if (dc->data.bitmap)
+    {
+	line_ptr(line, &dc->data.bitmap->data.sprite, y);
+    }
+    else
+    {
+	line->data = NULL;
+	line->bpp = dc->data.bpp;
+	line->mask = (1 << line->bpp) - 1;
+    }
+}
+
+static void line_init(line_info *line, const void *coltrans, int x)
+{
+    if (line->data)
+    {
+	line->ppw = 32 / line->bpp;
+	line->coltrans = (const char *)coltrans;
+
+	line->phase = (x & (line->ppw - 1)) * line->bpp;
+	line->ptr = line->data + (x * line->bpp / 32);
+
+	line->word = *(line->ptr);
+	line->word >>= line->phase;
+
+	TRACE((TC_TW, TT_TW_res5, "line_init: line %p x %4d: ppw %d mask %2x line start %p current %p phase %d word base %08x in %08x",
+	       line, x, line->ppw, line->mask, line->data, line->ptr, line->phase, *(line->ptr), line->word));
+    }
+    else
+    {
+	line->phase = 0;
+	line->word = 0;
+#ifdef DEBUG
+	{
+	    int i;
+	    for (i = 0; i < 32; i += line->bpp)
+		line->word |= line->solid_colour << i;
+	}
+#endif
+    }
+}
+
+static int pixel(line_info *line)
+{
+    unsigned pixel;
+
+    if (line->data)
+    {
+	/* mask off bottom pixels */
+	pixel = line->word & line->mask;
+
+	/* increment phase and get new word or shift down existing word */
+	if ((line->phase += line->bpp) == 32)
+	{
+	    line->word = *(++line->ptr);	/* this could go over the end of useable memory! */
+	    line->phase = 0;
+	}
+	else
+	{
+	    line->word >>= line->bpp;
+	}
+	
+	/* optionally lookup in colour table */
+	if (line->coltrans)
+	    pixel = line->coltrans[pixel];
+    }
+    else
+    {
+	pixel = line->solid_colour;
+    }
+    
+    TRACE((TC_TW, TT_TW_res5, "pixel: line %p pixel %2x phase %2d word %8x", line, pixel, line->phase, line->word));
+
+    return pixel;
+}
+
+#if 0
+static void pixel_out(line_info *line, unsigned pixel)
+{
+    TRACE((TC_TW, TT_TW_res5, "p_out:               pixel %2x phase %2d word %8x", pixel, line->phase, line->word_out));
+
+    line->word_out |= (pixel & line->mask) << ((line->phase - line->bpp) & 31);
+
+    if (line->phase == 0)
+    {
+	TRACE((TC_TW, TT_TW_res5, "p_out: write %08x", line->word_out));
+
+	line->ptr[-1] = line->word_out;	// subtract 1 because we've just loaded a new word at this point
+	line->word_out = 0;
+    }
+}
+
+static void pixel_flush(line_info *line)
+{
+    if (line->phase != 0)
+    {
+	line->word_out |= line->word << line->phase;
+	    
+	TRACE((TC_TW, TT_TW_res5, "p_fls: write %08x", line->word_out));
+	
+	line->ptr[0] = line->word_out;
+    }
+}
+#endif
+
+#if 0
+static void bitblt_nosource(HDC dcDest, const bitblt_info *info, int rop3)
 {
     void *bitmap_coltrans;
     region_rect *context;
     pp_function fn;
-    int x_dir, y_dir;
     sprite_descr *brush;
-
-    /* get colour lookup for source (if bitmap), none if from screen */
-    if (dcSrc->data.bitmap)
-	bitmap_coltrans = get_colour_lookup_table(dcDest, &dcSrc->data.bitmap->data.sprite, dcSrc->data.bitmap->data.color_table_type);
-    else
-	bitmap_coltrans = NULL;
 
     realize_brush(dcDest);
 
-    /* work out whether we need to do copies in the opposite direction */
-    x_dir = /*dcSrc == dcDest && info->xDest > info->xSrc ? -1 :*/ +1;
-    y_dir = dcSrc == dcDest && info->yDest > info->ySrc ? -1 : +1;
-    
     /* get the pixel processor function */
     fn = make_function(rop3);
 
-    TRACE((TC_TW, TT_TW_res4, "complex_blt: destDC %p (bitmap %p) srcDC %p (bitmap %p realized %p) brush %p (coltrans %p) solid %d (%x)",
-	   dcDest, dcDest->data.bitmap, dcSrc, dcSrc->data.bitmap, bitmap_coltrans,
-	   dcDest->data.brush, dcDest->data.realized.brush, //dcDest->data.current.brush_coltrans,
+    TRACE((TC_TW, TT_TW_res1, "bitblt_nosource: destDC %p (bitmap %p) brush %p (coltrans %p) solid %d (%x)",
+	   dcDest, dcDest->data.bitmap, 
+	   dcDest->data.brush, dcDest->data.realized.brush,
 	   dcDest->data.brush ? dcDest->data.brush->data.solid : 0,
 	   dcDest->data.brush ? dcDest->data.local.brush_solid : 0));
 
@@ -2523,37 +2444,116 @@ static void complex_blt(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3
 	
 	// use windows coords as they map to pixels
 	// not pixel 0,0 is top left of screen (ie screen base + 0)
-	if (x_dir > 0)
-	{
-	    x0 = context->rect.left;
-	    x1 = context->rect.right;
-	}
-	else
-	{
-	    x0 = context->rect.right-1;
-	    x1 = context->rect.left-1;
-	}
-
-	if (y_dir > 0)
-	{
-	    y0 = context->rect.top;
-	    y1 = context->rect.bottom;
-	}
-	else
-	{
-	    y0 = context->rect.bottom-1;
-	    y1 = context->rect.top-1;
-	}
+	x0 = context->rect.left;
+	x1 = context->rect.right;
+	y0 = context->rect.top;
+	y1 = context->rect.bottom;
 
 	// get starting phase of brush pixels
-	brush_phase_x0 = (x0 + dcDest->data.brush_org.x) & (BRUSH_WIDTH - 1);
-	brush_phase_y0 = (y0 + dcDest->data.brush_org.y) & (BRUSH_HEIGHT - 1);
+	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
+	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
 	
-	TRACE((TC_TW, TT_TW_res4, "complex_blt: dir %d,%d %d,%d to %d,%d brush phase %d,%d", x_dir, y_dir, x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
+	TRACE((TC_TW, TT_TW_res4, "complex_blt: %d,%d to %d,%d brush phase %d,%d",
+	       x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
 
 	/* enumerate the lines */
 	brush_phase_y = brush_phase_y0;
-	for (y = y0; y != y1; y += y_dir)
+	for (y = y0; y != y1; y ++)
+	{
+	    line_info p_line, d_line;
+
+	    /* get line ptrs */
+	    dc_line_ptr(&d_line, dcDest, y);
+	    line_ptr(&p_line, brush, brush_phase_y);
+
+	    p_line.solid_colour = dcDest->data.local.brush_solid;
+	    p_line.bpp = dcDest->data.bpp;
+
+	    line_init(&d_line, NULL, x0);
+	    line_init(&p_line, NULL, brush_phase_x0);
+
+	    /* enumerate the pixels */
+	    brush_phase_x = brush_phase_x0;
+	    for (x = x0; x != x1; x ++)
+	    {
+		unsigned d, p, val;
+
+		d = pixel(&d_line);
+		p = pixel(&p_line);
+
+		val = fn(d, 0, p);
+
+		pixel_out(&d_line, val);
+
+		if (++brush_phase_x == BRUSH_WIDTH)
+		{
+		    brush_phase_x = 0;
+		    line_init(&p_line, NULL, 0);
+		}
+	    }
+
+	    pixel_flush(&d_line);
+	    
+	    brush_phase_y = (brush_phase_y + 1) & (BRUSH_HEIGHT-1);
+	}
+    }
+}
+#endif
+
+#if 0
+static void bitblt_generic(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3)
+{
+    void *bitmap_coltrans;
+    region_rect *context;
+    pp_function fn;
+    sprite_descr *brush;
+
+    /* get colour lookup for source (if bitmap), none if from screen */
+    if (dcSrc->data.bitmap)
+	bitmap_coltrans = get_colour_lookup_table(dcDest, &dcSrc->data.bitmap->data.sprite, dcSrc->data.bitmap->data.color_table_type);
+    else
+	bitmap_coltrans = NULL;
+
+    realize_brush(dcDest);
+
+    /* get the pixel processor function */
+    fn = make_function(rop3);
+
+    TRACE((TC_TW, TT_TW_res1, "bitblt_generic: destDC %p (bitmap %p) srcDC %p (bitmap %p coltrans %p) brush %p (realized %p) solid %d (%x)",
+	   dcDest, dcDest->data.bitmap, dcSrc, dcSrc->data.bitmap, bitmap_coltrans,
+	   dcDest->data.brush, dcDest->data.realized.brush,
+	   dcDest->data.brush ? dcDest->data.brush->data.solid : 0,
+	   dcDest->data.brush ? dcDest->data.local.brush_solid : 0));
+
+    brush = &dcDest->data.realized.brush;
+    if (!brush->area)
+	brush = &dcDest->data.brush->data.sprite;
+    
+    /* enumerate the clip regions */
+    context = NULL;
+    while (set__clip(dcDest, info->rgn, &context))
+    {
+	int x, y, x0, y0, x1, y1; // these are all in dest dc space
+	int brush_phase_x, brush_phase_y;
+	int brush_phase_x0, brush_phase_y0;
+	
+	// use windows coords as they map to pixels
+	// not pixel 0,0 is top left of screen (ie screen base + 0)
+	x0 = context->rect.left;
+	x1 = context->rect.right;
+	y0 = context->rect.top;
+	y1 = context->rect.bottom;
+
+	// get starting phase of brush pixels
+	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
+	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
+	
+	TRACE((TC_TW, TT_TW_res4, "complex_blt: %d,%d to %d,%d brush phase %d,%d",
+	       x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
+
+	/* enumerate the lines */
+	brush_phase_y = brush_phase_y0;
+	for (y = y0; y != y1; y ++)
 	{
 	    line_info s_line, p_line, d_line;
 
@@ -2565,15 +2565,13 @@ static void complex_blt(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3
 	    p_line.solid_colour = dcDest->data.local.brush_solid;
 	    p_line.bpp = dcDest->data.bpp;
 
-	    d_line.x_dir = s_line.x_dir = p_line.x_dir = x_dir;
-	    
 	    line_init(&d_line, NULL, x0);
 	    line_init(&s_line, bitmap_coltrans, info->xSrc + (x0 - info->xDest));
-	    line_init(&p_line, NULL /* dcDest->data.current.brush_coltrans */, brush_phase_x0);
+	    line_init(&p_line, NULL, brush_phase_x0);
 
 	    /* enumerate the pixels */
 	    brush_phase_x = brush_phase_x0;
-	    for (x = x0; x != x1; x += x_dir)
+	    for (x = x0; x != x1; x ++)
 	    {
 		unsigned s, d, p, val;
 
@@ -2584,19 +2582,553 @@ static void complex_blt(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3
 		val = fn(d, s, p);
 
 		pixel_out(&d_line, val);
-		
-		brush_phase_x = (brush_phase_x + x_dir) & (BRUSH_WIDTH-1);
-		if (brush_phase_x == (x_dir == 1 ? 0 : BRUSH_WIDTH-1))
-		    line_init(&p_line, NULL /*dcDest->data.current.brush_coltrans*/, brush_phase_x);
+
+		if (++brush_phase_x == BRUSH_WIDTH)
+		{
+		    brush_phase_x = 0;
+		    line_init(&p_line, NULL, 0);
+		}
 	    }
 
 	    pixel_flush(&d_line);
 	    
-	    brush_phase_y = (brush_phase_y + y_dir) & (BRUSH_HEIGHT-1);
+	    brush_phase_y = (brush_phase_y + 1) & (BRUSH_HEIGHT-1);
 	}
     }
 
     free(bitmap_coltrans);
+}
+#endif
+
+#define bitblt_nosource(d,i,r) bitblt_generic(d,d,i,r)
+
+static void bitblt_generic(HDC dcDest, HDC dcSrc, bitblt_info *info, int rop3)
+{
+    region_rect *context;
+    pp_function fn;
+    sprite_descr *brush;
+    void *bitmap_coltrans;
+    
+    /* get colour lookup for source (if bitmap), none if from screen */
+    if (dcSrc->data.bitmap && dcSrc != dcDest)
+	bitmap_coltrans = get_colour_lookup_table(dcDest, &dcSrc->data.bitmap->data.sprite, dcSrc->data.bitmap->data.color_table_type);
+    else
+	bitmap_coltrans = NULL;
+
+    realize_brush(dcDest);
+
+    /* get the pixel processor function */
+    fn = make_function(rop3);
+
+    TRACE((TC_TW, TT_TW_res1, "bitblt_generic: destDC %p (bitmap %p) srcDC %p (bitmap %p coltrans %p) brush %p (realized %p) solid %d (%x)",
+	   dcDest, dcDest->data.bitmap, dcSrc, dcSrc->data.bitmap, bitmap_coltrans,
+	   dcDest->data.brush, dcDest->data.realized.brush,
+	   dcDest->data.brush ? dcDest->data.brush->data.solid : 0,
+	   dcDest->data.brush ? dcDest->data.local.brush_solid : 0));
+
+    brush = &dcDest->data.realized.brush;
+    if (!brush->area)
+	brush = &dcDest->data.brush->data.sprite;
+    
+    /* enumerate the clip regions */
+    context = NULL;
+    while (set__clip(dcDest, info->rgn, &context))
+    {
+	int x, y, x0, y0, x1, y1; // these are all in dest dc space
+	int brush_phase_x, brush_phase_y;
+	int brush_phase_x0, brush_phase_y0;
+	
+	// use windows coords as they map to pixels
+	// note pixel 0,0 is top left of screen (ie screen base + 0)
+	x0 = (int)context->rect.left;
+	x1 = (int)context->rect.right;
+	y0 = (int)context->rect.top;
+	y1 = (int)context->rect.bottom;
+
+	// get starting phase of brush pixels
+	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
+	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
+	
+	TRACE((TC_TW, TT_TW_res4, "complex_blt: %d,%d to %d,%d brush phase %d,%d",
+	       x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
+
+	/* enumerate the lines */
+	brush_phase_y = brush_phase_y0;
+	for (y = y0; y < y1; y++)
+	{
+	    line_info s_line, p_line, d_line;
+	    char *pptr, *dptr;
+	    unsigned d, p, dest, pp;
+
+	    /* get line ptrs */
+	    dc_line_ptr(&d_line, dcDest, y);
+	    dc_line_ptr(&s_line, dcSrc, info->ySrc + (y - info->yDest));
+	    line_ptr(&p_line, brush, brush_phase_y);
+
+	    line_init(&s_line, bitmap_coltrans, info->xSrc + (x0 - info->xDest));
+
+	    if (dcDest->data.bpp == 8)
+	    {
+		dptr = (char *)d_line.data + x0;
+		pptr = (char *)p_line.data;
+
+		if (pptr)
+		    pptr += brush_phase_x0;
+		else
+		    p = dcDest->data.local.brush_solid;
+
+		/* enumerate the pixels */
+		brush_phase_x = brush_phase_x0;
+		for (x = x0; x != x1; x++)
+		{
+		    if (pptr)
+		    {
+			p = *pptr++;
+
+			if (++brush_phase_x == (BRUSH_WIDTH-1))
+			{
+			    brush_phase_x0 = 0;
+			    pptr = (char *)p_line.data;
+			}
+		    }
+
+		    *dptr = fn(*dptr, pixel(&s_line), p);
+
+		    dptr++;
+		}
+	    }
+	    else
+	    {
+		dptr = (char *)d_line.data + x0/2;
+		pptr = (char *)p_line.data;
+
+		if (pptr)
+		{
+		    pptr += brush_phase_x0/2;
+
+		    if ((brush_phase_x0 & 1) == 1)
+			pp = *pptr++;
+		}
+		else
+		    p = dcDest->data.local.brush_solid;
+
+		/* initialise the first pixel if odd */
+		if ((x0 & 1) == 1)
+		{
+		    d = *dptr;
+
+		    dest = d & 0x0f;
+		}
+
+		/* enumerate the pixels */
+		brush_phase_x = brush_phase_x0;
+
+		/* enumerate over the pixels */
+		for (x = x0; x != x1; x++)
+		{
+		    if (pptr)
+		    {
+			if ((brush_phase_x & 1) == 0)
+			{
+			    pp = *pptr++;
+			    p = pp & 0x0f;
+			}
+			else
+			    p = pp >> 4;
+		    
+			if (++brush_phase_x == BRUSH_WIDTH)
+			{
+			    brush_phase_x = 0;
+			    pptr = (char *)p_line.data;
+			}
+		    }
+
+		    if ((x & 1) == 0)
+		    {
+			d = *dptr;
+
+			dest = fn(d & 0x0f, pixel(&s_line), p) & 0x0f;
+		    }
+		    else
+		    {
+			*dptr++ = dest | (fn(d >> 4, pixel(&s_line), p) << 4);
+		    }
+		}
+
+		/* if there is one left then flush it out */
+		if ((x & 1) == 1)
+		{
+		    *dptr++ = dest | (d & 0xf0);
+		}
+	    }
+
+	    brush_phase_y = (brush_phase_y + 1) & (BRUSH_HEIGHT-1);
+	}
+    }
+
+    free(bitmap_coltrans);
+}
+
+
+/* This routine is used for blitting within the one context (which
+ * maybe screen or mem). This implies that the order of copying is
+ * important so will have to be taken into account.
+ * solid or brush patterns can be used.
+ * any rop3 except SRCCOPY which is special cased.
+ */
+
+static void bitblt_same_context_8(HDC dc, bitblt_info *info, int rop3)
+{
+    region_rect *context;
+    pp_function fn;
+    int x_dir, y_dir;
+    sprite_descr *brush;
+    
+    realize_brush(dc);
+
+    /* work out whether we need to do copies in the opposite direction */
+    x_dir = info->xDest > info->xSrc ? -1 : +1;
+    y_dir = info->yDest > info->ySrc ? -1 : +1;
+    
+    /* get the pixel processor function */
+    fn = make_function(rop3);
+
+    TRACE((TC_TW, TT_TW_res1, "bitblt_same_context_8: same DC %p (bitmap %p) brush %p (realized %p) solid %d (%x)",
+	   dc, dc->data.bitmap,
+	   dc->data.brush, dc->data.realized.brush,
+	   dc->data.brush ? dc->data.brush->data.solid : 0,
+	   dc->data.brush ? dc->data.local.brush_solid : 0));
+
+    brush = &dc->data.realized.brush;
+    if (!brush->area)
+	brush = &dc->data.brush->data.sprite;
+    
+    /* enumerate the clip regions */
+    context = NULL;
+    while (set__clip(dc, info->rgn, &context))
+    {
+	int x, y, x0, y0, x1, y1; // these are all in dest dc space
+	int brush_phase_x, brush_phase_y;
+	int brush_phase_x0, brush_phase_y0;
+	
+	// use windows coords as they map to pixels
+	// not pixel 0,0 is top left of screen (ie screen base + 0)
+	if (x_dir > 0)
+	{
+	    x0 = (int)context->rect.left;
+	    x1 = (int)context->rect.right;
+	}
+	else
+	{
+	    x0 = (int)context->rect.right-1;
+	    x1 = (int)context->rect.left-1;
+	}
+
+	if (y_dir > 0)
+	{
+	    y0 = (int)context->rect.top;
+	    y1 = (int)context->rect.bottom;
+	}
+	else
+	{
+	    y0 = (int)context->rect.bottom-1;
+	    y1 = (int)context->rect.top-1;
+	}
+
+	// get starting phase of brush pixels
+	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
+	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
+	
+	TRACE((TC_TW, TT_TW_res4, "complex_blt: dir %d,%d %d,%d to %d,%d brush phase %d,%d",
+	       x_dir, y_dir, x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
+
+	/* enumerate the lines */
+	brush_phase_y = brush_phase_y0;
+	for (y = y0; y != y1; y += y_dir)
+	{
+	    line_info s_line, p_line, d_line;
+	    char *sp, *pp, *dp;
+	    unsigned p;
+
+	    /* get line ptrs */
+	    dc_line_ptr(&d_line, dc, y);
+	    dc_line_ptr(&s_line, dc, info->ySrc + (y - info->yDest));
+	    line_ptr(&p_line, brush, brush_phase_y);
+
+	    dp = (char *)d_line.data + x0;
+	    sp = (char *)s_line.data + x0 + (info->xSrc - info->xDest);
+	    pp = (char *)p_line.data;
+
+	    if (pp)
+		pp += brush_phase_x0;
+	    else
+		p = dc->data.local.brush_solid;
+
+	    /* enumerate the pixels */
+	    brush_phase_x = brush_phase_x0;
+	    for (x = x0; x != x1; x += x_dir)
+	    {
+		if (pp)
+		{
+		    p = *pp;
+
+		    brush_phase_x = (brush_phase_x + x_dir) & (BRUSH_WIDTH-1);
+		    if (brush_phase_x == (x_dir == 1 ? 0 : BRUSH_WIDTH-1))
+			pp = (char *)p_line.data + brush_phase_x0;
+		    else
+			pp += x_dir;
+		}
+
+		*dp = fn(*dp, *sp, p);
+
+		sp += x_dir;
+		dp += x_dir;
+	    }
+	    
+	    brush_phase_y = (brush_phase_y + y_dir) & (BRUSH_HEIGHT-1);
+	}
+    }
+}
+
+static void bitblt_same_context_4(HDC dc, bitblt_info *info, int rop3)
+{
+    region_rect *context;
+    pp_function fn;
+    int x_dir, y_dir;
+    sprite_descr *brush;
+    
+    realize_brush(dc);
+
+    /* work out whether we need to do copies in the opposite direction */
+    x_dir = info->xDest > info->xSrc ? -1 : +1;
+    y_dir = info->yDest > info->ySrc ? -1 : +1;
+    
+    /* get the pixel processor function */
+    fn = make_function(rop3);
+
+    TRACE((TC_TW, TT_TW_res1, "bitblt_same_context_4: same DC %p (bitmap %p) brush %p (realized %p) solid %d (%x)",
+	   dc, dc->data.bitmap,
+	   dc->data.brush, dc->data.realized.brush,
+	   dc->data.brush ? dc->data.brush->data.solid : 0,
+	   dc->data.brush ? dc->data.local.brush_solid : 0));
+
+    brush = &dc->data.realized.brush;
+    if (!brush->area)
+	brush = &dc->data.brush->data.sprite;
+    
+    /* enumerate the clip regions */
+    context = NULL;
+    while (set__clip(dc, info->rgn, &context))
+    {
+	int x, y, x0, y0, x1, y1; // these are all in dest dc space
+	int brush_phase_x, brush_phase_y;
+	int brush_phase_x0, brush_phase_y0;
+	
+	// use windows coords as they map to pixels
+	// note pixel 0,0 is top left of screen (ie screen base + 0)
+	if (x_dir > 0)
+	{
+	    x0 = (int)context->rect.left;
+	    x1 = (int)context->rect.right;
+	}
+	else
+	{
+	    x0 = (int)context->rect.right-1;
+	    x1 = (int)context->rect.left-1;
+	}
+
+	if (y_dir > 0)
+	{
+	    y0 = (int)context->rect.top;
+	    y1 = (int)context->rect.bottom;
+	}
+	else
+	{
+	    y0 = (int)context->rect.bottom-1;
+	    y1 = (int)context->rect.top-1;
+	}
+
+	// get starting phase of brush pixels
+	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
+	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
+	
+	TRACE((TC_TW, TT_TW_res4, "complex_blt: dir %d,%d %d,%d to %d,%d brush phase %d,%d",
+	       x_dir, y_dir, x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
+
+	/* enumerate the lines */
+	brush_phase_y = brush_phase_y0;
+	for (y = y0; y != y1; y += y_dir)
+	{
+	    line_info s_line, p_line, d_line;
+	    char *sptr, *pptr, *dptr;
+	    unsigned d, s, p, dest, ss, pp;
+	    int s_phase;
+
+	    /* get line ptrs */
+	    dc_line_ptr(&d_line, dc, y);
+	    dc_line_ptr(&s_line, dc, info->ySrc + (y - info->yDest));
+	    line_ptr(&p_line, brush, brush_phase_y);
+
+	    dptr = (char *)d_line.data + x0/2;
+	    sptr = (char *)s_line.data + (x0 + (info->xSrc - info->xDest))/2;
+	    pptr = (char *)p_line.data;
+
+	    if (pptr)
+		pptr += brush_phase_x0/2;
+	    else
+		p = dc->data.local.brush_solid;
+
+	    /* enumerate the pixels */
+	    brush_phase_x = brush_phase_x0;
+	    s_phase = (x0 + (info->xSrc - info->xDest)) & 1;
+
+	    if (x_dir > 0)
+	    {
+		/* initialise the first pixels if odd */
+		if (s_phase)
+		{
+		    ss = *sptr++;
+		}
+
+		if (x0 & 1)
+		{
+		    d = *dptr;
+
+		    dest = d & 0x0f;
+		}
+
+		if (pptr)
+		{
+		    if ((brush_phase_x & 1) == 1)
+			pp = *pptr++;
+		}
+
+		/* enumerate over the pixels */
+		for (x = x0; x != x1; x++)
+		{
+		    if (!s_phase)
+		    {
+			ss = *sptr++;
+			s = ss & 0x0f;
+			s_phase = 1;
+		    }
+		    else
+		    {
+			s = ss >> 4;
+			s_phase = 0;
+		    }
+		    
+		    if (pptr)
+		    {
+			if ((brush_phase_x & 1) == 0)
+			{
+			    pp = *pptr++;
+			    p = pp & 0x0f;
+			}
+			else
+			    p = pp >> 4;
+		    
+			if (++brush_phase_x == BRUSH_WIDTH)
+			{
+			    brush_phase_x = 0;
+			    pptr = (char *)p_line.data;
+			}
+		    }
+
+		    if ((x & 1) == 0)
+		    {
+			d = *dptr;
+
+			dest = fn(d & 0x0f, s, p) & 0x0f;
+		    }
+		    else
+		    {
+			*dptr++ = dest | (fn(d >> 4, s, p) << 4);
+		    }
+		}
+
+		/* if there is one left then flush it out */
+		if ((x & 1) == 1)
+		{
+		    *dptr = dest | (d & 0xf0);
+		}
+	    }
+	    else /* x_dir < 0 */
+	    {
+		/* initialise the first pixel if even */
+		if (!s_phase)
+		{
+		    ss = *sptr--;
+		}
+		
+		if ((x0 & 1) == 0)
+		{
+		    d = *dptr;
+
+		    dest = d & 0xf0;
+		}
+
+		if (pptr)
+		{
+		    if ((brush_phase_x & 1) == 0)
+			pp = *pptr--;
+		}
+
+		/* enumerate over the pixels */
+		for (x = x0; x != x1; x--)
+		{
+		    if (!s_phase)
+		    {
+			s = ss & 0x0f;
+			s_phase = 1;
+		    }
+		    else
+		    {
+			ss = *sptr--;
+			s = ss >> 4;
+			s_phase = 0;
+		    }
+		    
+		    if (pptr)
+		    {
+			if ((brush_phase_x & 1) == 1)
+			{
+			    pp = *pptr--;
+			    p = pp >> 4;
+			}
+			else
+			    p = pp & 0x0f;
+		    
+			if (--brush_phase_x == -1)
+			{
+			    brush_phase_x = BRUSH_WIDTH-1;
+			    pptr = (char *)p_line.data + (BRUSH_WIDTH-1)/2;
+			}
+		    }
+
+		    if ((x & 1) == 1)
+		    {
+			d = *dptr;
+
+			dest = fn(d >> 4, s, p) << 4;
+		    }
+		    else
+		    {
+			*dptr-- = dest | (fn(d & 0x0f, s, p) & 0x0f);
+		    }
+		}
+
+		/* if there is one left then flush it out */
+		if ((x & 1) == 0)
+		{
+		    *dptr = dest | (d & 0x0f);
+		}
+		
+	    } /* x_dir > 0 */
+
+	    brush_phase_y = (brush_phase_y + y_dir) & (BRUSH_HEIGHT-1);
+	}
+    }
 }
 
 /*
@@ -2608,7 +3140,7 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
     bitblt_info info;
     BOOL use_source, use_pattern;
 
-    TRACE((TC_TW, TT_TW_res4, "BitBlt: %p%s %dx%d %dx%d from %p%s %dx%d brush %p rop3=0x%x",
+    TRACE((TC_TW, TT_TW_res1, "BitBlt: %p%s %3dx%3d %3dx%3d from %p%s %3dx%3d brush %p rop3=0x%06x",
 	   dcDest, is_screen(dcDest),
 	   xDest, yDest, Width, Height,
 	   dcSrc, is_screen(dcSrc),
@@ -2630,29 +3162,33 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
     info.rgn = CreateRectRgn(xDest, yDest, xDest + Width, yDest + Height);
     CombineRgn(info.rgn, dcDest->data.clip, info.rgn, RGN_AND);
 
-    rop3_use(rop3, &use_source, &use_pattern);
+    rop3_use((int)rop3, &use_source, &use_pattern);
     
     if (!use_source)
     {
 	if (!use_pattern || dcDest->data.brush->data.solid)
 	{
-	    tilesolidbrush(dcDest, &info, rop3);
+	    tilesolidbrush(dcDest, &info, (int)rop3);
 	}
-	else if (!tilebitmapbrush(dcDest, &info, rop3))
+	else if (!tilebitmapbrush(dcDest, &info, (int)rop3))
 	{
-	    complex_blt(dcDest, dcSrc, &info, rop3); // bitmap pattern and dest
+	    bitblt_nosource(dcDest, &info, (int)rop3); // bitmap pattern and dest
 	}
     }
     else if (dcSrc == dcDest)
     {
-	switch (rop3)
+	switch ((int)rop3)
 	{
 	case SRCCOPY:
 	    copyrectangle(dcDest, &info);
 	    break;
 
 	default:
-	    complex_blt(dcDest, dcSrc, &info, rop3); // bitmap to same bitmap (or screen to screen) op with optional pattern (bitmap or solid), direction matters
+	    // bitmap to same bitmap (or screen to screen) op with optional pattern (bitmap or solid), direction matters
+	    if (dcDest->data.bpp == 8)
+		bitblt_same_context_8(dcDest, &info, (int)rop3);
+	    else
+		bitblt_same_context_4(dcDest, &info, (int)rop3);
 	    break;
 	}
     }
@@ -2685,16 +3221,17 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 	    break;
 
 	default:
-	    complex_blt(dcDest, dcSrc, &info, rop3); // bitmap to screen op with optional pattern (bitmap or solid)
+	    bitblt_generic(dcDest, dcSrc, &info, (int)rop3); // bitmap to screen op with optional pattern (bitmap or solid)
 	    break;
 	}    
     }
     else
     {
-	if (rop3 == SRCCOPY &&
-	    xDest == 0 && yDest == 0 &&
-	    Width == dcDest->data.bitmap->data.sprite.width && 
-	    Height == dcDest->data.bitmap->data.sprite.height)
+#if 0
+	if (rop3 == SRCCOPY &&							// is straight copy
+	    xDest == 0 && yDest == 0 &&						// to bottom left
+	     (Width == dcDest->data.bitmap->data.sprite.width &&		// we are grabbing the exact size of the sprite
+	      Height == dcDest->data.bitmap->data.sprite.height))
 	{
 	    switch_output(dcSrc);
 	    set_clip_full(dcSrc);	// force it to be full screen
@@ -2704,11 +3241,16 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 				    cvty(dcSrc, ySrc + Height - 1));
 	}
 	else
+#endif
 	{
-	    complex_blt(dcDest, dcSrc, &info, rop3); // screen to bitmap op with optional pattern (bitmap or solid)
+	    bitblt_generic(dcDest, dcSrc, &info, (int)rop3); // screen to bitmap op with optional pattern (bitmap or solid)
+//	    save_sprite(&dcDest->data.bitmap->data.sprite, "grab");
 	}
     }
 
+    if (dcDest->data.bitmap)
+	dcDest->data.bitmap->data.sprite.empty = FALSE;
+    
     DeleteObject(info.rgn);
 
     TRACE((TC_TW, TT_TW_res4, "BitBlt: out"));
@@ -2843,10 +3385,7 @@ HBITMAP CreateBitmapIndirect(CONST BITMAP *b)
     if (bitmap->data.sprite.area)
     {
 	if (b->bmBits)
-	{
 	    fill_sprite(&bitmap->data.sprite, b->bmBits, (int)b->bmWidthBytes);
-//	    save_sprite(&bitmap->data.sprite, "bitmap");
-	}
     }
     else
     {
@@ -2906,10 +3445,10 @@ int FillRect(HDC dc, CONST RECT *lprc, HBRUSH hbr)
 
     old = SelectObject(dc, hbr);
 
-    PatBlt(dc, lprc->left, lprc->top,
+    PatBlt(dc, (int)lprc->left, (int)lprc->top,
 	   (int)lprc->right - (int)lprc->left, 
 	   (int)lprc->bottom - (int)lprc->top,
-	   PATCOPY);
+	   (DWORD)PATCOPY);
 
     SelectObject(dc, old);
     return 1;
@@ -2932,6 +3471,8 @@ HDC GetDC(HWND hwnd)
 	if (dc == NULL)
 	    return NULL;
 
+	uncache_dc(dc);
+	
 	set_current_dc(dc);
 	set_default_dc(dc);
 
@@ -3098,7 +3639,6 @@ HRGN CreateRectRgnIndirect(CONST RECT *prect)
 HBRUSH CreateSolidBrush(COLORREF colref)
 {
     HBRUSH brush;
-    ropalette pal[2];
 
     TRACE((TC_TW, TT_TW_res4, "CreateSolidBrush: color 0x%x", colref));
 
@@ -3110,6 +3650,7 @@ HBRUSH CreateSolidBrush(COLORREF colref)
     brush->data.solid = TRUE;
     brush->data.colour = colref;
 #else
+    ropalette pal[2];
     create_sprite(&brush->data.sprite, 8, 8, 1, TRUE);
 
     pal[0].w = 0;
@@ -3580,7 +4121,7 @@ int SetDIBitsToDevice(HDC dc,
     dcCompat = CreateCompatibleDC(dc);
     SelectObject(dcCompat, bitmap);
     
-    BitBlt(dc, xDest, yDest, Width, Height, dcCompat, xSrc, ySrc, SRCCOPY);
+    BitBlt(dc, xDest, yDest, (int)Width, (int)Height, dcCompat, xSrc, ySrc, SRCCOPY);
 
     DeleteObject(dcCompat);
     DeleteObject(bitmap);
