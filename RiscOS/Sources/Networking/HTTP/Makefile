@@ -31,6 +31,9 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 
+SECUREFLAGS= -DVERIFY_MD
+INSECUREFLAGS= -DNO_SECURE
+
 #
 # Libraries
 #
@@ -59,8 +62,8 @@ DFLAGS = -DCSFS ${DB}
 #
 COMPONENT = http
 TARGET    = aof.${COMPONENT}
-OBJS      = mimemap.o files.o http.o modhead.o
-SECUREOBJS= os.mimemap os.files os.http modheadS.o
+OBJS      = mimemap.o files.o http.o ModHead.o
+SECUREOBJS= os.mimemap os.files os.http os.ModHead
 EXPORTS   = h.httppub h.pads
 
 .SUFFIXES:   .os
@@ -68,9 +71,10 @@ EXPORTS   = h.httppub h.pads
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $< -DNO_SECURE
-.c.os:;     ${CC} ${CFLAGS} -o $@ $< -DVERIFY_MD
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} -o $@ $< ${INSECUREFLAGS}
+.c.os:;     ${CC} ${CFLAGS} -o $@ $< ${SECUREFLAGS}
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< ${INSECUREFLAGS}
+.cmhg.os:;  ${CMHG} ${CMHGFLAGS} -o $@ $< ${SECUREFLAGS}
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -139,15 +143,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
-os.files:	c.files
-os.files:	C:h.kernel
-os.files:	h.files
 o.mimemap:	c.mimemap
 o.mimemap:	C:h.kernel
 o.mimemap:	h.mimemap
@@ -208,84 +203,15 @@ o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
 o.http:	h.csfs
-os.http:	c.http
-os.http:	C:h.kernel
-os.http:	C:h.swis
-os.http:	h.tcplibs
-os.http:	TCPIPLibs:sys.h.types
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:machine.h.endian
-os.http:	TCPIPLibs:machine.h.ansi
-os.http:	TCPIPLibs:machine.h.types
-os.http:	TCPIPLibs:sys.h.socket
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:sys.h.errno
-os.http:	C:h.kernel
-os.http:	TCPIPLibs:net.h.if
-os.http:	TCPIPLibs:sys.h.socket
-os.http:	TCPIPLibs:sys.h.time
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:net.h.if_arp
-os.http:	TCPIPLibs:sys.h.socket
-os.http:	TCPIPLibs:netinet.h.in
-os.http:	TCPIPLibs:sys.h.ioctl
-os.http:	TCPIPLibs:sys.h.ttycom
-os.http:	TCPIPLibs:sys.h.ioccom
-os.http:	TCPIPLibs:sys.h.ioccom
-os.http:	TCPIPLibs:sys.h.filio
-os.http:	TCPIPLibs:sys.h.ioccom
-os.http:	TCPIPLibs:sys.h.sockio
-os.http:	TCPIPLibs:sys.h.ioccom
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:h.netdb
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:netns.h.ns
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:sys.h.time
-os.http:	TCPIPLibs:h.socklib
-os.http:	TCPIPLibs:sys.h.types
-os.http:	TCPIPLibs:sys.h.socket
-os.http:	TCPIPLibs:sys.h.stat
-os.http:	TCPIPLibs:sys.h.time
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	TCPIPLibs:sys.h.time
-os.http:	TCPIPLibs:sys.h.uio
-os.http:	TCPIPLibs:sys.h.cdefs
-os.http:	C:h.kernel
-os.http:	h.status
-os.http:	<Lib$Dir>.SSL.h.objects
-os.http:	<Lib$Dir>.SSL.h.asn1
-os.http:	<Lib$Dir>.SSL.h.bn
-os.http:	<Lib$Dir>.SSL.h.stack
-os.http:	<Lib$Dir>.SSL.h.pem
-os.http:	<Lib$Dir>.SSL.h.rsa
-os.http:	<Lib$Dir>.SSL.h.bn
-os.http:	<Lib$Dir>.SSL.h.dsa
-os.http:	<Lib$Dir>.SSL.h.bn
-os.http:	<Lib$Dir>.SSL.h.x509
-os.http:	<Lib$Dir>.SSL.h.stack
-os.http:	<Lib$Dir>.SSL.h.asn1
-os.http:	<Lib$Dir>.SSL.h.envelope
-os.http:	<Lib$Dir>.SSL.h.md2
-os.http:	<Lib$Dir>.SSL.h.md5
-os.http:	<Lib$Dir>.SSL.h.sha
-os.http:	<Lib$Dir>.SSL.h.des
-os.http:	<Lib$Dir>.SSL.h.rc4
-os.http:	<Lib$Dir>.SSL.h.rc2
-os.http:	<Lib$Dir>.SSL.h.idea
-os.http:	<Lib$Dir>.SSL.h.rsa
-os.http:	<Lib$Dir>.SSL.h.dsa
-os.http:	<Lib$Dir>.SSL.h.dh
-os.http:	<Lib$Dir>.SSL.h.envelope
-os.http:	<Lib$Dir>.SSL.h.rsa
-os.http:	<Lib$Dir>.SSL.h.ssl
-os.http:	<Lib$Dir>.SSL.h.x509
-os.http:	h.httppub
-os.http:	h.pads
-os.http:	h.http
-os.http:	h.files
-os.http:	h.mimemap
-os.http:	h.csfs
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
+os.files:	c.files
+os.files:	C:h.kernel
+os.files:	h.files
 os.http:	c.http
 os.http:	C:h.kernel
 os.http:	C:h.swis
