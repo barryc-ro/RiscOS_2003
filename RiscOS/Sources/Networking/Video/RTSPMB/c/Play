@@ -35,6 +35,7 @@
 #include "Global.h"
 #include "Headers.h"
 #include "Module.h"
+#include "MPEGCtrl.h"
 #include "RTSPMErrors.h"
 #include "Session.h"
 #include "Status.h"
@@ -55,6 +56,7 @@ play_state;
 /* Local functions - miscellaneous */
 
 static bool              play_slowmofwd           (const char * scale);
+static int               play_process_speed       (const char * scale);
 
 /* Local functions - general command sending assitance */
 
@@ -114,6 +116,39 @@ static bool play_slowmofwd(const char * scale)
 }
 
 /**************************************************************/
+/* play_process_speed()                                       */
+/*                                                            */
+/* Process a string which should contain a number which may   */
+/* be negative or a decimal fraction, e.g. "-0.4", "55",      */
+/* ".4" but not (say) "1/3" or "    65".                      */
+/*                                                            */
+/* Parameters: Pointer to the string. If NULL, "1" is used.   */
+/*                                                            */
+/* Returns:    An int containing an indication of play mode   */
+/*             within the string; see MPEGCtrl.h.             */
+/**************************************************************/
+
+static int play_process_speed(const char * scale)
+{
+  int type;
+
+  if (scale == NULL || *scale == '\0') scale = "1";
+
+  if      (!strcmp(scale, "1")) type = MPEGCtrl_MCRS_Trick_Play;
+  else if (!strcmp(scale, "0")) type = MPEGCtrl_MCRS_Trick_Freeze;
+
+  else if (strstr(scale, "0.") != NULL)
+  {
+    if (*scale == '-')          type = MPEGCtrl_MCRS_Trick_SRWD;
+    else                        type = MPEGCtrl_MCRS_Trick_SFWD;
+  }
+  else if (*scale == '-')       type = MPEGCtrl_MCRS_Trick_FRWD;
+  else                          type = MPEGCtrl_MCRS_Trick_FFWD;
+
+  return type;
+}
+
+/**************************************************************/
 /* play_play()                                                */
 /*                                                            */
 /* Implement RTSPMB_Play. See the Video Control               */
@@ -122,9 +157,10 @@ static bool play_slowmofwd(const char * scale)
 /* This function always sends at least one command, which     */
 /* is either PAUSE for zero speed or for a trick play mode    */
 /* transition, or SET_PLAYMODE if playback is starting for    */
-/* the first time. A command chain is set up which is dealt   */
-/* with by the state machine calling back into play_send_play */
-/* or play_send_set_playmode.                                 */
+/* the first time. PLAY is used directly to exit PAUSE. A     */
+/* command chain is set up which is dealt with by the state   */
+/* machine calling back into play_send_play or                */
+/* play_send_set_playmode.                                    */
 /**************************************************************/
 
 _kernel_oserror * play_play(_kernel_swi_regs * r)
@@ -136,6 +172,11 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
   char    * scale;
 
   dprintf(("", "play_play: Called\n"));
+
+//printf("play_play: &%08X, '%s', '%s'\n",
+//r->r[1],
+//r->r[2] != 0 ? (char *) r->r[2] : "<NULL>",
+//r->r[3] != 0 ? (char *) r->r[3] : "<NULL>");
 
   RetError(play_preamble(s));
 
@@ -179,25 +220,41 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
     dprintf(("", "play_play: Building PAUSE to pause\n"));
 
     s->next_command_cb = NULL;
+    s->playmode        = Play_MB_Trick_Freeze;
+
     RetError(play_build_pause(s));
   }
   else
   {
-    if (s->started != 0 || paused)
+    if (s->started != 0 && !paused)
     {
       dprintf(("", "play_play: Building PAUSE to change trick mode\n"));
 
       s->next_command_cb = play_send_set_playmode;
+
       RetError(play_build_pause(s));
+    }
+    else if (paused)
+    {
+      dprintf(("", "play_play: Building PLAY to unpause\n"));
+
+      s->next_command_cb = NULL;
+      s->playmode        = Play_MB_Trick_Play;
+
+      RetError(play_build_play(s));
     }
     else
     {
       dprintf(("", "play_play: Building SET_PLAYMODE\n"));
 
       s->next_command_cb = play_send_play;
+
       RetError(play_build_set_playmode(s));
     }
   }
+
+
+//printf("PR '%s' ",s->play_record);
 
   /* Send the command */
 
@@ -349,6 +406,8 @@ _kernel_oserror * play_replay(session * s)
   /* Range */
 
   else if (
+            *range != '\0' &&
+
             headers_add_header(&new_s->headers,
                                Headers_HeaderName_Range,
                                range)
@@ -359,6 +418,8 @@ _kernel_oserror * play_replay(session * s)
   /* The Scale/Speed header value was worked out above */
 
   else if (
+            *scale != '\0' &&
+
             headers_add_header(&new_s->headers,
                                slowmofwd ? Headers_HeaderName_Speed : Headers_HeaderName_Scale,
                                scale)
@@ -661,7 +722,7 @@ static _kernel_oserror * play_send_state_command(session * s, play_state state)
 
 static _kernel_oserror * play_build_pause(session * s)
 {
-printf("play_build_pause ");
+//printf("play_build_pause ");
 
   return play_build_play_or_pause(s, true);
 }
@@ -680,13 +741,53 @@ printf("play_build_pause ");
 
 static _kernel_oserror * play_build_set_playmode(session * s)
 {
-  bool fail = false;
+  char * playmode = NULL;
+  bool   fail     = false;
 
-printf("play_build_set_playmode ");
+//printf("set_playmode ");
 
   /* Start adding headers */
 
   if (s->play_record == NULL) fail = true;
+  else
+  {
+    playmode = malloc(sizeof(Headers_HeaderValue_ContentLength) - 1); /* We want the terminator included; the -1 is there as '%d' will end up as a single digit number */
+
+    /* The content length header value is a bit of a hack; it must be the last */
+    /* item as it holds a double CR LF and a "Playmode:" entry for the body    */
+    /* text of our SET_PLAYMODE command. It's a nasty way of doing it, but     */
+    /* very cheap in code terms.                                               */
+
+    if (playmode != NULL)
+    {
+      int type = play_process_speed(s->play_record);
+      int mode;
+
+      /* Rather than modify play_process_speed to spit out MediaBase stuff directly, */
+      /* the full accuracy of play methods is kept, in case future MediaBase servers */
+      /* support features missing at the time of writing (e.g. SFWD play).           */
+
+      switch (type)
+      {
+        case MPEGCtrl_MCRS_Trick_FFWD:   mode = Play_MB_Trick_FFWD;   break;
+        case MPEGCtrl_MCRS_Trick_SFWD:   mode = Play_MB_Trick_Play;   break; /* No SFWD on MediaBase */
+        case MPEGCtrl_MCRS_Trick_Freeze: mode = Play_MB_Trick_Freeze; break;
+        case MPEGCtrl_MCRS_Trick_FRWD:   mode = Play_MB_Trick_FRWD;   break;
+        case MPEGCtrl_MCRS_Trick_SRWD:   mode = Play_MB_Trick_FRWD;   break; /* No SRWD on MediaBase */
+
+        default:
+        case MPEGCtrl_MCRS_Trick_Play:   mode = Play_MB_Trick_Play;   break;
+      }
+
+      sprintf(playmode,
+              Headers_HeaderValue_ContentLength,
+              mode);
+
+      s->playmode = mode;
+    }
+  }
+
+  if (playmode == NULL) fail = true;
 
   else if (
             headers_add_header(&s->headers,
@@ -730,17 +831,58 @@ printf("play_build_set_playmode ");
           )
           fail = true;
 
-  /* Content length */
+  /* Content length - THIS MUST BE THE LAST ITEM ADDED */
 
-  else if (
-            headers_add_header(&s->headers,
-                               Headers_HeaderName_ContentLength,
-                               "12\r\n\r\nPlaymode:2\r\n") /* :-) */
-            == NULL
-          )
-          fail = true;
+  else
+  {
+    _kernel_oserror * e;
+    int               opts     [4];
+    char              temp     [1024]; //// Fix me, temporary Friday hack; use malloc
+    char              playmode [1024]; //// Fix me, temporary Friday hack; use malloc
+    unsigned int      frame;
+
+    opts[0] = vc_tags_npt;
+    opts[1] = 1;
+    opts[2] = 0;
+    opts[3] = vc_tags__end;
+
+    e = _swix(VideoControl_ProtocolOptions,
+              _INR(0,2),
+
+              0,
+              s->vcid,
+              opts);
+
+    if (e != NULL) frame = 0;
+    else           frame = (unsigned int) opts[2];
+
+    //// Fix me, read the proper frame numbers and do frame conversion
+    //// via. DESCRIBE and whatever that other magic command is
+
+    frame = frame * (s->playmode == Play_MB_Trick_Play || s->playmode == Play_MB_Trick_Freeze ? 25 : 5);
+
+    sprintf(temp,
+            "Playmode:%d\r\nFrame:%d\r\n",
+            s->playmode,
+            frame);
+
+    sprintf(playmode,
+            "%d\r\n\r\n%s",
+            strlen(temp),
+            temp);
+
+    if (
+         headers_add_header(&s->headers,
+                            Headers_HeaderName_ContentLength,
+                            playmode)
+         == NULL
+       )
+       fail = true;
+  }
 
   /* Did anything fail? */
+
+  free(playmode);
 
   if (fail) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   else      return NULL;
@@ -758,7 +900,7 @@ printf("play_build_set_playmode ");
 
 static _kernel_oserror * play_build_play(session * s)
 {
-printf("play_build_play ");
+//printf("play_build_play ");
 
   return play_build_play_or_pause(s, false);
 }
@@ -846,9 +988,10 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
   /* If we're not pausing, the playback rate - first, Scale playback (trick play) */
 
   else if (
-            play          &&
-            !slowmofwd    &&
-            scale != NULL &&
+            play           &&
+            !slowmofwd     &&
+            scale != NULL  &&
+            *scale != '\0' &&
 
             headers_add_header(&s->headers,
                                Headers_HeaderName_Scale,
@@ -860,9 +1003,10 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
   /* Second, Speed playback (alter data delivery rate, for slowmo forwards play) */
 
   else if (
-            play          &&
-            slowmofwd     &&
-            scale != NULL && /* It should never be if slowmofwd is true, but just in case... */
+            play           &&
+            slowmofwd      &&
+            scale != NULL  && /* It should never be if slowmofwd is true, but just in case... */
+            *scale != '\0' &&
 
             headers_add_header(&s->headers,
                                Headers_HeaderName_Speed,
