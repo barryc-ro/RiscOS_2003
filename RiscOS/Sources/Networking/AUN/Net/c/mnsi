@@ -12,7 +12,7 @@
  *
  * Compiler
  * ========
- * Acorn Archimedes C release 5.02 or later.
+ * Acorn Archimedes C release 5.06 or later.
  *
  * Change record
  * =============
@@ -31,7 +31,6 @@
  *
  * 25-Jan-95  09:58  JPD  Version 1.02
  * Added NetworkParameters SWI. Reinitialise properly when Econet is killed.
- *
  *
  * 10-Feb-95  16:18  JPD  Version 1.03
  * Added special pleading to force reinitialisation when Internet starting
@@ -51,11 +50,27 @@
  * error message produced for other out-of-range SWIs. Added returning of
  * different values for peek machine type depending on what machine we are
  * running on. Simplify service call reinitialisation stategy.
-
+ *
+ * 14-Mar-95  15:37  JPD  Version 1.05
+ * Moved some code to mnscommon.c. Now compilable -fah. Keep *Addmaps info
+ * across a self_imposed reinitialisation.
+ *
+ * 21-Mar-95  18:17  JPD  Version 1.06
+ * Moved mns_sc_handler() and reset_is_soft() to mnscommon.c.
+ *
+ * 04-Oct-95  10:05  JPD  Version 1.07
+ * Corrected some extern declarations: added #include <string.h>, had to add
+ * a cast to correct compiler warning as a consequence. Corrected some
+ * comments: should not change code.
+ *
+ * 06-Oct-95  10:34  JPD  Version 1.03
+ * Moved machine_type and modules_present to mnscommon.c.
+ *
  *
  **End of change record*
  */
 
+#include <string.h>
 
 #include "kernel.h"
 #include "swis.h"
@@ -69,8 +84,13 @@
 #include "net/if.h"
 #include "sys/dcistructs.h"
 
+#include "netasm.h"
 #include "module.h"
+#include "mns.h"
+#include "mnscommon.h"
 #include "debug.h"
+#include "text.h"
+#include "swicode.h"
 
 #ifdef EDDS
 #define MODULE_NAME "NetE"
@@ -80,39 +100,16 @@
 
 static void mns_final(void);
 extern int tick_entry();
-extern _kernel_oserror *call_econet();
-extern _kernel_oserror *do_econet();
-extern int *swi_code, *swi_data;
-unsigned char machine_type = MACHINE_TYPE_ARC;
 
-void *module_wsp = 0;
-
-int restarting = 0;
 struct mns mns = { 0 };
 int connected_econet = -1;
 int econet_transport_type = 0;
 int econet_not_present = 0;
 
-extern char *message_strs[];
-extern struct eblk error_blocks[];
-
-struct
-{
-   int  e_nbr;
-   char e_string[36];
-} ebuf = { 0 };
-
-char textbuf[64] = { 0 };
-char msg_fd_eco[16] = { 0 };
-char msg_fd_mns[16] = { 0 };
-
-struct client
-{
-   int (*cli_call)();      /* cli handler */
-};
-
-int mns_addmap();
-int mns_showmap(), mns_showif(), mns_ping();
+static void mns_showmap(int argc, char **argv);
+static void mns_addmap(int argc, char **argv);
+static void mns_showif(int argc, char **argv);
+static void mns_ping(int argc, char **argv);
 
 #ifndef DEBUG
 struct client mns_cli_call[5] =
@@ -124,7 +121,8 @@ struct client mns_cli_call[5] =
    0,
 };
 #else
-int mns_showcbs(), mns_showports();
+static void mns_showcbs(int argc, char **argv);
+static void mns_showports(int argc, char **argv);
 
 struct client mns_cli_call[7] =
 {
@@ -138,24 +136,15 @@ struct client mns_cli_call[7] =
 };
 #endif
 
-struct swient {
-        int (*swi_call)();      /* swi handler */
+#define MAXSWI 33
+struct swient
+{
+   _kernel_oserror *(*swi_call)(_kernel_swi_regs *);      /* SWI handler */
 };
 
-extern int CreateReceive(), ExamineReceive(), ReadReceive();
-extern int AbandonReceive(), WaitForReception(), EnumerateReceive();
-extern int StartTransmit(), PollTransmit(), AbandonTransmit();
-extern int DoTransmit(), ReadLocalStationAndNet();
-extern int ConvertStatusToString(), ConvertStatusToError();
-extern int ReadProtection(), SetProtection(), ReadStationNumber();
-extern int PrintBanner(), ReadTransportType(), ReleasePort(), AllocatePort();
-extern int DeAllocatePort(), ClaimPort(), StartImmediate();
-extern int DoImmediate(), AbandonAndReadReceive(), Version(), NetworkState();
-extern int PacketSize(), ReadTransportName(), InetRxDirect(), EnumMapNull();
-extern int EnumerateTransmit(), HardwareAddresses(), NetworkParameters();
-#define MAXSWI 33
+static _kernel_oserror *EnumMapNull(_kernel_swi_regs *r);
 
-struct swient mns_ent[MAXSWI+1] =
+static struct swient mns_ent[MAXSWI+1] =
 {
    CreateReceive,  ExamineReceive, ReadReceive,
    AbandonReceive, WaitForReception, EnumerateReceive,
@@ -170,108 +159,165 @@ struct swient mns_ent[MAXSWI+1] =
    EnumerateTransmit, HardwareAddresses, NetworkParameters,
 };
 
-static _kernel_oserror *mns_error_parm(int error, void *parmp);
+static void read_ifs(int print, int all);
+static void atp_add_newitem(struct atp_block *a);
 
-extern _kernel_oserror *mns_error(), *init_econet(), *init_msgs();
-extern _kernel_oserror *calleverytick(), *mns_claimv(), *mns_evenable();
-extern u_long htonl(), inet_makeaddr();
-extern char *inet_ntoa(), *mns_str(), *strchr();
+static u_long inet_addr(register char *cp);
 
-static void setcallback(void);
-void namtomodule(char *nm);
-
-/* whether necessary modules (DCI driver and Internet) are present and OK */
-static int modules_present = 0;
-
-/* whether reinitialising on a callback due to a service call */
-static int reinit_on_callback = 0;
-
+static void namtomodule(char *nm);
 
 /******************************************************************************/
 
-/*ARGS_USED*/
-_kernel_oserror *
-mns_init(cmd_tail, pbase, pw)
-char *cmd_tail;
-int pbase;
-void *pw;
+_kernel_oserror *mns_init(char *cmd_tail, int pbase, void *pw)
 {
-    _kernel_oserror *e = 0;
+/*
+ * cmhg module initialisation entry
+ *
+ * Parameters:
+ *    cmd_tail : pointer to command line tail
+ *    pbase    : 0 unless code invoked from a podule
+ *    pw       : "R12" value established by module initialisation
+ *
+ * Returns:
+ *     0 : => successfully initialised
+ *    !0 : => a problem, pointer to standard RISC OS error block
+ */
 
-    module_wsp = pw;
-    e = calleverytick(tick_entry);
-    if (e)
-        return (e);
-    e = init_msgs(MSG_FILE, msg_fd_eco);
-    if (e)
-        goto out;
-    e = init_msgs(MSG_FILE1, msg_fd_mns);
-    if (e)
-        goto out;
+   _kernel_oserror *e;
 
-   /* check machine type we are running on */
+   UNUSED(pbase);
+   UNUSED(cmd_tail);
+
+   /* take note of our workspace pointer for future use */
+   module_wsp = pw;
+
+   DEBUGP1("\n\r#module initialisation\n\r");
+
+   xDEBUGP2("#pbase = %08X\n\r", pbase);
+
+   xDEBUGP5("#-- 1: %08X, %08X, %08X, %08X\n\r",
+                   *(unsigned int *)0x01c00000, *(unsigned int *)0x01c00004,
+                   ((*((unsigned int **)pw)))[1],((*((unsigned int **)pw)))[2]);
+
+   /* This must really be done now, cannot wait for do_mns_init() */
+   memset((char *)&mns, 0, sizeof(mns));
+   mns.mns_rxdsock = -1;
+   mns.mns_txdsock = -1;
+   mns.mns_atpsock = -1;
+   mns.mns_routedsock = -1;
+
+   /* Install ticker code */
+   e = calleverytick(tick_entry);
+   if (e)
+      return e;
+
+   /* Open message file for Econet */
+   e = init_msgs(MSG_FILE, msg_fd_eco);
+   if (e)
+      goto out;
+
+   /* Open message file for us */
+   e = init_msgs(MSG_FILE1, msg_fd_mns);
+   if (e)
+      goto out;
+
+   /* check machine type we are running on for later machine type peek */
    check_machine_type();
 
-    e = init_econet();
-    if (e)
-        econet_not_present = 1;
-    do_mns_init(1);
-    atexit(mns_final);
-    restarting = 1;
-    setcallback();
-    return ((_kernel_oserror *)0);
+   /* Find real Econet module so SWIs can be handed on to it */
+   e = init_econet();
+   if (e)
+      econet_not_present = 1;
+
+   do_mns_init(1);
+
+   /* Install code to tidy up on exit */
+   atexit(mns_final);
+
+  /* set flag and set a Callback, so that the service call to say that
+   * "Econet" has been reinitialised will be issued on a Callback after this
+   * initialisation has completed.
+   */
+   restarting = 1;
+   setcallback();
+
+   return (_kernel_oserror *)0;  /* return OK */
+
 out:
-    mns_final();
-    return (e);
-}
+   mns_final();
 
-notify_users()
+   return e;
+
+} /* mns_init() */
+
+/******************************************************************************/
+
+int do_mns_init(int booting)
 {
-    _kernel_swi_regs r;
+/*
+ * Perform initialisation
+ *
+ * Parameters:
+ *    booting : !0 => initialisation for first time
+ *               0 => reinitialisation as result of service call
+ *
+ * Returns:
+ *    !0 : => successfully initialised
+ *     0 : => either a problem, or reinitialised
+ */
 
-    r.r[1] = Service_ReAllocatePorts;
-    (void) _kernel_swi(XOS_Bit | OS_ServiceCall, &r, &r);
-}
+   _kernel_swi_regs r;
+   int no_econet_clock = 0;
+   int rxd, txd, atp, routed;
+   struct address_q *q;
 
-do_mns_init(booting)
-int booting;
-{
-    _kernel_swi_regs r;
-    int no_econet_clock = 0;
-    int rxd, txd, atp, routed;
+   rxd = booting ? -1 : mns.mns_rxdsock;
+   txd = booting ? -1 : mns.mns_txdsock;
+   atp = booting ? -1 : mns.mns_atpsock;
+   routed = booting ? -1 : mns.mns_routedsock;
+   q = mns.mns_mapq;
 
-    rxd = booting ? -1 : mns.mns_rxdsock;
-    txd = booting ? -1 : mns.mns_txdsock;
-    atp = booting ? -1 : mns.mns_atpsock;
-    routed = booting ? -1 : mns.mns_routedsock;
-    memset((char *)&mns, 0, sizeof(mns));
-    mns.mns_rxdsock    = rxd;
-    mns.mns_txdsock    = txd;
-    mns.mns_atpsock    = atp;
-    mns.mns_routedsock = routed;
-    mns.mns_txhandle   = MNS_HANDLE_BASE;
-    mns.mns_rxhandle   = MNS_HANDLE_BASE;
-    mns.mns_nextport   = 1;
-    if (!booting)
-        return;
-    mns.mns_stationnumber = read_device_info(mns.mns_device, mns.mns_module,
-                                             &connected_econet, &no_econet_clock,
-                                             &mns.mns_segsize);
-    if (connected_econet != -1) {
-        mns.mns_states[connected_econet] |= ECONET_IS_CONNECTED;
-        mns.mns_netnumber = connected_econet;
-    }
-    else
-        mns.mns_stationnumber = 0;
+   memset((char *)&mns, 0, sizeof(mns));
+   mns.mns_rxdsock    = rxd;
+   mns.mns_txdsock    = txd;
+   mns.mns_atpsock    = atp;
+   mns.mns_routedsock = routed;
+   mns.mns_txhandle   = MNS_HANDLE_BASE;
+   mns.mns_rxhandle   = MNS_HANDLE_BASE;
+   mns.mns_nextport   = 1;
+   mns.mns_mapq       = q;
+
+   if (!booting)
+      return 0;
+
+   mns.mns_stationnumber = read_device_info(mns.mns_device, mns.mns_module,
+                                            &connected_econet, &no_econet_clock,
+                                            &mns.mns_segsize);
+   if (connected_econet != -1)
+   {
+      mns.mns_states[connected_econet] |= ECONET_IS_CONNECTED;
+      mns.mns_netnumber = connected_econet;
+   }
+   else
+      mns.mns_stationnumber = 0;
+
 #ifdef R1COMPAT
-    mns.mns_segsize = DFT_SEGSIZE;
+   mns.mns_segsize = DFT_SEGSIZE;
 #endif
-    r.r[0] = 0; r.r[1] = 2;
-    econet_transport_type = call_econet(Econet_ReadTransportType, &r) ? 2 : r.r[2];
-    read_ifs(0, 0);
-    if (mns.mns_ifcnt > 0)
-        init_sockets();
-}
+
+   /* Read the actual transport type for the "Econet" */
+   r.r[0] = 0;
+   r.r[1] = 2;
+   econet_transport_type =
+                         call_econet(Econet_ReadTransportType, &r) ? 2 : r.r[2];
+   read_ifs(0, 0);
+
+   if (mns.mns_ifcnt > 0)
+      init_sockets();
+
+   return 0;
+
+} /* do_mns_init() */
 
 /******************************************************************************/
 
@@ -317,182 +363,148 @@ _kernel_oserror *mns_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
 
 /******************************************************************************/
 
-/*ARGSUSED*/
-_kernel_oserror *
-mns_cli_handler(arg_string, arg_count, cmd_no, pw)
-char *arg_string;
-int arg_count, cmd_no;
-void *pw;
+static void mns_addmap(int argc, char **argv)
 {
-    struct client *callp;
-    int margc;
-    char *margv[10];
-    char *cp;
-    char **argp = margv;
+/*
+ * *AddMap code
+ *
+ * Parameters:
+ *    argc : }
+ *    argv : } command line parms
+ *
+ * Returns:
+ *    None
+ */
 
-    margc = 0;
-    cp = arg_string;
-    while (*cp && arg_count-- > 0) {
-        while (isspace(*cp))
-            cp++;
-        if (*cp == '\0')
-            break;
-        *argp++ = cp;
-        margc++;
-        while (*cp != '\0' && !isspace(*cp))
-            cp++;
-        if (*cp == '\0')
-            break;
-        *cp++ = '\0';
-    }
-    *argp++ = 0;
-    callp = &mns_cli_call[cmd_no];
-    (void)(*(callp->cli_call))(margc, margv);
-    return ((_kernel_oserror *)0);
-}
+   struct atp_block ablock;
 
-/*ARGSUSED*/
-mns_addmap(argc, argv)
-int argc;
-char **argv;
-{
-    struct atp_block ablock;
-    u_long inet_addr();
+   UNUSED(argc);
 
-    memset(ablock.atpb_sitename, 0, 16);
-    memset(ablock.atpb_netname, 0, 16);
-    ablock.atpb_ipadr   = inet_addr(argv[0]) & ~0xff000000;
-    ablock.atpb_net     = (u_char)atoi(argv[1]);
-    ablock.atpb_station = 0;
-    (void) atp_add_newitem(&ablock);
-}
-
-mns_showif(argc, argv)
-int argc;
-char **argv;
-{
-    int all = 0;
-
-    if (!mns.mns_flags)
-        return;
-    if (argc > 0)
-        all = 1;
-    read_ifs(1, all);
-    mns_info(all);
-}
-
-/*ARGSUSED*/
-mns_showmap(argc, argv)
-int argc;
-char **argv;
-{
-    struct address_q *q;
-    char abuf[32];
-    int n;
-
-    for (q = mns.mns_mapq; q; q = q->q_next) {
-        sprintf(abuf, "%s", inet_ntoa(q->q_ip));
-        if (n = strlen(abuf)) {
-            abuf[n - 1] = 'x';
-            printf("%3d.x <==> %s\n", q->q_net, abuf);
-        }
-    }
-}
-
-#ifdef OldCode
-/*ARGSUSED*/
-mns_ping(argc, argv)
-int argc;
-char **argv;
-{
-    _kernel_swi_regs r;
-    int station, net;
-    char b[6];
-
-    memset(b, 0, 6);
-    r.r[1] = (int)argv[0];
-    if (!ReadStationNumber(&r)) {
-        station = r.r[2];
-        net     = r.r[3] == -1 ? 0 : r.r[3];
-        r.r[0]  = 8;   /* MachinePeek */
-        r.r[1]  = 0;
-        r.r[2]  = station;
-        r.r[3]  = net;
-        r.r[4]  = (int)b;
-        r.r[5]  = sizeof(b);
-        r.r[6]  = 2;
-        r.r[7]  = 100;
-        printf("%s\n", (DoImmediate(&r) == 0 && r.r[0] == Status_Transmitted) ?
-                       mns_str(Str_TxOk) : mns_str(Str_NotAcc));
-        return;
-    }
-    printf("%s\n", mns_str(Str_GtwSta));
-}
-#else
-mns_ping(int argc, char **argv)
-{
-   _kernel_swi_regs r;
-   int station, net;
-   char b[6];             /* <<< why not 4 bytes? */
-
-   memset(b, 0, 6);
-   r.r[1] = (int)argv[0];
-
-   if (!ReadStationNumber(&r)) /* if sensible address on command line */
-   {
-      station = r.r[2];
-      net     = r.r[3] == -1 ? 0 : r.r[3]; /* use 0 if no net number */
-      r.r[0]  = 8;   /* MachinePeek */
-      r.r[1]  = 0;
-      r.r[2]  = station;
-      r.r[3]  = net;
-      r.r[4]  = (int)b;
-      r.r[5]  = sizeof(b);
-      r.r[6]  = 2;
-      r.r[7]  = 100;
-      printf("%s\n", (DoImmediate(&r) == 0 && r.r[0] == Status_Transmitted) ?
-                       mns_str(Str_TxOk) : mns_str(Str_NotAcc));
-      return;
-   }
-   printf("%s\n", mns_str(Str_GtwSta));    /* else print "Bad station number" */
+   memset(ablock.atpb_sitename, 0, 16);
+   memset(ablock.atpb_netname, 0, 16);
+   ablock.atpb_ipadr   = inet_addr(argv[0]) & ~0xff000000;
+   ablock.atpb_net     = (u_char)atoi(argv[1]);
+   ablock.atpb_station = 0;
+   atp_add_newitem(&ablock);
 
    return;
 
-} /* mns_ping() */
+} /* mns_addmap() */
 
-#endif
+/******************************************************************************/
+
+static void mns_showif(int argc, char **argv)
+{
+/*
+ * *NetStat code
+ *
+ * Parameters:
+ *    argc : }
+ *    argv : } command line parms
+ *
+ * Returns:
+ *    None
+ */
+
+   int all = 0;
+
+   UNUSED(argv);
+
+   if (!mns.mns_flags)
+      return;
+
+   if (argc > 0)
+      all = 1;
+
+   read_ifs(1, all);
+
+   mns_info(all);
+
+   return;
+
+} /* mns_showif() */
+
+/******************************************************************************/
+
+static void mns_showmap(int argc, char **argv)
+{
+/*
+ * *NetMap code: show mapping from pseudo-Econet numbers to Internet addresses
+ *
+ * Parameters:
+ *    argc : }
+ *    argv : } command line parms (optional net number)
+ *
+ * Returns:
+ *    None
+ */
+
+   struct address_q *q;
+   char abuf[32];
+   int n;
+
+   UNUSED(argc);
+   UNUSED(argv);
+
+   for (q = mns.mns_mapq; q; q = q->q_next)
+   {
+      sprintf(abuf, "%s", inet_ntoa(q->q_ip));
+      if (n = strlen(abuf))
+      {
+         abuf[n - 1] = 'x';
+         printf("%3d.x <==> %s\n", q->q_net, abuf);
+      }
+   }
+
+   return;
+
+} /* mns_showmap() */
+
+/******************************************************************************/
 
 #ifdef DEBUG
-/*ARGSUSED*/
-mns_showcbs(argc, argv)
-int argc;
-char **argv;
+static void mns_showcbs(int argc, char **argv)
 {
-    struct rxcb *rx;
-    struct txcb *tx;
+   struct rxcb *rx;
+   struct txcb *tx;
 
-    printf("receive blocks:\n");
-    for (rx = mns.mns_rxlist; rx; rx = rx->rx_next) {
-        printf("    station=%d.%d, port=%x, buffer=%x, bufsize=%d, handle=%x, status=%x\n",
-               rx->rx_network, rx->rx_station, rx->rx_port, rx->rx_buf,
-               rx->rx_bufsize, rx->rx_handle, rx->rx_status);
-    }
-    for (rx = mns.mns_rxwild; rx; rx = rx->rx_next) {
-        printf("    station=%d.%d, port=%x, buffer=%x, bufsize=%d, handle=%x, status=%x\n",
-               rx->rx_network, rx->rx_station, rx->rx_port, rx->rx_buf,
-               rx->rx_bufsize, rx->rx_handle, rx->rx_status);
-    }
-    printf("\ntransmit blocks:\n");
-    for (tx = mns.mns_txlist; tx; tx = tx->tx_next) {
-        printf("    station=%d.%d, port=%x, buffer=%x, bufsize=%d, handle=%x, status=%x\n",
-               tx->tx_network, tx->tx_station, tx->tx_port, tx->tx_buf,
-               tx->tx_bufsize, tx->tx_handle, tx->tx_status);
-    }
-}
+   UNUSED(argc);
+   UNUSED(argv);
 
-mns_showports(int argc, char **argv)
+   printf("receive blocks:\n");
+   for (rx = mns.mns_rxlist; rx; rx = rx->rx_next)
+   {
+      printf("    station=%d.%d, port=%x, buffer=%x, bufsize=%d, handle=%x, status=%x\n",
+            rx->rx_network, rx->rx_station, rx->rx_port, rx->rx_buf,
+            rx->rx_bufsize, rx->rx_handle, rx->rx_status);
+   }
+
+   for (rx = mns.mns_rxwild; rx; rx = rx->rx_next)
+   {
+      printf("    station=%d.%d, port=%x, buffer=%x, bufsize=%d, handle=%x, status=%x\n",
+            rx->rx_network, rx->rx_station, rx->rx_port, rx->rx_buf,
+            rx->rx_bufsize, rx->rx_handle, rx->rx_status);
+   }
+   printf("\ntransmit blocks:\n");
+   for (tx = mns.mns_txlist; tx; tx = tx->tx_next)
+   {
+      printf("    station=%d.%d, port=%x, buffer=%x, bufsize=%d, handle=%x, status=%x\n",
+            tx->tx_network, tx->tx_station, tx->tx_port, tx->tx_buf,
+            tx->tx_bufsize, tx->tx_handle, tx->tx_status);
+   }
+
+   return;
+
+} /* mns_showcbs() */
+
+/******************************************************************************/
+
+static void mns_showports(int argc, char **argv)
 {
    int i;
+
+   UNUSED(argc);
+   UNUSED(argv);
 
    printf("Next portnumber is %x\n\n", mns.mns_nextport);
 
@@ -506,7 +518,9 @@ mns_showports(int argc, char **argv)
 
       if (mns.mns_states[i] & PORTCLAIMED)
          printf("Port %x is claimed\n", i);
-    }
+   }
+
+   return;
 
 } /* mns_showports() */
 
@@ -514,331 +528,31 @@ mns_showports(int argc, char **argv)
 
 /******************************************************************************/
 
-_kernel_oserror *mns_error(int error)
-{
-   _kernel_swi_regs r;
-   _kernel_oserror *e;
 
-   if (!error)
-      return (_kernel_oserror *)0;
-
-   ebuf.e_nbr = error_blocks[error].err_nbr;
-   strcpy(ebuf.e_string, error_blocks[error].err_token);
-
-   /* prevent unwanted parameter substitution */
-   memset ((char *)&r, 0, sizeof(r));
-
-   r.r[0] = (int)&ebuf;
-   r.r[1] = ((error == Err_Fatal) || (error == Err_NotConf)) ?
-                                              (int)msg_fd_mns : (int)msg_fd_eco;
-   e = _kernel_swi(XOS_Bit | MessageTrans_ErrorLookup, &r, &r);
-
-   return (e ? e : (_kernel_oserror *)&ebuf);
-
-} /* mns_error() */
-
-/******************************************************************************/
-
-static _kernel_oserror *mns_error_parm(int error, void *parmp)
-{
-   _kernel_swi_regs r;
-   _kernel_oserror *e;
-
-   if (!error)
-      return (_kernel_oserror *)0;
-
-   ebuf.e_nbr = error_blocks[error].err_nbr;
-   strcpy(ebuf.e_string, error_blocks[error].err_token);
-   memset ((char *)&r, 0, sizeof(r));
-   r.r[0] = (int)&ebuf;
-   r.r[1] = ((error == Err_Fatal) || (error == Err_NotConf)) ?
-                                              (int)msg_fd_mns : (int)msg_fd_eco;
-   r.r[2] = (int)textbuf;
-   r.r[3] = sizeof(textbuf);
-   r.r[4] = (int)parmp;     /* parameter to substitute for %0 */
-   e = _kernel_swi(XOS_Bit | MessageTrans_ErrorLookup, &r, &r);
-
-   return (e ? e : (_kernel_oserror *)&ebuf);
-
-} /* mns_error_parm() */
-
-/******************************************************************************/
-
-char *mns_str(int strnbr)
-{
-   _kernel_swi_regs r;
-   _kernel_oserror *e;
-
-   /* prevent unwanted parameter substitution */
-   memset((char *)&r, 0, sizeof(r));
-
-   memset (textbuf, 0, sizeof(textbuf));
-   r.r[0] = (int)msg_fd_mns;
-   r.r[1] = (int)message_strs[strnbr];
-   r.r[2] = (int)textbuf;
-   r.r[3] = sizeof(textbuf);
-   e = _kernel_swi(XOS_Bit | MessageTrans_Lookup, &r, &r);
-
-   return (e ? message_strs[strnbr] : textbuf);
-
-} /* mns_str() */
-
-/******************************************************************************/
-
-generate_event(rx, handle, status, port)
-int rx, handle, status, port;
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = rx ? Event_Econet_Rx : Event_Econet_Tx;
-    r.r[1] = handle;
-    r.r[2] = status;
-    r.r[3] = port;
-    (void) _kernel_swi(XOS_Bit | OS_GenerateEvent, &r, &r);
-}
-
-/******************************************************************************/
-
-extern int callb_entry();
-static volatile int callbackflag = 0;
-
-/******************************************************************************/
-
-static void setcallback(void)
-{
-   int oldstate = ensure_irqs_off();
-
-   DEBUGP1("#setcallback()\n\r");
-   if (callbackflag == 0)
-   {
-      callbackflag = 1;
-
-      if (callback(callb_entry) != 0)
-         callbackflag = 0;
-      restore_irqs(oldstate);
-   }
-   else
-      restore_irqs(oldstate);
-
-   return;
-
-} /* setcallback() */
-
-/******************************************************************************/
-
-static void removecallback(void)
-{
-/* Remove any added transient callback
- *
- * Parameters:
- *    None
- *
- * Returns:
- *    None
- */
-
-   _kernel_swi_regs regs;
-
-   int oldstate = ensure_irqs_off();
-
-   DEBUGP1("#removecallback()\n\r");
-
-   if (callbackflag != 0)
-   {
-      callbackflag = 0;
-
-      regs.r[0] = (int) callb_entry;
-      regs.r[1] = (int) module_wsp;
-
-      /* Ignore any error. This will only work on RISC OS 3 or later */
-      _kernel_swi(XOS_Bit | OS_RemoveCallBack, &regs, &regs);
-
-      restore_irqs(oldstate);
-   }
-   else
-      restore_irqs(oldstate);
-
-   return;
-
-} /* removecallback() */
-
-/******************************************************************************/
-
-generate_event_on_callback(tx)
-struct txcb *tx;
-{
-    tx->tx_callb = 1;
-    setcallback();
-}
-
-retransmit_on_callback(tx)
-struct txcb *tx;
-{
-    tx->tx_callb = 2;
-    setcallback();
-}
-
-int callback(func)
-void (* func)();
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = (int)func;
-    r.r[1] = (int)module_wsp;
-    return (_kernel_swi(XOS_Bit | OS_AddCallBack, &r, &r) != 0 ? -1 : 0);
-}
-
-/******************************************************************************/
-
-int callb_handler(const _kernel_swi_regs *rr)
+int tick_handler(_kernel_swi_regs *r, void *pw)
 {
 /*
- * Transient Callback handler
+ * cmhg ticker interrupt handler
  *
  * Parameters:
- *    rr : pointer to regs structure
+ *    r  : pointer to registers block
+ *    pw : "R12" value established by module initialisation
  *
  * Returns:
- *    Non-0 to indicate call "not processed"
+ *    0 => interrupt "claimed"
+ *   !0 => interrupt not "claimed"
  */
 
-   struct txcb *tx;
-   int cval = 0; /* keep compiler quiet */
-   int oldstate = ensure_irqs_off();
 
-   UNUSED(rr);
+   UNUSED(r);
+   UNUSED(pw);
 
-   xDEBUGP3("#-- A: %08X, %08X\n\r",
-                      *(unsigned int *)0x01c00000, *(unsigned int *)0x01c00004);
-
-   if (callbackflag == 0)
-   {
-      restore_irqs(oldstate);
-      return 1;
-   }
-
-   callbackflag = 0;
-   restore_irqs(oldstate);
-
-   if (restarting)
-   {
-      restarting = 0;
-      notify_users();
-   }
-
-   if (reinit_on_callback)
-   {
-      DEBUGP1("#reinitialising on callback\n\r");
-      reinit_on_callback = 0;
-      free_sockets();
-      (void) do_mns_init(1);
-      notify_users();
-   }
-
-   for (;;)
-   {
-      oldstate = ensure_irqs_off();
-      for (tx = mns.mns_txlist; tx; tx = tx->tx_next)
-      {
-         if ((cval = tx->tx_callb) != 0)
-         {
-            tx->tx_callb = 0;
-            break;
-         }
-      }
-      restore_irqs(oldstate);
-
-      if (tx == (struct txcb *)0)
-         break;
-
-      switch (cval)
-      {
-         case 1:
-            if (tx->tx_status != Status_Free)
-               generate_event(0, tx->tx_handle, tx->tx_status, tx->tx_port);
-            break;
-
-         case 2:
-            retry_tx(tx);
-            break;
-
-         default:
-            break;
-      }
-   }
+   check_rxcbs();
+   check_txcbs();
 
    return 1;
 
-} /* callb_handler() */
-
-/******************************************************************************/
-
-_kernel_oserror *
-calleverytick(fun)
-int (*fun)();
-{
-    _kernel_oserror *e;
-    _kernel_swi_regs r;
-
-    r.r[0] = TickerV;
-    r.r[1] = (int)fun;
-    r.r[2] = (int)module_wsp;
-    e = _kernel_swi(XOS_Bit | OS_Claim, &r, &r);
-    if (e)
-        return (e);
-    return ((_kernel_oserror *)0);
-}
-
-removetickerevent(fun)
-int (*fun)();
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = TickerV;
-    r.r[1] = (int)fun;
-    r.r[2] = (int)module_wsp;
-    (void) _kernel_swi(XOS_Bit | OS_Release, &r, &r);
-}
-
-tick_handler(r, pw)
-int *r;
-void *pw;
-{
-    check_rxcbs();
-    check_txcbs();
-    return (1);
-}
-
-int
-do_getsock(port, inputsocket, direct)
-int port, inputsocket, direct;
-{
-    struct sockaddr_in addr;
-    int sock, arg, on = 1;
-
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        return (-1);
-    }
-    arg = direct ? Econet_InetRxDirect : 1;
-    if (socketioctl(sock, FIONBIO, &on) < 0 || socketioctl(sock, direct ? FIORXDIR : FIOASYNC, &arg) < 0) {
-        socketclose (sock);
-        return (-1);
-    }
-    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof (on)) < 0) {
-        socketclose(sock);
-        return (-1);
-    }
-    if (inputsocket) {
-        addr.sin_family      = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        addr.sin_port        = htons((u_short)port);
-        if (bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0) {
-            socketclose(sock);
-            return (-1);
-        }
-    }
-    return (sock);
-}
+} /* tick_handler() */
 
 /******************************************************************************/
 
@@ -878,256 +592,211 @@ static void mns_final(void)
 
 /******************************************************************************/
 
-void mns_sc_handler(int sn, _kernel_swi_regs *r)
+static void read_ifs(int print, int all)
 {
 /*
- * cmhg module service call handler
+ * Obtain information about the network interfaces
  *
  * Parameters:
- *    sn : service call number
- *    r  : pointer to registers block
+ *    print : !0 => display details of interfaces
+ *    all   : !0 => print full information
  *
  * Returns:
  *    None
  */
 
-   DEBUGP2("#Service_handler: &%X\r\n", r->r[1]);
+   int s, n, eco, no_econet_clock;
+   char buf[512], name[12];
+   struct ifconf ifc;
+   struct ifreq ifreq, *ifr;
+   struct sockaddr_in *sin;
+   u_long addr;
+   int inmap, net, station, first = 1;
 
-   switch (sn)
+   DEBUGP3("#read_ifs(%d, %d)\n\r", print, all);
+
+   /* open a socket to use to obtain details */
+   if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+       return;
+
+   ifc.ifc_len = sizeof (buf);
+   ifc.ifc_buf = buf;
+
+   /* get the interface info list from the Internet module */
+   if (socketioctl(s, OSIOCGIFCONF, (char *)&ifc) < 0)
    {
-      case Service_MessageFileClosed:
-         if (r->r[0] == (int)msg_fd_eco)
-            (void) init_msgs(MSG_FILE, msg_fd_eco);
-         else if (r->r[0] == (int)msg_fd_mns)
-            (void) init_msgs(MSG_FILE1, msg_fd_mns);
-         return;
-         break;
+      socketclose(s);
+      return;
+   }
 
+   /* if connected to Econet, get Econet info */
+   if (print && connected_econet != -1)
+   {
+      (void) read_eco_info(&connected_econet, &no_econet_clock);
+      printf("%-18s", mns_str(Str_NtvEco));
+      printf("%d.%d", connected_econet, mns.mns_stationnumber);
+      if (no_econet_clock)
+         printf(" (%s)", mns_str(Str_Noclck));
+      printf("\n\n");
+   }
 
-      case Service_DCIDriverStatus:
-         DEBUGP2("#Service_DCIDriverStatus: %d\n\r", r->r[2]);
-        /* whether it is our driver, or not, whether starting or stopping,
-         * if there are now suitable modules present, reinitialise and
-         * connect to them, else reinitialise unconnected.
-         */
-         if (modules_present = check_present(), modules_present)
+   mns.mns_ifcnt = 0;
+   mns.mns_econetipadr = 0;
+   ifr = ifc.ifc_req;
+
+   /* step forwards through interface info list */
+   for (n = ifc.ifc_len / sizeof (struct ifreq); n > 0; n--, ifr++)
+   {
+      if (((struct osockaddr *)&ifr->ifr_addr)->sa_family != AF_INET)
+         continue;
+
+      ifreq = *ifr;
+      /* Ignore the loopback interface */
+      if (socketioctl(s, SIOCGIFFLAGS, (char *)&ifreq) < 0 ||
+                                                 ifreq.ifr_flags & IFF_LOOPBACK)
+         continue;
+
+      if (print)
+      {
+         if (!first)
+            printf("\n");
+         /* Print "Interface" */
+         printf("\n%-18s", mns_str(Str_IfType));
+      }
+
+      eco = strcmp(ifreq.ifr_name, "ec0") == 0 ? 1 : 0;
+
+      if (print)
+      {
+         strcpy(name, ifreq.ifr_name);
+         name[strlen(name) - 1] = 0;
+         namtomodule(name);
+         printf("%s ", name);
+      }
+
+      if ((ifreq.ifr_flags & (IFF_BROADCAST|IFF_UP)) != (IFF_BROADCAST|IFF_UP))
+      {
+         if (print)
+            printf("(%s)\n", mns_str(Str_Down));
+         goto next;
+      }
+
+      if (print)
+         printf("\n");
+
+      /* get interface Internet address */
+      if (socketioctl(s, SIOCGIFADDR, (char *)&ifreq) < 0)
+         goto next;
+
+      sin = (struct sockaddr_in *)&ifreq.ifr_addr;
+      addr = ntohl(sin->sin_addr.s_addr);
+      inmap = ip_to_mns(sin->sin_addr.s_addr, &net, &station);
+      if (inmap && station != 0 && station != ALL_ONES)
+      {
+         if (mns.mns_stationnumber == 0)
          {
-            reinit_on_callback = 1;
-            setcallback();
-            return;
+            mns.mns_stationnumber = station;
+            mns.mns_netnumber = net;
          }
-         else
-         {
-            (void) do_mns_init(0);
-            return;
-         }
-         break;
+         if (print)
+            printf("%-18s%d.%d\n", mns_str(Str_StaNum), net, station);
+      }
 
-     case Service_DCIProtocolStatus:
-         DEBUGP2("#Service_DCIProtocolStatus: %d\n\r", r->r[2]);
-         /* If it's not the Internet module, do nothing */
-         if (strcmp((char *)r->r[4], INTERNET_MODULE_NAME) != 0)
-            return;
-        /* else it is the Internet module. If starting, reinitialise if device
-         * driver present as well
-         */
-         if (r->r[2] == 0)
-         {
-            if (modules_present = check_present(), modules_present)
-            {
-               reinit_on_callback = 1;
-               setcallback();
-               return;
-            }
-         }
-         else
-            if (r->r[2] == 1)
-            {
-               /* Internet is dying, so go dormant */
-               modules_present = 0;
-               (void) do_mns_init(0);
-               return;
-            }
-         break;
+      if (print && all)
+         printf("%-18s%s\n", mns_str(Str_FullAd),
+                                        inet_ntoa(*((u_long *)&sin->sin_addr)));
 
+      /* get Internet broadcast address for interface */
+      if (socketioctl(s, SIOCGIFBRDADDR, (char *)&ifreq) < 0)
+          goto next;
 
-      case Service_Reset:
-         /* Post-reset: if a soft reset, reinitialise, else do nothing */
-         DEBUGP1("#Service_reset\n\r");
-         if (!reset_is_soft())
-            return;
-         DEBUGP1("#Service_reset, was a soft reset, reinitialising\n\r");
-         (void) do_mns_init(0);
-         return;
-         break;
+      sin = (struct sockaddr_in *)&ifreq.ifr_addr;
+      if (print && all)
+          printf("%-18s%s\n", mns_str(Str_BrdCst), inet_ntoa(sin->sin_addr));
+      mns.mns_ifaddrs[(mns.mns_ifcnt)++] = sin->sin_addr.s_addr;
+next:
+      first = 0;
+   }
 
-
-      case Service_EconetDying:
-         /* The real Econet module is dying, reinitialise */
-         econet_not_present = 1;
-         connected_econet = -1;
-         reinit_on_callback = 1;
-         setcallback();
-         return;
-         break;
-
-
-      default:
-         /* shouldn't really get here, but do nothing */
-         return;
-         break;
-    }
-
+   socketclose(s);
    return;
 
-} /* mns_sc_handler() */
+} /* read_ifs() */
 
 /******************************************************************************/
 
-int reset_is_soft()
+static void atp_add_newitem(struct atp_block *a)
 {
-    _kernel_swi_regs r;
+   struct address_q *q;
+   struct address_q **p;
 
-    r.r[0] = 253;
-    r.r[1] = 0;
-    r.r[2] = 255;
-    return ((_kernel_swi(XOS_Bit | OS_Byte, &r, &r) != 0 || r.r[1] == 0) ? 1 : 0);
-}
+   p = &(mns.mns_mapq);
+   while (*p)
+   {
+      if ((*p)->q_ip == a->atpb_ipadr)
+         return;
+      p = &((*p)->q_next);
+   }
 
-read_ifs(print, all)
-int print, all;
-{
-    int s, n, eco, no_econet_clock;
-    char buf[512], name[12];
-    struct ifconf ifc;
-    struct ifreq ifreq, *ifr;
-    struct sockaddr_in *sin;
-    u_long addr;
-    int inmap, net, station, first = 1;
+   if ((*p) == 0)
+   {
+      q = (struct address_q *)malloc (sizeof(struct address_q));
+      if (q == (struct address_q *)0)
+         return;
 
-    if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-        return;
-    ifc.ifc_len = sizeof (buf);
-    ifc.ifc_buf = buf;
-    if (socketioctl(s, SIOCGIFCONF, (char *)&ifc) < 0) {
-        socketclose(s);
-        return;
-    }
-    if (print && connected_econet != -1) {
-        (void) read_eco_info(&connected_econet, &no_econet_clock);
-        printf("%-18s", mns_str(Str_NtvEco));
-        printf("%d.%d", connected_econet, mns.mns_stationnumber);
-        if (no_econet_clock)
-            printf(" (%s)", mns_str(Str_Noclck));
-        printf("\n\n");
-    }
-    mns.mns_ifcnt = 0;
-    mns.mns_econetipadr = 0;
-    ifr = ifc.ifc_req;
-    for (n = ifc.ifc_len / sizeof (struct ifreq); n > 0; n--, ifr++) {
-        ifreq = *ifr;
-        if (socketioctl(s, SIOCGIFFLAGS, (char *)&ifreq) < 0 || ifreq.ifr_flags & IFF_LOOPBACK)
-            continue;
-        if (print) {
-            if (!first)
-                printf("\n");
-            printf("\n%-18s", mns_str(Str_IfType));
-        }
-        eco = strcmp(ifreq.ifr_name, "ec0") == 0 ? 1 : 0;
-        if (print) {
-            strcpy(name, ifreq.ifr_name);
-            name[strlen(name) - 1] = 0;
-            namtomodule(name);
-            printf("%s ", name);
-        }
-        if ((ifreq.ifr_flags & (IFF_BROADCAST|IFF_UP)) != (IFF_BROADCAST|IFF_UP)) {
-            if (print)
-                printf("(%s)\n", mns_str(Str_Down));
-            goto next;
-        }
-        if (print)
-            printf("\n");
-        if (socketioctl(s, SIOCGIFADDR, (char *)&ifreq) < 0)
-            goto next;
-        sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-        addr = ntohl(sin->sin_addr.s_addr);
-        inmap = ip_to_mns(sin->sin_addr.s_addr, &net, &station);
-        if (inmap && station != 0 && station != ALL_ONES) {
-            if (mns.mns_stationnumber == 0) {
-                mns.mns_stationnumber = station;
-                mns.mns_netnumber = net;
-            }
-            if (print)
-               printf("%-18s%d.%d\n", mns_str(Str_StaNum), net, station);
-        }
-        if (print && all)
-               printf("%-18s%s\n", mns_str(Str_FullAd), inet_ntoa(sin->sin_addr));
-        if (socketioctl(s, SIOCGIFBRDADDR, (char *)&ifreq) < 0)
-            goto next;
-        sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-        if (print && all)
-            printf("%-18s%s\n", mns_str(Str_BrdCst), inet_ntoa(sin->sin_addr));
-        mns.mns_ifaddrs[(mns.mns_ifcnt)++] = sin->sin_addr.s_addr;
-next:
-        first = 0;
-    }
-    socketclose(s);
-    return;
-}
+      q->q_bcast = 0;
+      q->q_next = (struct address_q *)0;
+      *p = q;
+   }
 
-int
-atp_add_newitem(a)
-struct atp_block *a;
-{
-    struct address_q *q;
-    char *malloc();
-    struct address_q **p;
+   q->q_net = a->atpb_net;
+   q->q_ip  = a->atpb_ipadr;
+   memcpy(q->q_sitename, a->atpb_sitename, ITEM_NAMELEN);
+   memcpy(q->q_netname, a->atpb_netname, ITEM_NAMELEN);
 
-    p = &(mns.mns_mapq);
-    while (*p) {
-        if ((*p)->q_ip == a->atpb_ipadr)
-            return(0);
-        p = &((*p)->q_next);
-    }
-    if ((*p) == 0) {
-        q = (struct address_q *)malloc (sizeof(struct address_q));
-        if (q == (struct address_q *)0)
-            return (-1);
-        q->q_bcast = 0;
-        q->q_next = (struct address_q *)0;
-        *p = q;
-    }
-    q->q_net     = a->atpb_net;
-    q->q_ip      = a->atpb_ipadr;
-    memcpy(q->q_sitename, a->atpb_sitename, ITEM_NAMELEN);
-    memcpy(q->q_netname, a->atpb_netname, ITEM_NAMELEN);
-    if ((mns.mns_states[q->q_net] & ECONET_IS_CONNECTED) == 0)
-        mns.mns_states[q->q_net] |= MNS_IS_CONNECTED;
-    if (mns.mns_stationnumber == 0)
-        read_ifs(0, 0);
-    return (0);
-}
+   if ((mns.mns_states[q->q_net] & ECONET_IS_CONNECTED) == 0)
+      mns.mns_states[q->q_net] |= MNS_IS_CONNECTED;
+   if (mns.mns_stationnumber == 0)
+      read_ifs(0, 0);
 
+   return;
+
+} /* atp_add_newitem() */
+
+
+/******************************************************************************/
 
 int init_sockets()
 {
-    if (mns.mns_flags & MNS_SOCKET)
-        return (0);
-    mns.mns_rxdsock = do_getsock(MNSDATAPORT, 1, 1);
-    if (mns.mns_rxdsock < 0)
-        return (-1);
-    mns.mns_txdsock = do_getsock(MNSDATAPORT, 0, 0);
-    mns.mns_flags |= MNS_SOCKET;
-    return (0);
-}
+   if (mns.mns_flags & MNS_SOCKET)
+      return 0;
 
-free_sockets()
+   mns.mns_rxdsock = do_getsock(MNSDATAPORT, 1, 1);
+   if (mns.mns_rxdsock < 0)
+      return -1;
+
+   mns.mns_txdsock = do_getsock(MNSDATAPORT, 0, 0);
+   mns.mns_flags |= MNS_SOCKET;
+
+   return 0;
+
+} /* init_sockets() */
+
+/******************************************************************************/
+
+void free_sockets(void)
 {
-    if (mns.mns_rxdsock != -1)
-        (void) socketclose(mns.mns_rxdsock);
-    if (mns.mns_txdsock != -1)
-        (void) socketclose(mns.mns_txdsock);
-}
+   if (mns.mns_rxdsock != -1)
+      (void) socketclose(mns.mns_rxdsock);
+
+   if (mns.mns_txdsock != -1)
+      (void) socketclose(mns.mns_txdsock);
+
+   return;
+
+} /* free_sockets() */
+
+/******************************************************************************/
 
 mns_info(all)
 int all;
@@ -1179,28 +848,31 @@ int all;
     printf("\n");
 }
 
-int
-ip_to_mns(addr, net, station)
-u_long addr;
-u_int *net;
-int *station;
-{
-    struct address_q *q;
-    u_long i, m;
+/******************************************************************************/
 
-    i = ntohl(addr);
-    m = i & ~0xff;
-    for (q = mns.mns_mapq; q; q = q->q_next) {
-        if (m == htonl(q->q_ip)) {
-            *station = i & 0xff;
-            *net = (int)q->q_net;
-            return(1);
-        }
-    }
-    *net = (u_int)addr;
-    *station = ALL_ONES;
-    return (1);
-}
+int ip_to_mns(u_long addr, int *net, int *station)
+{
+   struct address_q *q;
+   u_long i, m;
+
+   i = ntohl(addr);
+   m = i & ~0xff;
+   for (q = mns.mns_mapq; q; q = q->q_next)
+   {
+      if (m == htonl(q->q_ip)) {
+         *station = i & 0xff;
+         *net = (int)q->q_net;
+         return 1;
+      }
+   }
+   *net = (u_int)addr;
+   *station = ALL_ONES;
+
+   return 1;
+
+} /* ip_to_mns() */
+
+/******************************************************************************/
 
 int
 src_is_ok(rx, net, station)
@@ -1237,23 +909,24 @@ int net, station;
     return ((connected_econet != -1) ? (u_long) 0 : (u_long) -1);
 }
 
-int
-msg_broadcast(flag, port, data, len, local)
-u_char flag, port;
-char *data;
-int len, local;
-{
-    int i;
+/******************************************************************************/
 
-    for (i = 0; i < mns.mns_ifcnt; i++)
-        (void) msg_transmit(mns.mns_ifaddrs[i], flag, 0, port, data, len, BROADCAST_DATA_FRAME, 0);
-    if (local)
-        mns.mns_txlbc++;
-    else
-        mns.mns_txgbc++;
-    mns.mns_txbccnt++;
-    return (0);
-}
+int msg_broadcast(u_char flag, u_char port, char *data, int len, int local)
+{
+   int i;
+
+   for (i = 0; i < mns.mns_ifcnt; i++)
+      (void) msg_transmit(mns.mns_ifaddrs[i], flag, 0, port, data, len,
+                                                       BROADCAST_DATA_FRAME, 0);
+   if (local)
+      mns.mns_txlbc++;
+   else
+      mns.mns_txgbc++;
+   mns.mns_txbccnt++;
+
+   return 0;
+
+} /* msg_broadcast() */
 
 /******************************************************************************/
 
@@ -1268,34 +941,55 @@ static void namtomodule(char *nm)
  *
  * Returns:
  *    None
- *    nm : still points to the string, now holding the module name
+ *    nm : still points to the string, now holding the module name,
+ *         e.g. "Ether2"
  */
 
    _kernel_swi_regs r;
    _kernel_oserror *e;
    struct dib *d;
-   struct chaindib *chdp;
+   struct chaindib *chdp, *n;
 
    r.r[0] = 0;         /* initialise to zero so that we can detect a response */
    r.r[1] = Service_EnumerateNetworkDrivers;
-   e = _kernel_swi(XOS_Bit | OS_ServiceCall, &r, &r);
-   if (e == 0 && (chdp = (struct chaindib *)(r.r[0])) != (struct chaindib *)0)
+   /* Issue service call to find all DCI4 drivers */
+   e = _kernel_swi(OS_ServiceCall, &r, &r);
+
+
+   /* if no error issuing service call and received a response */
+   if ((e == 0) && (chdp = (struct chaindib *)(r.r[0]), chdp != 0))
    {
+      n = chdp->chd_next;
       d = chdp->chd_dib;
-      if (strcmp(d->dib_name, nm) == 0)
+
+      while (d != 0)
       {
-         r.r[0] = 0;
-         e = _kernel_swi(XOS_Bit | (d->dib_swibase + DCI4Version), &r, &r);
-         if (!e && r.r[1] >= CURRENT_DCI_VERSION)
-         strncpy(nm, d->dib_module, 24);
+         if (strcmp((char *)d->dib_name, nm) == 0)
+         {
+            r.r[0] = 0;
+            e = _kernel_swi(d->dib_swibase + DCI4Version, &r, &r);
+            if (!e && r.r[1] >= MINIMUM_DCI_VERSION)
+               strncpy(nm, (char *)d->dib_module, 24);
+            break;
+         }
+         else
+         {
+            if (n == 0)
+               break;
+
+            /* step on */
+            d = n->chd_dib;
+            n = n->chd_next;
+         }
       }
+
       /* Now, free all the chaindibs returned to us */
       while (chdp != 0)
       {
          r.r[0] = 7;      /* reason code Free */
          r.r[2] = (int) chdp;
          chdp = chdp->chd_next;
-         if (e = _kernel_swi(XOS_Bit | OS_Module, &r, &r), e != 0);
+         if (e = _kernel_swi(OS_Module, &r, &r), e != 0);
             /* if any error, probably should not continue freeing blocks */
             break;
       }
@@ -1307,25 +1001,32 @@ static void namtomodule(char *nm)
 
 /******************************************************************************/
 
-int
-in_local_aun_network(net)
-int net;
+int in_local_aun_network(int net)
 {
-    return (0);
-}
+   UNUSED(net);
 
-_kernel_oserror *
-range_check(port, station, net)
-int port, station, net;
+   return 0;
+
+}  /* in_local_aun_network() */
+
+/******************************************************************************/
+
+_kernel_oserror *range_check(int port, int station, int net)
 {
-    if (port < 0 || port > 255)
-        return(mns_error(Err_BadPort));
-    if (station != ALL_ONES && (station < 0 || station > 255))
-        return(mns_error(Err_BadStn));
-    if (station != ALL_ONES && (net < 0 || net > 255))
-        return(mns_error(Err_BadNet));
-    return ((_kernel_oserror *)0);
-}
+   if (port < 0 || port > 255)
+      return mns_error(Err_BadPort);
+
+   if (station != ALL_ONES && (station < 0 || station > 255))
+      return mns_error(Err_BadStn);
+
+   if (station != ALL_ONES && (net < 0 || net > 255))
+      return mns_error(Err_BadNet);
+
+   return (_kernel_oserror *)0;
+
+} /* range_check() */
+
+/******************************************************************************/
 
 int
 is_wild(port, station, network)
@@ -1339,98 +1040,110 @@ int port, station, network;
              port == ANY_PORT || port == 0) ? 1 : 0);
 }
 
+/******************************************************************************/
+
+static u_long inet_addr(register char *cp)
+{
 /*
  * Internet address interpretation routine.
  * The value returned is in network order.
  */
-u_long
-inet_addr(cp)
-        register char *cp;
-{
-        u_long val, base, n;
-        char c;
-        u_long parts[4], *pp = parts;
+
+   u_long val, base, n;
+   char c;
+   u_long parts[4], *pp = parts;
 
 again:
-        /*
-         * Collect number up to ``.''.
-         * Values are specified as for C:
-         * 0x=hex, 0=octal, other=decimal.
-         */
-        val = 0; base = 10;
-        if (*cp == '0')
-                base = 8, cp++;
-        if (*cp == 'x' || *cp == 'X')
-                base = 16, cp++;
-        while (c = *cp) {
-                if (isdigit(c)) {
-                        val = (val * base) + (c - '0');
-                        cp++;
-                        continue;
-                }
-                if (base == 16 && isxdigit(c)) {
-                        val = (val << 4) + (c + 10 - (islower(c) ? 'a' : 'A'));
-                        cp++;
-                        continue;
-                }
-                break;
-        }
-        if (*cp == '.') {
-                /*
-                 * Internet format:
-                 *      a.b.c.d
-                 *      a.b.c   (with c treated as 16-bits)
-                 *      a.b     (with b treated as 24 bits)
-                 */
-                if (pp >= parts + 4)
-                        return (-1);
-                *pp++ = val, cp++;
-                goto again;
-        }
-        /*
-         * Check for trailing characters.
-         */
-        if (*cp && !isspace(*cp))
-                return (-1);
-        *pp++ = val;
-        /*
-         * Concoct the address according to
-         * the number of parts specified.
-         */
-        n = pp - parts;
-        switch (n) {
 
-        case 1:                         /* a -- 32 bits */
-                val = parts[0];
-                break;
+  /*
+   * Collect number up to ``.''.
+   * Values are specified as for C:
+   * 0x=hex, 0=octal, other=decimal.
+   */
+   val = 0; base = 10;
+   if (*cp == '0')
+      base = 8, cp++;
+   if (*cp == 'x' || *cp == 'X')
+      base = 16, cp++;
 
-        case 2:                         /* a.b -- 8.24 bits */
-                val = (parts[0] << 24) | (parts[1] & 0xffffff);
-                break;
+   while (c = *cp)
+   {
+      if (isdigit(c)) {
+         val = (val * base) + (c - '0');
+         cp++;
+         continue;
+      }
+      if (base == 16 && isxdigit(c))
+      {
+         val = (val << 4) + (c + 10 - (islower(c) ? 'a' : 'A'));
+         cp++;
+         continue;
+      }
+      break;
+   }
 
-        case 3:                         /* a.b.c -- 8.8.16 bits */
-                val = (parts[0] << 24) | ((parts[1] & 0xff) << 16) |
-                        (parts[2] & 0xffff);
-                break;
+   if (*cp == '.')
+   {
+      /*
+       * Internet format:
+       *      a.b.c.d
+       *      a.b.c   (with c treated as 16-bits)
+       *      a.b     (with b treated as 24 bits)
+       */
+      if (pp >= parts + 4)
+         return -1;
 
-        case 4:                         /* a.b.c.d -- 8.8.8.8 bits */
-                val = (parts[0] << 24) | ((parts[1] & 0xff) << 16) |
-                      ((parts[2] & 0xff) << 8) | (parts[3] & 0xff);
-                break;
+      *pp++ = val, cp++;
+      goto again;
+   }
 
-        default:
-                return (-1);
-        }
-        val = htonl(val);
-        return (val);
-}
+   /* Check for trailing characters */
+   if (*cp && !isspace(*cp))
+      return -1;
 
-int EnumMapNull(r)
-_kernel_swi_regs *r;
+   *pp++ = val;
+
+   /* Concoct the address according to the number of parts specified */
+   n = pp - parts;
+   switch (n)
+   {
+      case 1:                         /* a -- 32 bits */
+         val = parts[0];
+         break;
+
+      case 2:                         /* a.b -- 8.24 bits */
+         val = (parts[0] << 24) | (parts[1] & 0xffffff);
+         break;
+
+      case 3:                         /* a.b.c -- 8.8.16 bits */
+         val = (parts[0] << 24) | ((parts[1] & 0xff) << 16) |
+               (parts[2] & 0xffff);
+         break;
+
+      case 4:                         /* a.b.c.d -- 8.8.8.8 bits */
+         val = (parts[0] << 24) | ((parts[1] & 0xff) << 16) |
+              ((parts[2] & 0xff) << 8) | (parts[3] & 0xff);
+         break;
+
+      default:
+         return -1;
+   }
+
+   val = htonl(val);
+
+   return val;
+
+} /* inet_addr() */
+
+/******************************************************************************/
+
+static _kernel_oserror *EnumMapNull(_kernel_swi_regs *r)
 {
-    r->r[4] = -1;
-    return (0);
-}
+   r->r[4] = -1;
+
+   return 0;
+
+} /* EnumMapNull() */
 
 /******************************************************************************/
 
