@@ -43,7 +43,7 @@ AWK	= awk
 THROWBACK = -Throwback
 DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
 #DEFINES = ${DEBUG} ${THROWBACK}
-COMMONFLAGS = -zM -c -Wp -depend !Depend ${INCLUDES} ${DEFINES}
+COMMONFLAGS = -zM -c -Wp -ws -depend !Depend ${INCLUDES} ${DEFINES}
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = ${COMMONFLAGS}
