@@ -184,6 +184,7 @@ OBJS = \
  o.Browser		\
  o.Cookies		\
  o.DragBox		\
+ o.Encoding		\
  o.Fetch		\
  o.FetchHTML		\
  o.FetchPage		\
@@ -272,6 +273,7 @@ OBJSD = \
  od.Browser		\
  od.Cookies		\
  od.DragBox		\
+ od.Encoding		\
  od.Fetch		\
  od.FetchHTML		\
  od.FetchPage		\
@@ -309,6 +311,7 @@ OBJSD = \
  od.URLstat		\
  od.URLutils		\
  od.URLveneer		\
+ od.Unifont             \
  od.Utils		\
  od.Windows		\
  o.ROSLib
@@ -603,17 +606,18 @@ rom: ${ROM_MODULE}
 
 install_common: ${FILES}
 	@echo
-	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}n
-	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}~n
-	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}n
-	${CP} ${LDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}n
-	${CP} ${LDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}n
-	${CP} ${LDIR}.Controls		${INSTDIR}.Controls	${CPFLAGS}n
-	${CP} ${LDIR}.Messages		${INSTDIR}.Messages	${CPFLAGS}n
-	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}n
-	${CP} ${LDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}n
+	${CP} ${LDIR}.!Boot		  ${INSTDIR}.!Boot	  ${CPFLAGS}n
+	${CP} ${TARGET}			  ${INSTDIR}.!RunImage	  ${CPFLAGS}~n
+	${CP} ${LDIR}.!Sprites		  ${INSTDIR}.!Sprites	  ${CPFLAGS}n
+	${CP} ${LDIR}.!Sprites22	  ${INSTDIR}.!Sprites22	  ${CPFLAGS}n
+	${CP} ${LDIR}.Choices		  ${INSTDIR}.Choices	  ${CPFLAGS}n
+	${CP} ${LDIR}.Controls		  ${INSTDIR}.Controls	  ${CPFLAGS}n
+	${CP} ${LDIR}.Messages		  ${INSTDIR}.Messages	  ${CPFLAGS}n
+	${CP} ${LDIR}.Res		  ${INSTDIR}.Res	  ${CPFLAGS}n
+	${CP} ${LDIR}.Sprites		  ${INSTDIR}.Sprites	  ${CPFLAGS}n
+	${CP} HTMLLib:Resources.Encodings ${INSTDIR}.Encodings    ${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
-	-${CP} ${LDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}n
+	-${CP} ${LDIR}.User.Hotlist	  ${INSTDIR}.User.Hotlist ${CPFLAGS}n
 
 install: install_common
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
