@@ -192,7 +192,7 @@ LIBSM = \
 LIBS = \
  ${CLIB} \
  ${HTMLLib} \
- ${URILib} \
+ ${URILIB} \
  ${FLEXLIB} \
  ${EVENTLIB} \
  ${TOOLBOXLIB} \
@@ -211,7 +211,7 @@ LIBS = \
 LIBSD = \
  ${CLIB} \
  ${HTMLLib} \
- ${URILib} \
+ ${URILIB} \
  ${FLEXLIB} \
  ${EVENTLIB} \
  ${TOOLBOXLIB} \
@@ -959,6 +959,7 @@ resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESDIR}.User
+	${MKDIR} ${RESDIR}.About
 	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
 	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
 	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
