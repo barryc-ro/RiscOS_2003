@@ -10,7 +10,7 @@ typedef struct ShiftJIS_Encoding
 {
     EncodingPriv e;
     char prev;
-    encoding_table roman, katakana, kanji;
+    encoding_table roman, katakana, kanji, cp932ext;
 } ShiftJIS_Encoding;
 
 /*
@@ -21,9 +21,10 @@ typedef struct ShiftJIS_Encoding
  *        csShiftJIS
  */
 
-static UCS4 kanji_to_ucs(const UCS2 *kanji, int c1, int c2)
+static UCS4 kanji_to_ucs(const UCS2 *jis0208, const UCS2 *cp932, int c1, int c2)
 {
     UCS4 u;
+    int row, col, index;
 
     /*
      * Shift-JIS encodes kanji using byte pairs:
@@ -37,17 +38,19 @@ static UCS4 kanji_to_ucs(const UCS2 *kanji, int c1, int c2)
      * And 47*188 = 8836 = 94*94... these 8836 codes
      * are those of JIS X 0208.
      *
+     * Except... Shift-JIS has extra stuff:
+     *     NEC Row 13 extensions
+     *     IBM Kanji in Rows 89-92
+     *
      * Also there are "user-defined" characters:
      *     first byte 0xF0-0xFC
      *    second byte 0x40-0x7E, 0x80-0xFC
-     *
-     * We turn all those into good ol' 0xFFFD.
+     * These can be regarded as rows 95-120. Rows 115-119
+     * contain duplicates of the IBM Kanji etc.
      *
      * We assume that c1 is in the range 0x81-0x9F, 0xE0-0xFC,
      * courtesy of range checking in shiftjis_read.
      */
-    if (c1 >= 0xF0 || c2 < 0x40 || c2 == 0x7F || c2 > 0xFC)
-        return 0xFFFD;
 
     if (c1 >= 0xE0)
         c1 -= 0xC1;
@@ -59,7 +62,28 @@ static UCS4 kanji_to_ucs(const UCS2 *kanji, int c1, int c2)
     else
         c2 -= 0x40;
 
-    u = kanji[188 * c1 + c2];
+    index = 188 * c1 + c2;
+
+    row = index / 94;
+    col = index % 94;
+
+    /* Don't forget row and col will start at 0, not 1 */
+    if (row < 94)
+        u = jis0208[index];
+    else
+        u = NULL_UCS2;
+
+    if (cp932)
+    {
+        if (row == 12)
+            u = cp932[col];         /* First row of CP932 file is NEC Row 13 */
+        else if (row >= 88 && row < 92)
+            u = cp932[94 + 94 * (row-88) + col];  /* Followed by IBM Kanji */
+        else if (index >= 94 * 114 && index < 94 * 114 + 28)
+            u = cp932[94 * 5 + col];              /* IBM non-Kanji */
+        else if (index >= 94 * 114 + 28 && index < 94 * 118 + 12)
+            u = cp932[94 + index - (94 * 114 + 28)]; /* Repeat IBM Kanji */
+    }
 
     return u == NULL_UCS2 ? 0xFFFD : u;
 }
@@ -77,6 +101,9 @@ static int shiftjis_reset(EncodingPriv *e, int for_encoding)
     if (!sj->kanji)
         sj->kanji = iso2022_find_table(94*94, 0x42);
 
+    if (!sj->cp932ext)
+        sj->cp932ext = encoding_load_map_file("Microsoft.CP932");
+
     sj->prev = 0;
 
     return sj->roman && sj->katakana && sj->kanji;
@@ -93,7 +120,8 @@ static unsigned int shiftjis_read(Encoding *e,
     const UCS2 *roman = encoding_table_ptr(sj->roman);
     const UCS2 *kanji = encoding_table_ptr(sj->kanji);
     const UCS2 *katakana = encoding_table_ptr(sj->katakana);
-    
+    const UCS2 *cp932ext = encoding_table_ptr(sj->cp932ext);
+
     for (count = n; count; count--)
     {
         char c = *s++;
@@ -101,7 +129,7 @@ static unsigned int shiftjis_read(Encoding *e,
 
         if (sj->prev)
         {
-            u = kanji_to_ucs(kanji, sj->prev, c);
+            u = kanji_to_ucs(kanji, cp932ext, sj->prev, c);
             sj->prev = 0;
         }
         else
@@ -168,6 +196,21 @@ static int lookup_table(UCS4 u, ShiftJIS_Encoding *sj, int *index, int *table_no
     if ((i = encoding_lookup_in_table(u, sj->kanji)) != -1)
     {
 	*table_no = 2;
+	*index = i;
+	return 1;
+    }
+
+    if (sj->cp932ext && (i = encoding_lookup_in_table(u, sj->cp932ext)) != -1)
+    {
+	*table_no = 2;
+
+	if (i < 94)
+	    i = 12 * 94 + i; /* NEC characters in Row 13 */
+	else if (i < 5 * 94)
+	    i = 88 * 94 + i - 94; /* IBM characters in Row 89 onwards */
+	else
+	    i = 114 * 94 + i; /* Guff in Row 115 */
+
 	*index = i;
 	return 1;
     }
@@ -241,7 +284,7 @@ static int shiftjis_write(EncodingPriv *e, UCS4 u, char **sjis, int *bufsize)
     *(*sjis)++ = c;
     if (cc)
 	*(*sjis)++ = cc;
-    
+
     return 1;
     sj = sj;
 }
@@ -255,6 +298,8 @@ static void shiftjis_delete(EncodingPriv *e)
 	encoding_discard_map_file(sj->katakana);
     if (sj->kanji)
 	encoding_discard_map_file(sj->kanji);
+    if (sj->cp932ext)
+	encoding_discard_map_file(sj->cp932ext);
 }
 
 EncodingPriv enc_shiftjis =
