@@ -105,7 +105,7 @@ static ToolboxEventHandler   hotlist_reset_directory_handler;
 static _kernel_oserror * hotlist_get_entry_sizes         (unsigned int * item_height, unsigned int * item_dir_width, unsigned int * item_url_width);
 static void              hotlist_scan_for_subdirectories (hotlist_item * item);
 
-static hotlist_item    * _hotlist_find_item              (hotlist_item * list, unsigned int item_no);
+static hotlist_item    * hotlist_find_item_r             (hotlist_item * list, unsigned int item_no);
 static hotlist_item    * hotlist_find_item               (hotlist_item * list, unsigned int item_no);
 static int               _hotlist_find_no_from_item      (hotlist_item * list, hotlist_item * item);
 static int               hotlist_find_no_from_item       (hotlist_item * item);
@@ -113,10 +113,10 @@ static hotlist_item    * _hotlist_find_selected_item     (hotlist_item * list);
 static hotlist_item    * hotlist_find_selected_item      (void);
 static void              _hotlist_count_displayed_items  (hotlist_item * list);
 static unsigned int      hotlist_count_displayed_items   (hotlist_item * list);
-static void              _hotlist_count_selected_items  (hotlist_item * list);
-static unsigned int      hotlist_count_selected_items   (void);
-static unsigned int      hotlist_contents_selected(hotlist_item *item);
-static unsigned int      hotlist_no_contents_selected(hotlist_item *item);
+static void              hotlist_count_selected_items_r  (hotlist_item * list);
+static unsigned int      hotlist_count_selected_items    (void);
+static unsigned int      hotlist_contents_selected       (hotlist_item * item);
+static unsigned int      hotlist_no_contents_selected    (hotlist_item * item);
 static void              _hotlist_draw                   (hotlist_item * list, unsigned int first_item, unsigned int last_item, unsigned int indent);
 static void              hotlist_draw                    (hotlist_item * list, unsigned int first_item, unsigned int last_item);
 static void              _hotlist_get_max_width          (hotlist_item * list, unsigned int indent);
@@ -131,7 +131,7 @@ static void              hotlist_launch_url              (hotlist_item * item);
 static _kernel_oserror * hotlist_process_click_on_item   (unsigned int itemno, hotlist_item * item, int buttons, int x, int y);
 static _kernel_oserror * hotlist_process_click           (int x, int y, int buttons);
 static void              hotlist_window_preopen          (hl_opentype type);
-static void              hotlist_setmenu_details         (ObjectId menuid);
+static void              hotlist_set_menu_details        (ObjectId menuid);
 static _kernel_oserror * hotlist_save_entries            (FILE * fileptr, hotlist_item * list);
 static void              hotlist_lower_tags              (char * string);
 static _kernel_oserror * hotlist_load_directory          (FILE * fileptr, hotlist_item * target);
@@ -831,7 +831,9 @@ static void hotlist_delete_item(hotlist_item * item)
 
 static _kernel_oserror * hotlist_move_item(hotlist_item * source, hotlist_item * target, unsigned int position)
 {
-  hotlist_item *newdir, *tempptr;
+  _kernel_oserror * e;
+  hotlist_item    * newdir, * tempptr;
+
   if (!(source->type == hl_directory && !hotlist_contents_selected(source->data.directory_content)))
   {
     /* Unlink item from directory structure */
@@ -844,19 +846,28 @@ static _kernel_oserror * hotlist_move_item(hotlist_item * source, hotlist_item *
   }
   else
   {
-    /* Special case - moving a directory whose contents are only partially selected */
-    /* we can't move a directory whose contents are only partially to be moved,     */
-    /* there would be no where to leave the items which were not moved.             */
+    /* Special case - moving a directory whose contents are only partially selected. */
+    /* We can't move a directory whose contents are only partially to be moved,      */
+    /* there would be nowhere to leave the items which were not moved with it.       */
+
+    /* So, create a new directory based on the old */
+
     RetError(hotlist_new_directory(target, source->name, position, &newdir));
+
+    /* Move the contents recursively into the new directory */
+
     source = source->data.directory_content;
+
     while(source)
     {
       tempptr = source->next;
+
       if (source->flags & HOTLIST_G_IS_SELECTED)
       {
-        hotlist_move_item(source, newdir, HOTLIST_POSITION_END); /* move items into new directory */
+        hotlist_move_item(source, newdir, HOTLIST_POSITION_END);
         source->flags &= ~HOTLIST_G_IS_SELECTED;
       }
+
       source = tempptr;
     }
   }
@@ -924,7 +935,7 @@ static _kernel_oserror * hotlist_copy_item(hotlist_item * source, hotlist_item *
       /* Now copy the contents recursively */
 
       content = source->data.directory_content;
-      
+
       while (content)
       {
         if (content->flags & HOTLIST_G_IS_SELECTED)
@@ -996,37 +1007,6 @@ static void hotlist_scan_for_subdirectories(hotlist_item * item)
 }
 
 /*************************************************/
-/* _hotlist_find_item()                          */
-/*                                               */
-/* This function does all the work for           */
-/* hotlist_find_item()                           */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             the n'th item to return           */
-/*                                               */
-/* Returns:    Pointer to the requested item or  */
-/*             NULL if it does not exist         */
-/*************************************************/
-
-static hotlist_item * _hotlist_find_item(hotlist_item * list, unsigned int item_no)
-{
-  hotlist_item * temp;
-  while(list)
-  {
-    if (item_no == item_number) return list;                             /* Found the list item */
-    item_number++;
-    if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
-    {
-      temp = _hotlist_find_item(list->data.directory_content, item_no);
-      if (temp) return temp;
-    }
-    list = list->next;
-
-  }
-  return NULL;                                                          /* List does not extend far enough */
-}
-
-/*************************************************/
 /* hotlist_find_item()                           */
 /*                                               */
 /* This function will recursivly scan through    */
@@ -1034,22 +1014,59 @@ static hotlist_item * _hotlist_find_item(hotlist_item * list, unsigned int item_
 /* the n'th item.  It will only recurse through  */
 /* open directories.                             */
 /*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             the n'th item to return           */
+/* Parameters: Pointer to a hotlist_item at the  */
+/*             top of the directory to scan;     */
+/*                                               */
+/*             The nth item to return within it. */
 /*                                               */
 /* Returns:    Pointer to the requested item or  */
-/*             NULL if it does not exist         */
-/*                                               */
-/* Note:       This function doesn't actually    */
-/*             do any of the real work but       */
-/*             merely sets up a global variable  */
-/*             and calls _hotlist_find_item()    */
+/*             NULL if it does not exist.        */
 /*************************************************/
 
-static hotlist_item * hotlist_find_item(hotlist_item *list, unsigned int item_no)
+static hotlist_item * hotlist_find_item(hotlist_item * list, unsigned int item_no)
 {
   item_number = 0;
-  return _hotlist_find_item(list, item_no);
+
+  return hotlist_find_item_r(list, item_no);
+}
+
+/*************************************************/
+/* hotlist_find_item_r()                         */
+/*                                               */
+/* Recursive back-end to hotlist_find_item.      */
+/*                                               */
+/* Parameters: As hotlist_find_item.             */
+/*                                               */
+/* Returns:    As hotlist_find_item.             */
+/*************************************************/
+
+static hotlist_item * hotlist_find_item_r(hotlist_item * list, unsigned int item_no)
+{
+  hotlist_item * temp;
+
+  while (list)
+  {
+    if (item_number == item_no) return list; /* Found the list item */
+
+    /* Increment the item counter */
+
+    item_number++;
+
+    /* Recursively scan open directories */
+
+    if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
+    {
+      temp = hotlist_find_item_r(list->data.directory_content, item_no);
+
+      if (temp) return temp;
+    }
+
+    /* Move to the next list item */
+
+    list = list->next;
+  }
+
+  return NULL; /* List does not extend far enough */
 }
 
 /*************************************************/
@@ -1635,9 +1652,9 @@ static void hotlist_directory_open_close(hotlist_item *item, unsigned int itemno
   hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
 
   item->flags ^= HOTLIST_D_IS_OPEN;
-  
+
   hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
-  
+
   hotlist_window_preopen(already_open);
   show_error(window_get_wimp_handle(0, hotlist_windowid, &window_handle));
 
@@ -1814,11 +1831,11 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno,
     {
       if (item->flags & HOTLIST_G_IS_SELECTED)
       {
-        hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED); 
+        hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
       }
       else
       {
-        hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED); 
+        hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
       }
     }
     hotlist_redraw_now();
@@ -2027,7 +2044,7 @@ static int hotlist_menuclose_handler(int event_code, ToolboxEvent *event, IdBloc
 
 
 
-void hotlist_setmenu_details(ObjectId menuid)
+void hotlist_set_menu_details(ObjectId menuid)
 {
   hotlist_item * item;
   char entrytext[32];
@@ -2127,7 +2144,7 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
     }
   }
 
-  hotlist_setmenu_details(id_block->self_id);
+  hotlist_set_menu_details(id_block->self_id);
 
   return 0;
 }
@@ -2775,9 +2792,6 @@ _kernel_oserror * hotlist_initialise(void)
                                           hotlist_reset_directory_handler,
                                           NULL));
 
-hotlist_load("InetDBase:hotlist\n");
-hotlist_open(Toolbox_ShowObject_Default, 0, 0);
-
   return NULL;
 }
 
@@ -2830,14 +2844,17 @@ _kernel_oserror * hotlist_close(void)
 /*************************************************/
 /* hotlist_menu_selectall_handler()              */
 /*                                               */
-/* This function handles the select all menu     */
-/* item                                          */
+/* This function handles the 'select all' menu   */
+/* item.                                         */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_menu_selectall_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_menu_selectall_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  hotlist_item *item;
-  ObjectId sub_menu;
+  hotlist_item * item;
+  ObjectId       sub_menu;
 
   if (!hotlist_root->data.directory_content) return 0;
 
@@ -2846,19 +2863,26 @@ static int hotlist_menu_selectall_handler(int event_code, ToolboxEvent *event, I
   if (item && item->parent)
   {
     item = item->parent->data.directory_content;
-    while(item)
+
+    while (item)
     {
       item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
       if (item->type == hl_directory) hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+
       item = item->next;
     }
+
     hotlist_redraw_now();
+
     menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, &sub_menu);
     menu_set_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, 0);
+
     if (sub_menu) toolbox_delete_object(0, sub_menu);
-    hotlist_setmenu_details(id_block->self_id);
+
+    hotlist_set_menu_details(id_block->self_id);
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
@@ -3393,11 +3417,11 @@ static _kernel_oserror *_hotlist_start_drag(void)
     if (
          (hotlist_count_selected_items() == 1 && item->type == hl_url) ||
          (
-           hotlist_count_selected_items() == 1 && 
-           item->type == hl_directory && 
+           hotlist_count_selected_items() == 1 &&
+           item->type == hl_directory &&
            (
-             !(item->flags & HOTLIST_D_IS_OPEN) || 
-             hotlist_no_contents_selected(item->data.directory_content)   || 
+             !(item->flags & HOTLIST_D_IS_OPEN) ||
+             hotlist_no_contents_selected(item->data.directory_content)   ||
              item->data.directory_content == NULL
            )
          )
@@ -3636,12 +3660,12 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
     if (!shift)
     {
       /* Move selected items */
-      
+
       hotlist_move_item(sourceitem, targetitem, position);                      /* Move first item to specified position */
                                                                                 /* before/after/in target                */
-      
+
       if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
-      
+
       targetitem = sourceitem;
 
       while((sourceitem = hotlist_find_selected_item()) != NULL)
@@ -3656,8 +3680,8 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
     else
     {
       /* Copy selected items */
-      
-      
+
+
       hotlist_copy_item(sourceitem, targetitem, position, &targetitem);         /* Copy first item to specified position */
                                                                                 /* before/after/in target                */
       if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
@@ -3882,14 +3906,17 @@ _kernel_oserror *hotlist_selection_box_start(void)
 /*************************************************/
 /* hotlist_null_drag_select_handler()            */
 /*                                               */
-/* This function is called as a null handler,    */
-/* it is responsible for selecting for selecting */
-/* and deselecting items within and outside of   */
-/* the rubber box drag started by                */
-/* hotlist_selection_box_start                   */
+/* This function is called as a null handler;    */
+/* it is responsible for selecting and           */
+/* deselecting items within and outside the      */
+/* rubber drag box started by                    */
+/* hotlist_selection_box_start.                  */
+/*                                               */
+/* Parameters are as standard for a Wimp event   */
+/* handler.                                      */
 /*************************************************/
 
-int hotlist_null_drag_select_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+int hotlist_null_drag_select_handler(int event_code, WimpPollBlock * event, IdBlock * id_block, void * handle)
 {
   WimpGetPointerInfoBlock pointerblock;
   unsigned int item_height, item_dir_width, item_url_width;
@@ -3984,13 +4011,22 @@ int hotlist_null_drag_select_handler(int event_code, WimpPollBlock *event, IdBlo
 
 
 /*************************************************/
-/* _hotlist_count_selected_items()               */
+/* hotlist_count_selected_items_r()              */
 /*                                               */
-/* This routine does all the work for            */
-/* hotlist_count_selected_items()                */
+/* Recursive back-end to                         */
+/* hotlist_count_selected_items.                 */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item struct  */
+/*             representing the first item in a  */
+/*             directory to count.               */
+/*                                               */
+/* Returns:    The number of items selected in   */
+/*             that directory (selected          */
+/*             directory items only count as 1;  */
+/*             their contents are not counted).  */
 /*************************************************/
 
-static void _hotlist_count_selected_items(hotlist_item *list)
+static void hotlist_count_selected_items_r(hotlist_item * list)
 {
   while(list)
   {
@@ -3998,13 +4034,16 @@ static void _hotlist_count_selected_items(hotlist_item *list)
     {
       item_number++;
     }
-    else /* Only recurse through directories which are not selected */
+    else
     {
+      /* Only recurse through directories which are not selected */
+
       if (list->type == hl_directory)
       {
-        _hotlist_count_selected_items(list->data.directory_content);
+        hotlist_count_selected_items_r(list->data.directory_content);
       }
     }
+
     list = list->next;
   }
 }
@@ -4012,18 +4051,17 @@ static void _hotlist_count_selected_items(hotlist_item *list)
 /*************************************************/
 /* hotlist_count_selected_items()                */
 /*                                               */
-/* This routine counts the number of selected    */
-/* items                                         */
+/* Count the number of items in a selection.     */
 /*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*                                               */
-/* Returns:    the number of selected items      */
+/* Returns:    The number of selected items.     */
 /*************************************************/
 
 static unsigned int hotlist_count_selected_items(void)
 {
   item_number = 0;
-  _hotlist_count_selected_items(hotlist_root->data.directory_content);
+
+  hotlist_count_selected_items_r(hotlist_root->data.directory_content);
+
   return item_number;
 }
 
@@ -4031,24 +4069,29 @@ static unsigned int hotlist_count_selected_items(void)
 /* hotlist_contents_selected()                   */
 /*                                               */
 /* Checks if all items and subdirectories are    */
-/* selected                                      */
+/* selected.                                     */
 /*                                               */
 /* Parameters: Pointer to the first hotlist_item */
-/*             to check                          */
+/*             to check.                         */
 /*                                               */
-/* Returns:    1 if all items are selected       */
-/*             0 if there are unselected items   */
+/* Returns:    1 if all items are selected, else */
+/*             0 (there are unselected items).   */
 /*************************************************/
 
-static unsigned int hotlist_contents_selected(hotlist_item *item)
+static unsigned int hotlist_contents_selected(hotlist_item * item)
 {
   while(item)
   {
+    /* Keep trying to find an unselected item and */
+    /* immediately return 0 if found.             */
+
     if (!item->flags & HOTLIST_G_IS_SELECTED) return 0;
+
     if (item->type == hl_directory)
     {
       if (!hotlist_contents_selected(item->data.directory_content)) return 0;
     }
+
     item = item->next;
   }
   return 1;
@@ -4058,25 +4101,31 @@ static unsigned int hotlist_contents_selected(hotlist_item *item)
 /* hotlist_no_contents_selected()                */
 /*                                               */
 /* Checks if all items and subdirectories are    */
-/* selected                                      */
+/* unselected.                                   */
 /*                                               */
 /* Parameters: Pointer to the first hotlist_item */
-/*             to check                          */
+/*             to check.                         */
 /*                                               */
-/* Returns:    1 if all items are selected       */
-/*             0 if there are unselected items   */
+/* Returns:    1 if all items are unselected,    */
+/*             or 0 (there are selected items).  */
 /*************************************************/
 
-static unsigned int hotlist_no_contents_selected(hotlist_item *item)
+static unsigned int hotlist_no_contents_selected(hotlist_item * item)
 {
-  while(item)
+  while (item)
   {
+    /* Keep trying to find a selected item and */
+    /* immediately return 0 if found.          */
+
     if (item->flags & HOTLIST_G_IS_SELECTED) return 0;
+
     if (item->type == hl_directory)
     {
       if (!hotlist_no_contents_selected(item->data.directory_content)) return 0;
     }
+
     item = item->next;
   }
+
   return 1;
 }
