@@ -80,7 +80,7 @@ install:
         ${CP} LocalRes:!Sprites23 ${INSTDIR}.!Sprites23 ${CPFLAGS}
 
 module:
-	modgen UnicodeRes UnicodeRes UnicodeRes 0.03 -via viafile
+	modgen UnicodeRes UnicodeRes UnicodeRes 0.13 -via viafile
 	echo built softload UnicodeRes 
 
 # Dynamic dependencies:
