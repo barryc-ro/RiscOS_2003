@@ -78,8 +78,7 @@ BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedi
 Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
             ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
             
-STB3      = ${BASEOBJS} ${Applic}  ${OM}.serial_lib ${OM}.IRRemote \
-             
+STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.Graphics \
 
 
 OBJS      = ${STB3}
