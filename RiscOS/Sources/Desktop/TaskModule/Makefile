@@ -24,6 +24,9 @@
 #
 COMPONENT	= TaskModule
 
+EXP_HDR = <CExport$Dir>
+
+CPFLAGS = ~cfr~v
 
 ROM_AOF_FILE	= @.!ROM_AOF.Output_M
 
@@ -52,7 +55,13 @@ clean:
 	Echo		Component $(COMPONENT): 'clean' finished.
 
 
-export:
+export: export_${PHASE}
+
+export_libs:
+	@echo ${COMPONENT}: export complete(libs)
+
+export_hdrs:
+	Copy		Sources.h.TaskModule ${EXP_HDR}.h.TaskModule ${CPFLAGS}
 	Echo		Component $(COMPONENT): 'export' finished.
 
 
