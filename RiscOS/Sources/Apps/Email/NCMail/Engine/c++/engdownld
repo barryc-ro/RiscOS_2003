@@ -145,33 +145,63 @@ void DownloadFailure(bool headers)
 {
 
   MessageDescriptor *msg = downloadstate.msg;
+  bool flag = false;
 
   SetFilename(msg->ID, headers);
   UnlockFile(msgfilename);
   remove(msgfilename);
-  if (msg->flags & ERROR)
+
+  switch (downloadstate.ret.rc)
   {
-    /*
-    ** Must be second time around so we've obviously
-    ** already failed once.
-    ** In that case ignore this message and move on to next.
-    */
+
+    case ELIB_ECONFAILED :
+    case ELIB_ECONBROKEN :
+    case ELIB_EINTERNETERR :
+    case ELIB_ECONTIMEDOUT :
+    case ELIB_ECONRESPTIMEDOUT :
+
+      downloadstate.context = conbroken;
+      flag = true;
+
+      break;
+ 
+    default :
+
+      if (msg->flags & ERROR)
+      {
+        /*
+        ** Must be second time around so we've obviously
+        ** already failed once.
+        ** In that case ignore this message and move on to next.
+        */
+        flag = true;
+
+      }
+      else
+      {
+        /* set ERROR flag so that another attempt will be made */
+        msg->flags |= ERROR;
+      }
+
+      downloadstate.context = readytodownload;
+
+      break;
+  }
+
+  if (flag)
+  {
+    downloadstate.msg = msg->next;
     if (headers)
     {
       popmbox->flags |= MBOXINCOMPLETE;
-      /* move start of temp message list to next message */
-      transmbox->list = msg->next;
+      /*
+      ** Destroy descriptor as it's no use without the headers
+      ** since we can't display it in the Inbox.
+      ** This will move start of temp message list to next message.
+      */
+      DestroyDescriptor(msg, transmbox);
     }
-
-    downloadstate.msg = msg->next;
   }
-  else
-  {
-    /* set ERROR flag so that another attempt will be made */
-    msg->flags |= ERROR;
-  }
-
-  downloadstate.context = readytodownload;
 }
 
 
@@ -182,6 +212,7 @@ void DownloadFailure(bool headers)
 **   startdownload
 **   readytodownload
 **   downloadfailure
+**   conbroken
 **   downloaddone
 **
 ** The process cycles through the message list until all messages
@@ -191,7 +222,7 @@ void DownloadFailure(bool headers)
 void DoDownloadHeader(void)
 {
 
-  ELib_rcode code;
+  ELib_rcode rc;
   MessageDescriptor *msg = downloadstate.msg;
 
   switch (downloadstate.context)
@@ -212,11 +243,11 @@ void DoDownloadHeader(void)
       */
 
       dprintf(("Eng", "download context = readytodownload hdr %d\n",(msg) ? msg->ID : 0));
-      if ((!msg) || (disconnectpending))
+      if ((!msg) || (disconnectpending) || (popstatus < acctconnected))
       {
         /* all headers now downloaded */
 
-        if (disconnectpending)
+        if ((disconnectpending) || (popstatus < acctconnected))
         {
           dprintf(("Eng", "Picking up disconnectpending while downloading headers\n"));
           popmbox->flags |= MBOXINCOMPLETE;
@@ -235,16 +266,17 @@ void DoDownloadHeader(void)
           /* it's a new message so get the header */
           newmsgs = true;
           SetFilename(msg->ID, true);
-          downloadstate.hdrsobj = new MBoxOpCB_gethdrs_file((MBoxCBHandlerFn) MBoxCallback, msgfilename, code, 0);
+          downloadstate.hdrsobj = new MBoxOpCB_gethdrs_file((MBoxCBHandlerFn) MBoxCallback, msgfilename, rc, 0);
           downloadstate.context = idle;
 
-          code = msg->mboxobj->GetHeaders(downloadstate.hdrsobj);
-          if (code < 0)
+          rc = msg->mboxobj->GetHeaders(downloadstate.hdrsobj);
+          if (rc < 0)
           {
             /* an error has occurred so we'll skip this message */
-            dprintf(("Eng", "***ERROR*** Error getting headers, rc=%d\n",code));
+            dprintf(("Eng", "***ERROR*** Error getting headers, rc=%d\n",rc));
             downloadstate.context = downloadfailure;
-            downloadstate.ret.code = (code == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY : ENG_GETHDRFAILED;
+            downloadstate.ret.rc = rc;
+            downloadstate.ret.code = (rc == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY : ENG_GETHDRFAILED;
           }
         }
         else
@@ -270,6 +302,18 @@ void DoDownloadHeader(void)
       RemoveObj((MBoxOpCB**) &downloadstate.hdrsobj);
       DownloadFailure(true);
 
+      break;
+
+    case conbroken :
+
+      dprintf(("Eng", "download context = conbroken\n"));
+      /*
+      ** Connection is broken - stop download.
+      ** Eventually we want to try to re-establish connection.
+      */
+
+      popstatus = acctcreated;
+      downloadstate.context = readytodownload;
       break;
 
     case downloaddone :
@@ -351,7 +395,7 @@ void DownloadCleanup(void)
 void DoDownloadMessage(void)
 {
 
-  ELib_rcode code;
+  ELib_rcode rc;
   MessageDescriptor *msg = downloadstate.msg;
   int32 freemem = FreeMem();
 
@@ -402,7 +446,7 @@ void DoDownloadMessage(void)
         popmbox->flags &= ~DOWNLOADINCOMPLETE;
         while (msg)
         {
-          msg->flags &= ~(NEW + REMOVED);
+          msg->flags &= ~(NEWLYCREATED + REMOVED);
           msg = msg->next;
         }
 
@@ -419,10 +463,11 @@ void DoDownloadMessage(void)
         DisconnectPending();
       }
 
-      else if (!emailactive)
+      else if ((!emailactive) || (popstatus < acctconnected))
       {
-        /* User has left email client while downloading */
-        dprintf(("Eng", "Stopping downloading on exit from NCMail\n"));
+        /* User has left email client while downloading,
+           or we've had a broken connection */
+        dprintf(("Eng", "Stopping downloading on %s\n",(!emailactive) ? "exit from NCMail" : "broken connection"));
 
         DownloadCleanup();
       }
@@ -442,15 +487,16 @@ void DoDownloadMessage(void)
       else
       {
         /* Phew! we can actually try to download this message */
-        code = msg->mboxobj->GetLength(downloadstate.size);
-        if (code < 0)
+        rc = msg->mboxobj->GetLength(downloadstate.size);
+        if (rc < 0)
         {
           /* some kind of error in getting size */
           dprintf(("Eng", "***ERROR*** Error returned from GetSize method\n"));
+          downloadstate.ret.rc = rc;
           downloadstate.context = downloadfailure;
         }
 
-        else if (!(msg->flags & NEW))
+        else if (!(msg->flags & NEWLYCREATED))
         {
           /* Not a new message, so ignore it */
           downloadstate.msg = msg->next;
@@ -482,7 +528,7 @@ void DoDownloadMessage(void)
             ** so try to clear memory if possible
             */
             ok = false;
-            if ((msg->flags & NEW) && (!firstdownload))
+            if ((msg->flags & NEWLYCREATED) && (!firstdownload))
             {
               if (ClearMemory(downloadstate.size, true) != ENG_NOMEMORY)
                 ok = true;
@@ -496,13 +542,13 @@ void DoDownloadMessage(void)
             SetFilename(msg->ID, false);
             downloadstate.context = idle;
 
-            downloadstate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) MBoxCallback, msgfilename, code, (void *) DOWNLOADMSG);
-            code = msg->mboxobj->GetMessage(downloadstate.msgobj);
-            if (code < 0)
+            downloadstate.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) MBoxCallback, msgfilename, rc, (void *) DOWNLOADMSG);
+            rc = msg->mboxobj->GetMessage(downloadstate.msgobj);
+            if (rc < 0)
             {
               /* an error of some sort - skip this message */
               downloadstate.context = downloadfailure;
-              downloadstate.ret.code = (eng_rcode) code;
+              downloadstate.ret.rc = rc;
             }
           }
 
@@ -511,7 +557,7 @@ void DoDownloadMessage(void)
             if (secondtimeround)
             {
               dprintf(("Eng", "Not enough space for message %d\n",msg->ID));
-              msg->flags &= ~NEW;
+              msg->flags &= ~NEWLYCREATED;
             }
             downloadstate.msg = msg->next;
             downloadstate.context = readytodownload;
@@ -530,7 +576,19 @@ void DoDownloadMessage(void)
 
       break;
 
+    case conbroken :
+
+      dprintf(("Eng", "download context = conbroken\n"));
+      /*
+      ** Connection is broken - stop download.
+      ** Eventually we want to try to re-establish connection.
+      */
+
+      popstatus = acctcreated;
+      downloadstate.context = readytodownload;
+      break;
   }
+
 }
 
 
@@ -593,7 +651,8 @@ void DoRetrieve(void)
     {
       uint32 size;
 
-      dprintf(("Eng", "Retrieve context = readytoretrieve\n"));
+      dprintf(("Eng", "Retrieve context = readytoretrieve msg %d\n",msg->ID));
+      dprintf(("Eng", "Mbox obj is at 0x%x\n",msg->mboxobj));
       rc = msg->mboxobj->GetLength(size);
       dprintf(("Eng", "Message size=%d\n",size));
       if (rc < 0)
@@ -648,6 +707,10 @@ void DoRetrieve(void)
 
         case ELIB_ECONREFUSED :
         case ELIB_ECONFAILED :
+        case ELIB_ECONBROKEN :
+        case ELIB_EINTERNETERR :
+        case ELIB_ECONTIMEDOUT :
+        case ELIB_ECONRESPTIMEDOUT :
 
           retrievestate.ret.code = ENG_POPCONNECTFAIL;
           break;

@@ -48,7 +48,7 @@ extern "C"
 Account *POPaccount, *SMTPaccount;
 Mailbox *inbox;
 SendQMailbox *outbox;
-bool firstprocess = true, firstdownload = true;
+bool firstprocess = true, firstdownload = true, broken = false;
 uint32 newmail = 0;
 
 #ifdef ALAN
@@ -143,7 +143,7 @@ void StartOffSMTP(void)
 ** The POP and SMTP mailboxes are processed in parallel.
 */
 
-void StartProcess(void)
+void StartProcess(int popcontext)
 {
 
   dprintf(("Eng", "Free memory = %dK\n",FreeMem()/1024));
@@ -159,7 +159,7 @@ void StartProcess(void)
 
   if (popstatus > acctnonexistent)
   {
-    popprocessstate.context = readytodisconnect;
+    popprocessstate.context = popcontext;
     popmbox->flags &= ~CHANGED;
     state |= PROCESSPOP;
     ActivatePOP();
@@ -234,6 +234,7 @@ void DoSMTPProcess(void)
 
       dprintf(("Eng", "SMTP context = readytosend\n"));
       smtpprocessstate.context = idle;
+      StopRetryCount();
       if (sendpending)
       {
         rc = SMTPAccountConnect();
@@ -344,7 +345,6 @@ void DoSMTPProcess(void)
         /* all messages have been sent */
         sendpending = false;
         smtpprocessstate.ret.code = ENG_SENTMSG;
-        StopRetryCount();
       }
 
       smtpprocessstate.context = readytodisconnect;
@@ -578,7 +578,7 @@ bool CheckMboxList(void)
     }
     else
     {
-      popmbox->flags |= CHANGED;
+      popmbox->flags |= (CHANGED + DOWNLOADINCOMPLETE);
       msgptr->mboxobj = obj;
       dprintf(("Eng", "Mbox obj is at 0x%x\n",obj));
       rc = obj->GetFlags(flags, Message::Set);
@@ -657,6 +657,9 @@ void DoPOPProcess(void)
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popstatus = acctconnected;
 
+      if (state & RETRIEVEMSG)
+        retrievestate.context = readytoretrieve;
+
       if (firstprocess)
       {
         popstat->flags = 0;
@@ -673,10 +676,8 @@ void DoPOPProcess(void)
       if (rc < 0)
       {
         if (state & RETRIEVEMSG)
-        {
           state &= ~PROCESSPOP;
-          retrievestate.context = readytoretrieve;
-        }
+
         else
         {
           statusret.rc = rc;
@@ -702,10 +703,8 @@ void DoPOPProcess(void)
       if (rc < 0)
       {
         if (state & RETRIEVEMSG)
-        {
           state &= ~PROCESSPOP;
-          retrievestate.context = readytoretrieve;
-        }
+
         else
         {
           popmbox->flags |= MBOXINCOMPLETE;
@@ -721,7 +720,6 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = connectfailure\n",));
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popprocessstate.context = idle;
-/*       state &= ~(PROCESSPOP + POPCONNECT); */
       state &= ~PROCESSPOP;
       DeactivatePOP();
       statusret.rc = popprocessstate.ret.rc;
@@ -780,8 +778,11 @@ void DoPOPProcess(void)
       if (state & MARKDELETE)
         state &= ~MARKDELETE;
 
+#ifdef gorilla
+      /* Why is this here? Surely it should happen after connection? */
       if (state & RETRIEVEMSG)
         retrievestate.context = readytoretrieve;
+#endif
 
       popprocessstate.context = done;
 
@@ -911,7 +912,6 @@ void ProcessDone(void)
       hdrsdownloaded = false;
       state |= DOWNLOADHDR;
     }
-
   }
 
   else
@@ -925,7 +925,7 @@ void ProcessDone(void)
 
   if (disconnectpending)
     DisconnectPending();
-  
+
   else if ((!online) && (!emailactive))
   {
     /*
