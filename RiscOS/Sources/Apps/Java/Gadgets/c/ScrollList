@@ -21,14 +21,14 @@
 
 #include "glib.h"
 #include "string32.h"
-#include "riscos_utils.h"
+#include "riscos_uti.h"
 #include "Font.h"
-#include "TextGadgets.h"
+#include "TextGadget.h"
 #include "ScrollList.h"
 #include "ScrollLisP.h"
 #include "ScrollLisS.h"
 #include "debug.h"
-#include "myswis.h"
+#include "ModHdr.h"
 #include "utils.h"
 
 #ifdef MemCheck_MEMCHECK
@@ -223,8 +223,14 @@ static unsigned int _get_height_of_entry(const PrivateScrollList *sdata,
             return 0;
     }
 
-    if (!font_handle)
+    if (!font_handle) {
+        // bug fix.  SNB - 19980618: Must zero base_line otherwise when desktop font
+        // is the system font, all the text disappears because base_line remains
+        // uninitialised.
+        if (base_line)
+            *base_line = 0;
         return 32;
+    }
 
     _swix(Font_ReadInfo, _IN(0)|_OUT(2)|_OUT(4),
     		font_handle, &min, &max);
@@ -603,7 +609,7 @@ static _kernel_oserror *_add_item(PrivateScrollList *sdata,
         }
         else new_spr_name = NULL;
 
-        for (i = sdata->no_entries; i >= index; i--)
+        for (i = sdata->no_entries; i > index; i--)
         {
             sdata->entries[i].text = sdata->entries[i - 1].text;
             sdata->entries[i].sprite_area = sdata->entries[i - 1].sprite_area;
@@ -788,6 +794,25 @@ static _kernel_oserror *_get_selected(const PrivateScrollList *sdata,
     return NULL;
 }
 
+static _kernel_oserror *_make_visible(const PrivateScrollList *sdata,
+			int visible)
+{
+    unsigned int		item_height;
+    WimpGetWindowStateBlock	block;
+
+    _get_item_size(sdata, NULL, &item_height, NULL);
+
+    window_get_wimp_handle(0, sdata->object_id, &block.window_handle);
+
+    wimp_get_window_state(&block);
+
+    block.yscroll = -visible * item_height;
+
+    wimp_open_window((WimpOpenWindowBlock *) &block);
+
+    return NULL;
+}
+
 static _kernel_oserror *_get_item_text(const PrivateScrollList *sdata,
 			char *buffer, int buffer_size, int index, int *nbytes)
 {
@@ -871,12 +896,7 @@ _kernel_oserror *scrolllist_method(PrivateScrollList *sdata,
             break;
 
         case ScrollList_MakeVisible:
-            if (regs->r[4] < 0)
-                sdata->visible = 0;
-            else
-                sdata->visible = regs->r[4];
-            scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
-    		sdata->box.xmax - SCROLLBAR_SIZE, sdata->box.ymax);
+            _make_visible(sdata, regs->r[4] < 0 ? 0 : regs->r[4]);
             break;
 
         case ScrollList_SetColour:
@@ -1023,7 +1043,7 @@ _kernel_oserror *_scrolllist_redraw(const PrivateScrollList *sdata,
             unsigned int sprite_info = sdata->entries[i].flags &
             			(FLAGS_SPRITE_AREA | FLAGS_SPRITE_NAME);
 
-            if (sprite_info != 3)
+            if (sprite_info != (FLAGS_SPRITE_AREA | FLAGS_SPRITE_NAME))
             {
                 // We have a sprite to plot
                 WimpPlotIconBlock	icon;
@@ -1041,7 +1061,7 @@ _kernel_oserror *_scrolllist_redraw(const PrivateScrollList *sdata,
                 else
                     icon.data.is.sprite_area = (int*)
                     				sdata->entries[i].sprite_area;
-                if (sprite_info == 3)
+                if (sprite_info == 2)
                     icon.data.is.sprite_name_length = 0;
                 else
                     icon.data.is.sprite_name_length = strlen(
@@ -1085,8 +1105,8 @@ _kernel_oserror *_scrolllist_redraw(const PrivateScrollList *sdata,
 
             // Plot the text
             _swix(Wimp_TextOp, _INR(0,5), 2 | 1<<30, sdata->entries[i].text,
-            		-1, -1, block->visible_area.xmin + sprite_width +12,
-            		y - base_line);
+       	    		-1, -1, block->visible_area.xmin + sprite_width +12,
+       			y - base_line);
         }
         else
         {
@@ -1154,9 +1174,10 @@ static _kernel_oserror *scrolllist_mclick(const PrivateScrollList *sdata,
         }
     }
 
-    // Send event
+    // Send event -
+    /* SNB: 19980518: changed condition to >= to stop "extra item" events. */
 
-    if (event.item > sdata->no_entries)
+    if (event.item >= sdata->no_entries)
         return NULL;
 
     event.hdr.size = sizeof(ScrollListSelectionEvent);
@@ -1169,6 +1190,11 @@ static _kernel_oserror *scrolllist_mclick(const PrivateScrollList *sdata,
     {
         // double click
         event.flags |= ScrollList_Selection_Flags_DoubleClick;
+    }
+
+    /* SNB: 19980618: added flagging of adjust clicks */
+    if (click->buttons & (1 | 256)) {
+            event.flags |= ScrollList_Selection_Flags_AdjustClick;
     }
 
     toolbox_raise_toolbox_event(0, sdata->parent_id, sdata->component_id,
@@ -1227,8 +1253,7 @@ _kernel_oserror *scrolllist_filter(_kernel_swi_regs *regs)
             if (window_handle == wimp_mouse_event->window_handle)
             {
                 scrolllist_mclick(scrolllist_list[i], wimp_mouse_event);
-                // Claim event, since we don't want the application to know
-                // what's going on?
+                // Claim event
                 regs->r[0] = -1;
             }
         }
