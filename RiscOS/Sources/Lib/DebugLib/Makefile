@@ -78,6 +78,7 @@ OBJS =\
  o.serial_lib\
  o.buffering\
  o.misc\
+ o.options\
  o.debugit\
  o.file\
  o.pdebug\
@@ -92,6 +93,7 @@ OBJSZ =\
  oz.serial_lib\
  oz.buffering\
  oz.misc\
+ oz.options\
  oz.debugit\
  oz.file\
  oz.pdebug\
@@ -106,6 +108,7 @@ OBJSD =\
  od.serial_lib\
  od.buffering\
  od.misc\
+ od.options\
  od.debugit\
  od.file\
  od.pdebug\
@@ -120,6 +123,7 @@ OBJSMC =\
  oMC.serial_lib\
  oMC.buffering\
  oMC.misc\
+ oMC.options\
  oMC.debugit\
  oMC.file\
  oMC.pdebug\
@@ -134,6 +138,7 @@ OBJSMCD =\
  oMCD.serial_lib\
  oMCD.buffering\
  oMCD.misc\
+ oMCD.options\
  oMCD.debugit\
  oMCD.file\
  oMCD.pdebug\
