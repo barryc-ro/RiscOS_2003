@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 06-Aug-96  SMC          Created.
+# 28-Nov-96  NDT	  Fixed header file export
 #
 
 #
