@@ -663,6 +663,7 @@ install_common: ${FILES}
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
 	${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
+	${CP} ${LDIR}.8desktop			${INSTDIR}.8desktop		${CPFLAGS}n
 	${CP} ${LDIR}.Choices			${INSTDIR}.Choices		${CPFLAGS}n
 	${CP} ${LDIR}.Controls			${INSTDIR}.Controls		${CPFLAGS}n
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
@@ -679,6 +680,7 @@ install: install_common
 	-Access ${INSTDIR}.!RunImage	wr/r
 	-Access ${INSTDIR}.!Sprites	wr/r
 	-Access ${INSTDIR}.!Sprites22	wr/r
+	-Access ${INSTDIR}.8desktop	wr/r
 	-Access ${INSTDIR}.Choices	wr/r
 	-Access ${INSTDIR}.Controls	wr/r
 	-Access ${INSTDIR}.Messages	wr/r
