@@ -128,6 +128,7 @@ export_hdrs: h.NBLib dirs
 	${CP}	h.NBDefs	${EXPORT_DIR}.h.NBDefs ${CPFLAGS}
 	${CP}	h.NBStructs	${EXPORT_DIR}.h.NBStructs ${CPFLAGS}
 	${CP}	h.NBSwis	${EXPORT_DIR}.h.NBSwis ${CPFLAGS}
+	${CP}   VersionNum      ${EXPORT_DIR}.VersionNum ${CPFLAGS}
 	@echo ** ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
