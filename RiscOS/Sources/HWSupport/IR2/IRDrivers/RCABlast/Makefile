@@ -18,7 +18,7 @@ RM      = remove
 WIPE    = -wipe
 
 CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT -DSWAP_NIBBLE_ORDER
-#DFLAGS  = -DDEBUG=3
+DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 INCLUDES= -IC:
@@ -108,8 +108,6 @@ rom_link:
 
 
 
-
-
 # Dynamic dependencies:
 o.module:	c.module
 o.module:	C:h.kernel
@@ -119,15 +117,6 @@ o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.driver
 o.module:	h.rcablast
-o.driver:	c.driver
-o.driver:	C:h.kernel
-o.driver:	C:h.swis
-o.driver:	h.utils
-o.driver:	h.ir_api
-o.driver:	h.driver
-o.driver:	h.veneers
-o.driver:	h.rcablast
-o.driver:	h.codetables
 o.ir_api:	c.ir_api
 o.ir_api:	C:h.kernel
 o.ir_api:	C:h.swis
@@ -138,3 +127,12 @@ o.codetables:	c.codetables
 o.codetables:	C:h.kernel
 o.codetables:	h.driver
 o.codetables:	h.codetables
+o.driver:	c.driver
+o.driver:	C:h.kernel
+o.driver:	C:h.swis
+o.driver:	h.utils
+o.driver:	h.ir_api
+o.driver:	h.driver
+o.driver:	h.veneers
+o.driver:	h.rcablast
+o.driver:	h.codetables
