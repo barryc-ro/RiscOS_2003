@@ -12,6 +12,8 @@
 # Paths
 #
 LIBDIR		= <Lib$Dir>
+EXP_HDR = <export$dir>
+
 #
 # Generic options:
 #
@@ -103,6 +105,7 @@ export: export_${PHASE}
 export_hdrs: dirs
         ${CP} objects   ${EXPORTS}.objects   ${CPFLAGS}
         ${CP} h.*       ${EXPORTS}.h.*   ${CPFLAGS}
+        ${CP} hdr.*	${EXP_HDR}.*	${CPFLAGS}
         @echo ${DEBUGLIB} and ${TBOXLIB}: export complete (hdrs)
 
 export_libs: ${TBOXLIB} ${TBOXLIBZM} ${DEBUGLIB} ${DEBUGLIBZM} dirs
