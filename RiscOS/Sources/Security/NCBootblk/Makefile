@@ -42,7 +42,7 @@ OBJS      = module.o header.o reg_swis.o reg_events.o enum_ddi.o \
 LIBS      = ${WIMPLIB} ${LIBSD} ${NET5LIBS} ${RLIB}
 ROM_LIBS  = ${LIBS} ${C++LIB}
 
-EXPORTS   = ${EXP_C_H}.smcard ${EXP_C_H}.DBUG
+EXPORTS   = ${EXP_C_H}.DBUG
 
 #
 # Generic rules:
@@ -65,9 +65,6 @@ clean:
 #
 # Exported interface headers
 #
-${EXP_C_H}.smcard:      h.smcard
-        ${CP} h.smcard $@ ${CPFLAGS}
-
 ${EXP_C_H}.DBUG:        h.DBUG
         ${CP} h.DBUG $@ ${CPFLAGS}
 
