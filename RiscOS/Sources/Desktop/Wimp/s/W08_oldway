@@ -1,17 +1,9 @@
-; > s.Wimp08
+; > s.W08_oldway
 
-; s.Wimp08s contains the code for the new memory management stuff (for StrongArm)
-; Only used if UseAMBControl is set to {TRUE}
-
-        GBLS    LoadWimp08s
-
- [ UseAMBControl
-LoadWimp08s SETS "GET s.Wimp08s"
- |
-LoadWimp08s SETS ""
- ]
-
-        $LoadWimp08s
+;old way of doing things (Wimp does task memory management)
+;
+;only used if UseAMBControl is false
+;
 
 ;;----------------------------------------------------------------------------
 ;; Switcher routines
@@ -48,6 +40,10 @@ LoadWimp08s SETS ""
 
 ;-----------------------------------------------------------------------------
 
+
+  [ :LNOT: UseAMBControl
+
+
 ; Set/Read current Wimp slot size
 ; Entry:  R0 = new 'current' slot size in bytes (<0 ==> no change)
 ;         R1 = new 'next' slot size in bytes (<0 ==> no change)
@@ -58,8 +54,6 @@ LoadWimp08s SETS ""
 ;              when no tasks are running, R2 will be 0
 ;         if R0>=0 on entry, pages may be remapped and MemoryLimit changed
 
-
-      [ :LNOT: UseAMBControl
 
 SWIWimp_SlotSize  ROUT
         MyEntry "SlotSize"
@@ -83,17 +77,9 @@ SWIWimp_SlotSize  ROUT
         MedusaOS
         BNE     %FT02
         Push    "R0-R1"
-         [ ShrinkableAreas
-        Push    r3                      ; get round r3 corruption for now
-        MOV     r0, #5
-        MOV     r1, #-1
-        SWI     XOS_DynamicArea
-        Pull    r3
-         |
         MOV     R0,#6
         SWI     XOS_ReadDynamicArea     ; memory in free pool
         MOV     R2,R1
-         ]
         Pull    "R0-r1"
 02
         ]
@@ -657,7 +643,6 @@ wimp_area_handler
 ; Errors: "Invalid task handle"
 ;         "Wimp transfer out of range"
 ;
-; note that we use tempworkspace here
 
 SWIWimp_TransferBlock  ROUT
         MyEntry "TransferBlock"
@@ -669,8 +654,6 @@ SWIWimp_TransferBlock  ROUT
         LDR     R14,taskhandle
         LDR     R14,[wsptr,R14]
         CMP     R14,#0
-	CMPNE	R14,[wsptr,R14]
-	CMPNE	R14,#0
         STRGT   R1,[R14,#task_environment+12*MemoryLimit]
         [ Medusa
         MedusaOS
@@ -680,14 +663,12 @@ SWIWimp_TransferBlock  ROUT
         Pull    "R0-R4"
         ]
 ;
-  Debug mjs4,"&&& validtask_alive",R2
         BL      validtask_alive
         MOVVC   R7,R6                   ; R7 --> dest task block
         MOVVC   R2,R0
         [ Medusa
         Push    "R5"
         ]
-  Debug mjs4,"&&& validtask_alive",R2
         BLVC    validtask_alive         ; R6 --> source task block
         BVC     %FT05
 medusa_exit_trb
@@ -703,7 +684,7 @@ medusa_exit_trb2
         B       ExitWimp
 ;
 05
-        SUBS    R10,R4,#0               ; length must != 0
+        SUBS    R10,R4,#0               ; length must be >= 0
         BNE     %FT07                   ; ignore zero length now!
         [ Medusa
         ADD     SP,SP,#4
@@ -714,9 +695,9 @@ medusa_exit_trb2
         B       ExitWimp
 
 07
-        SUB     R8,R1,#ApplicationStart ; assuming app space...
-        SUB     R9,R3,#ApplicationStart ; ... R8,R9 = offsets into domain
-  Debug mjs4,"&&& offsets R8,R9",R8,R9
+        SUBGES  R8,R1,#ApplicationStart ; buffer start >= &8000
+        SUBGES  R9,R3,#ApplicationStart ; R8,R9 = offsets into domain
+        BLT     err_badtransfer
 ;
         [ Medusa :LAND: sixteenmeg
         MedusaOS
@@ -727,20 +708,20 @@ medusa_exit_trb2
         ]
 ;
         CMP     R1,R11                  ; not in application space?
-        ADDHS   R8,R8,#ApplicationStart ; make absolute again
-        BHS     %FT11
+        ADDGE   R8,R8,#ApplicationStart ; make absolute again
+        BGE     %FT11
         LDR     R14,[R6,#task_environment+12*MemoryLimit]
         ADD     R0,R1,R4
         CMP     R0,R14
-        BHI     err_badtransfer
+        BGT     err_badtransfer
 11
         CMP     R3,R11                  ; not in application space?
-        ADDHS   R9,R9,#ApplicationStart ; make absolute again
-        BHS     %FT01
+        ADDGE   R9,R9,#ApplicationStart ; make absolute again
+        BGE     %FT01
         LDR     R14,[R7,#task_environment+12*MemoryLimit]
         ADD     R2,R3,R4
         CMP     R2,R14
-        BHI     err_badtransfer
+        BGT     err_badtransfer
 01
 ;
 ; map all slots into memory space, copy the data, then unmap them
@@ -755,39 +736,36 @@ medusa_exit_trb2
         MedusaOS
 ; orignal calling values are still on the stack
         BNE     %FT03
-        TEQ     R6,R7                   ; are the tasks the same?
+        CMP     R6,R7                   ; are the tasks the same?
         BEQ     %FT02
         CMP     R10,#7*1024*1024
         BLT     %FT02
 ; ok we're doing a BIG transfer, so split it up
         MOV     R10,#7*1024*1024        ; 7 meg, leave a bit of breathing space
-	Push	"R1"			; save end-of-current-slot
-        ADD     R0,SP,#8
-        LDMIA   R0,{R0-R4}		; original parameters for Wimp_TransferBlock
+        ADD     R0,SP,#4
+        LDMIA   R0,{R0-R4}
         ADD     R1,R1,#7*1024*1024      ; we'll carry on but only do 7 megs worth
         ADD     R3,R3,#7*1024*1024      ; then recall the routine, but starting 7 meg
         SUB     R4,R4,#7*1024*1024      ; further on.
         SWI     XWimp_TransferBlock
-	Pull	"R1"
 ; this will cycle through as many times as required
 02
 ; now if the ammount to copy+ R1 > app space, or 2* copy if neither task is the current task
 ; then part or all of current task must be paged out.
-  Debug mjs4,"&&& alleged end of current slot (R1)",R1
         MOV     R0,R1
         LDR     R1,taskhandle
         LDR     R2,pagesize
         LDR     R4,[SP]                 ; task handle
-        TEQ     R1,R4
+        CMP     R1,R4
         BEQ     onetask_currentr4       ; one of the tasks is the current task
-        TEQ     R1,R5
+        CMP     R1,R5
         BEQ     onetask_currentr5
         CMP     R8,R11
-        ADDLO   R0,R0,R10
-        ADDLO   R0,R0,R2                ; just in case copy is over a page
+        ADDLT   R0,R0,R10
+        ADDLT   R0,R0,R2                ; just in case copy is over a page
         CMP     R9,R11
-        ADDLO   R0,R0,R10
-        ADDLO   R0,R0,R10
+        ADDLT   R0,R0,R10
+        ADDLT   R0,R0,R10
         [ sixteenmeg
         CMP     R0,#16*1024*1024
         |
@@ -796,7 +774,7 @@ medusa_exit_trb2
         LDREQ   R14,orig_applicationspacesize
         CMP     R0,R14
         ]
-        BLO     %FT03
+        BLT     %FT03
 
 ; since the copy must take place in application space (on ARM 3 its the only place! and on
 ; ARM 600 a level 2 page table would be required- 24K) we have to make some room by paging
@@ -812,8 +790,8 @@ makespacefromct
         BL      mapslotout              ; map out CT
         MOV     R0,#0
         STR     R0,taskhandle
-        ADD     R0,SP,#8                ; skipping just-pushed R1 and pushed R5 for Medusa...
-        LDMIA   R0,{R0-R4}              ; ...restore R0-R4 from stack for recursive call
+        ADD     R0,SP,#4
+        LDMIA   R0,{R0-R4}
         SWI     XWimp_TransferBlock     ; do it again, only this time there is no current task
         Pull    "R1"
         STR     R1,taskhandle           ; return to how it all was
@@ -829,7 +807,7 @@ onetask_currentr5
         BEQ     %FT03
         CMP     R8,R11                  ; we only need to woryy about space if the copy
                                         ; is actually in the tasks app space
-        BLO     onetaskcurrent
+        BLT     onetaskcurrent
         B       %FT03
 
 onetask_currentr4
@@ -838,9 +816,8 @@ onetask_currentr4
         CMP     R9,R11
 
 onetaskcurrent
-        ADDLO   R0,R0,R10
-        ADDLO   R0,R0,R2                ; just in case copy is over a page
-  Debug mjs4,"&&& onetask_current R0,R2,R10",R0,R2,R10
+        ADDLT   R0,R0,R10
+        ADDLT   R0,R0,R2                ; just in case copy is over a page
         [ sixteenmeg
         CMP     R0,#16*1024*1024
         |
@@ -850,7 +827,7 @@ onetaskcurrent
         CMP     R0,R14
         ]
 
-        BLO     %FT03
+        BLT     %FT03
         B       makespacefromct
 
 
@@ -862,34 +839,27 @@ onetaskcurrent
         Pull    "R4"
         MedusaOS
         ADDEQ   SP,SP,#20               ; will always be original values on stack
-        MOV     R2,#0
-        STR     R2,tempworkspace+4      ; indicate mapenoughslot
-        STR     R2,tempworkspace+12     ;  not used yet
         MOV     R2,R1
         LDR     R3,taskhandle
         CMP     R8,R11                  ; do we need it paged in ?
-        BHS     %FT04
-        TEQ     R3,R5
+        BGE     %FT04
+        CMP     R3,R5
         ADDEQ   R8,R8,#ApplicationStart
         BEQ     %FT04
         LDR     R0,[R6,#task_slotptr]
         MOV     R1,R8
         MOV     R8,R2
-        STR     R1,tempworkspace        ;save domain offset for later mapping-out use of mapenoughslot
-        STR     R10,tempworkspace+4     ;save length for later mapping-out use of mapenoughslot
         BL      mapenoughslot
         ADD     R8,R8,R0
 04
         CMP     R9,R11
-        BHS     %FT06
-        TEQ     R3,R4
+        BGE     %FT06
+        CMP     R3,R4
         ADDEQ   R9,R9,#ApplicationStart
         BEQ     %FT06
         LDR     R0,[R7,#task_slotptr]
         MOV     R1,R9
         MOV     R9,R2
-        STR     R1,tempworkspace+8      ;save domain offset for later mapping out use of mapenoughslot
-        STR     R10,tempworkspace+12    ;save length for later mapping out use of mapenoughslot
         BL      mapenoughslot           ; page in only whats required for the copy
         ADD     R9,R9,R0
 06
@@ -915,7 +885,7 @@ onetaskcurrent
         BEQ     wordcopy                ; word aligned, yipee!!!
 
         CMP     R8,R9
-        BHS     %FT02
+        BGE     %FT02
         ADD     R8,R8,R10
         ADD     R9,R9,R10
 01
@@ -932,28 +902,17 @@ onetaskcurrent
 03
         [ Medusa
         LDR     R2,taskhandle           ; page out the bits we paged in, unless CT
-        TEQ     R2,R5
+        CMP     R2,R5
         BEQ     %FT05
         LDR     R0,[R6,#task_slotptr]
         CMP     R0,#-1
-        LDRNE   R10,tempworkspace+4     ; saved length (0 if no mapping done)
-        CMPNE   R10,#0
-        LDRNE   R1,tempworkspace        ; saved domain offset
-        MOVNE   R2,#-1                  ; map out
-   Debug mjs4,"putative page out R0,R1,R2,R10",R0,R1,R2,R10
-        BLNE    mapenoughslot
+        BLNE    mapout
 05
-        LDR     R2,taskhandle           ; page out the bits we paged in, unless CT
-        TEQ     R2,R4
+        CMP     R2,R4
         BEQ     %FT10
         LDR     R0,[R7,#task_slotptr]
         CMP     R0,#-1
-        LDRNE   R10,tempworkspace+12    ; saved length (0 if no mapping done)
-        CMPNE   R10,#0
-        LDRNE   R1,tempworkspace+8      ; saved domain offset
-        MOVNE   R2,#-1                  ; map out
-   Debug mjs4,"putative page out R0,R1,R2,R10",R0,R1,R2,R10
-        BLNE    mapenoughslot
+        BLNE    mapout
 10
         |
         BL      unrackslots
@@ -962,7 +921,7 @@ onetaskcurrent
 
 wordcopy
         CMP     R8,R9
-        BHS     %FT02
+        BGE     %FT02
         ADD     R8,R8,R10
         ADD     R9,R9,R10
 01
@@ -2022,24 +1981,18 @@ initdynamic     ROUT
         ADR     R3,My_ChangeDynamic
         LDR     R14,=SvcTable + 4 * OS_ChangeDynamicArea
         LDR     R4,[R14]                        ; R4 = old SWI entry
-        TEQ     R4,R0                           ; if already in, forget it!
-      [ StrongARM
+        TEQ     R4,R0
         Pull    "R1-R4,PC",EQ                   ; if already in, forget it!
 
         STMIA   R0,{R1-R4}
         STR     R0,[R14]                        ; R0 = RAM_SWIEntry
-
-        ; synchronise with respect to modified code at RAM_SWIEntry
-
+  [ StrongARM
+    ;synchronise with respect to modified code at RAM_SWIEntry
         MOV     R1,R0                           ; start address
         ADD     R2,R1,#4                        ; end address (inclusive) for 2 words (other 2 are addresses)
         MOV     R0,#1                           ; means R1,R2 specify range
         SWI     XOS_SynchroniseCodeAreas        ; do the necessary
-      |
-        STMNEIA R0,{R1-R4}
-        STRNE   R0,[R14]                        ; R0 = RAM_SWIEntry
-      ]
-
+  ]
         Pull    "R1-R4,PC"
 
 copyofRAMcode
@@ -2541,7 +2494,6 @@ servicememorymoved  ROUT
 ;
         Pull    "R0-R7,R10-R11,PC",,^
 
-      ]
 
 
 ;;----------------------------------------------------------------------------
@@ -2572,12 +2524,10 @@ resourcefsfiles
         ResourceFile    Resources.<Locale>.Sprites,      Resources.Wimp.Sprites
         ResourceFile    Resources.<Locale>.Tools,        Resources.Wimp.Tools
         ]
-        [ RegisterWIMPSymbolFont
         ResourceFile    Resources.!WIMPSym.WIMPSymbol.Encoding,   Fonts.WIMPSymbol.Encoding
         ResourceFile    Resources.!WIMPSym.WIMPSymbol.f240x120,   Fonts.WIMPSymbol.f240x120
         ResourceFile    Resources.!WIMPSym.WIMPSymbol.IntMetrics, Fonts.WIMPSymbol.IntMetrics
         ResourceFile    Resources.!WIMPSym.WIMPSymbol.Outlines,   Fonts.WIMPSymbol.Outlines
-        ]
       [ :LNOT: NoDarwin
         [ RealDarwin
         ResourceFile    Resources.!Darwin.Darwin.f240x120,    Fonts.Darwin.Medium.f240x120
@@ -2591,5 +2541,8 @@ resourcefsfiles
         ResourceFile    Resources.desktop,      Resources.Desktop.Messages
         ]
         DCD     0
+
+
+  ] ; :LNOT: UseAMBControl
 
         END
