@@ -1,0 +1,379 @@
+/*---------------------------------------------------------------------------*/
+/* File:    c.main                                                           */
+/* Purpose: Main WIMP shell for Sound configuration                          */
+/* Author:  Richard Leggett                                                  */
+/* History: 29-Jan-98: RML: Begun.                                           */
+/*          20-Mar-98: RML: Minor modifications.                             */
+/*                                                                           */
+/* Copyright © 1998 Acorn Computers Ltd., Cambridge, UK.                     */
+/*---------------------------------------------------------------------------*/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+#include "toolbox.h"
+#include "event.h"
+#include "common.h"
+#include "window.h"
+#include "wimplib.h"
+#include "defines.h"
+#include "sound.h"
+
+static MessagesFD messages_desc;
+static IdBlock    idb;
+static char       messages_string[255];
+static int        config_window_id;
+
+
+/*---------------------------------------------------------------------------*
+ * program_exit                                                              *
+ *                                                                           *
+ * Finished with this plug-in, so exit.                                      *
+ *---------------------------------------------------------------------------*/
+
+static void program_exit(void)
+{
+    exit(0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * set_default_choices                                                       *
+ *                                                                           *
+ * Fill in the default choices in the dialogue box.                          *
+ *---------------------------------------------------------------------------*/
+
+static void set_default_choices(void)
+{
+    int n;
+    
+    /* Default volume level is 0 for each channel */
+    for (n=0; n<NumberOfChannels; n++)
+    {
+        error_trap(numberrange_set_value(0, config_window_id, n, 0), 0);
+        sound_set_volume(n, 0);
+    }
+
+    sound_set_cmos_defaults();
+
+    error_trap(stringset_set_selected(1, config_window_id, VoicesStringset, (char*)0), 0);
+    error_trap(radiobutton_set_state(0, config_window_id, LoudRadio, 1), 0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * restore_choices                                                           *
+ *                                                                           *
+ * Restore original choices.                                                 *
+ *---------------------------------------------------------------------------*/
+
+static void restore_choices(void)
+{
+    sound_read_choices(config_window_id);
+    sound_read_write_cmos_settings(WriteCMOSSettings, config_window_id);
+}    
+
+
+/*-----------------------------------------------------------------------------------------------*/
+/*                                          Event handlers                                       */
+/*-----------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*
+ * toolbox_error                                                             *
+ *                                                                           *
+ * Handler for errors from toolbox.                                          *
+ *---------------------------------------------------------------------------*/
+
+static int toolbox_error(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+{
+    ToolboxErrorEvent *error_event = (ToolboxErrorEvent *)event;
+    _kernel_oserror    err;
+
+    strcpy(err.errmess, error_event->errmess);
+    err.errnum = error_event->errnum;
+    wimp_report_error(&err, 0, "Configure", 0, 0, 0);
+
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * default_key_handler                                                       *
+ *                                                                           *
+ * Handler for key presses.                                                  *
+ *---------------------------------------------------------------------------*/
+
+static int default_key_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+   int key_code = event->key_pressed.key_code;
+
+   wimp_process_key(key_code);
+
+   return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * radio_changed                                                             *
+ *                                                                           *
+ * The quiet/loud radio button has changed state.                            *
+ *---------------------------------------------------------------------------*/
+
+static int radio_changed(int event_code, ToolboxEvent *event_block, IdBlock *id_block, void *handle)
+{
+    int state;
+    int selected;
+    int byte;
+
+    byte = read_cmos_value(CMOS_BellVolume);
+    error_trap(radiobutton_get_state(0, config_window_id, QuietRadio, &state, &selected), 0);
+
+    switch(selected)
+    {
+        case QuietRadio:
+            if (byte & 2) byte = byte^2;
+            break;
+        case LoudRadio:
+            if (!(byte & 2)) byte = byte^2;
+            break;
+    }
+
+    /* Beep */
+    write_cmos_value(CMOS_BellVolume, byte);
+    _kernel_osbyte(OSBYTE_ReadWriteBellVolume, selected == LoudRadio ? 0x80 : 0xd0, 0);
+    printf("\07");
+
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * voice_changed                                                             *
+ *---------------------------------------------------------------------------*/
+
+static int voice_changed(int event_code, ToolboxEvent *event_block, IdBlock *id_block, void *handle)
+{
+    int index;
+    
+    error_trap(stringset_get_selected(1, config_window_id, VoicesStringset, &index), 0);
+    sound_change_voice(index);
+    
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * slider_value_changed                                                      *
+ *                                                                           *
+ * The user has dragged a slider and changed it's value.                     *
+ *---------------------------------------------------------------------------*/
+
+static int slider_value_changed(int event_code, ToolboxEvent *event_block, IdBlock *id_block, void *handle)
+{
+    NumberRangeValueChangedEvent *event = (NumberRangeValueChangedEvent*)event_block;
+    int                           value = event->new_value;
+    int                           icon = id_block->self_component;
+    
+    sound_set_volume(icon, value);
+    
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * action_selected                                                           *
+ *                                                                           *
+ * Handler for when action buttons are clicked on.                           *
+ *---------------------------------------------------------------------------*/
+
+static int action_selected(int event_code, ToolboxEvent *event_block, IdBlock *id_block, void *handle)
+{
+    ActionButtonSelectedEvent *block = (ActionButtonSelectedEvent*) event_block;
+    int                        icon = id_block->self_component;
+
+    switch (icon)
+    {
+        case SetButton:
+            sound_save_choices(config_window_id);
+            if ((block->hdr.flags & 7)==0) program_exit();              /* Return pressed */
+            if (block->hdr.flags & 4) program_exit();                   /* Left button */
+            break;
+
+        case CancelButton:
+            restore_choices();
+            if ((block->hdr.flags & 7)==0) program_exit();              /* Escape pressed */
+            if (block->hdr.flags & 4) program_exit();                   /* Left button */
+            break;
+            
+        case DefaultButton:
+            set_default_choices();
+            break;
+    }
+
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * message_quit                                                              *
+ *                                                                           *
+ * Called when wimp quit message received.                                   *
+ *---------------------------------------------------------------------------*/
+ 
+static int message_quit(WimpMessage *event, void *handler)
+{
+    program_exit();
+    
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * message_reopen                                                            *
+ *                                                                           *
+ * Called when we receive a message from Configure telling us to reopen our  *
+ * window.                                                                   *
+ *---------------------------------------------------------------------------*/
+
+static int message_reopen(WimpMessage *event, void *handler)
+{
+    error_trap(toolbox_show_object(0, config_window_id, 0, 0, 0, 0), 0);
+
+    return 1;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * close_window                                                              *
+ *                                                                           *
+ * Called when user has clicked on close icon of window.                     *
+ *---------------------------------------------------------------------------*/
+
+static int close_window(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+    program_exit();
+    
+    return 1;
+}
+
+
+/*----------------------------------------------------------------------------------------------*/
+/*                               Program startup & polling loop                                 */
+/*----------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------*
+ * open_configure_window                                                     *
+ *                                                                           *
+ * Called to open the configure window on screen and register handlers.      *
+ *---------------------------------------------------------------------------*/
+
+static void open_configure_window(int at_x, int at_y)
+{
+    BBox bbox;
+    int  screenx;
+    int  screeny;
+    int  buffer[2];
+
+    /* Create window */
+    error_trap(toolbox_create_object(0, "Window", &config_window_id), 1);
+
+    /* Register handlers for the configure window */
+    error_trap(event_register_toolbox_handler(config_window_id, ActionButton_Selected, action_selected, NULL), 0);
+    error_trap(event_register_toolbox_handler(config_window_id, NumberRange_ValueChanged, slider_value_changed, NULL), 0);
+    error_trap(event_register_toolbox_handler(config_window_id, RadioButton_StateChanged, radio_changed, NULL), 0);
+    error_trap(event_register_toolbox_handler(config_window_id, StringSet_ValueChanged, voice_changed, NULL), 0);
+    error_trap(event_register_wimp_handler(config_window_id, Wimp_ECloseWindow, close_window, NULL), 0);
+    error_trap(event_register_wimp_handler(-1, Wimp_EKeyPressed, default_key_handler, NULL), 0);
+
+    /* Work out positioning (unless it was supplied in the command line) */
+    if ((at_x==-1) && (at_y==-1))
+    {
+        error_trap(common_read_screensize(&screenx, &screeny), 0);
+        error_trap(window_get_extent(0, config_window_id, &bbox), 0);
+        at_y = screeny - ((screeny+bbox.ymin)/2);
+        at_x = (screenx - bbox.xmax)/2;
+    }
+
+    /* Show the window */
+    buffer[0] = at_x;
+    buffer[1] = at_y;
+    error_trap(toolbox_show_object(0, config_window_id, 2, buffer, 0, 0), 0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * main_initialise                                                           *
+ *                                                                           *
+ * Initialise toolbox etc.                                                   *
+ *                                                                           *
+ * In: Nothing.                                                              *
+ *                                                                           *
+ * Returns: 1 if everything went okay, 0 otherwise                           *
+ *---------------------------------------------------------------------------*/
+
+static int main_initialise(void)
+{
+    static int mess_wanted[] = {Wimp_MQuit,
+                                Wimp_MOpenConfigWindow,
+                                0};
+    static int tbox_wanted[] = {Toolbox_Error,
+                                ActionButton_Selected,
+                                NumberRange_ValueChanged,
+                                RadioButton_StateChanged,
+                                StringSet_ValueChanged,
+                                0};
+    int        task_handle;
+                                
+    error_trap(toolbox_initialise(0, 310, mess_wanted, tbox_wanted,
+                                  "<SoundConfig$Dir>", &messages_desc, &idb,
+                                  0, &task_handle, 0) ,1);
+    error_trap(event_initialise(&idb), 0);
+    error_trap(event_set_mask(Wimp_Poll_NullMask), 0);    
+    messages_register(&messages_desc, messages_string);
+
+    error_trap(event_register_message_handler(Wimp_MQuit, message_quit, NULL), 0);
+    error_trap(event_register_message_handler(Wimp_MOpenConfigWindow, message_reopen, NULL), 0);
+    error_trap(event_register_toolbox_handler(-1,Toolbox_Error,toolbox_error,NULL) ,0);
+
+    return 1;
+}
+                                  
+
+/*---------------------------------------------------------------------------*
+ * main                                                                      *
+ *                                                                           *
+ * Main polling loop                                                         *
+ *---------------------------------------------------------------------------*/
+
+int main(int argc, char *argv[])
+{
+    WimpPollBlock wpb;
+    int           event_code;
+    int           openat_x = -1;
+    int           openat_y = -1;
+
+    /* Have we been passed any co-ordinates to open at? */
+    if (strcmp(argv[1], "-openat")==0)
+    {
+        openat_x = atoi(argv[2]);
+        openat_y = atoi(argv[3]);
+    }
+
+    /* Do main initialisation */
+    if (!main_initialise()) return 0;
+    open_configure_window(openat_x, openat_y);
+    sound_make_voices_menu(config_window_id);
+    sound_read_channel_info(config_window_id);
+    sound_read_choices(config_window_id);
+    sound_read_write_cmos_settings(ReadCMOSSettings, config_window_id);
+
+    /* Poll loop */
+    while (TRUE)
+    {
+        error_trap(event_poll(&event_code, &wpb, NULL), 0);
+    }
+    
+    return 0;
+}         
+
