@@ -17,7 +17,7 @@ EXPORT_DIR	= <Lib$Dir>.NBLib
 MKDIR		= cdir
 AS		= objasm
 CP		= copy
-CC		= cc
+CC		= ${MEMCHECKCC} cc
 CM		= cmhg
 RM		= remove
 LD		= link
@@ -52,7 +52,6 @@ REMOTEDBLIB	= ${LIBDIR}.debug.o.lremote
 #
 
 INCLUDES	= -Itbox:,C:
-DFLAGS		= 
 
 
 # ------------------------------------------------------------------------------
