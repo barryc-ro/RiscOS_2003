@@ -78,6 +78,20 @@
 ;				altogether, 'cos it appears to be crashing.
 ; amg: Renaissance merge. 7500FE unconditional, other changes now conditioned
 ;      on STB being {TRUE}. Extra declarations left unconditional.
+; 10 Mar 97     BAR     2.21    Add code to check 1K of NVRAM - if reqd.
+; 13 Mar 97     BAR     2.22    Change conditional assemble flags for
+;                               including new LED flashing routines. Now
+;                               checks for Left & Right LED flags.
+;                               Always use the VGA VIDC Definition Table if
+;                               the flag ChrontelSupport is TRUE.
+; 18 Mar 97     BAR     2.23    Added C_DEFAULT (Black) Change use of
+;                               C_WARMSTART to C_DEFAULT.
+; 12 Jun 97     BAR     2.24    Ensure LED is set to RED before flashing
+;                               them - gets the sequence right. If flashed
+;                               ensure that BOTH are turned back on.
+; 19 Jun 97     BAR     2.25    Remove un-necessary mov r13,r14's
+;                               When completed flashing LED's restore the
+;                               faultcode flag from fiq_regs.
 ;
 ;------------------------------------------------------------------------
 ;
@@ -91,7 +105,7 @@
 TS_STATUS       *       "R"     ;  Medusa POST version 2.0x
 ;
 TS_RELEASE      *       22
-TS_CHANGES      *       0
+TS_CHANGES      *       4
 
 
                 GBLL    POSTenabled
@@ -124,6 +138,7 @@ ts_ReadyByte_00 *       &90                             ; signal 'Here I am' to 
 ts_BBRAM        *       &A0                             ; IIC address of clock/ram chip
                 [ STB
 ts_BBE2         *       &A8                             ; IIC address of E2ROM chip
+ts_BB2KE2       *       &E0                             ; IIC address of 2K E2ROM chip
 		]
 ts_RamChunk     *       &2000                           ; gap between data line tests
 ts_MaxRamTest   *       4*1024*1024                     ; Max. DRAM tested on normal reset
@@ -138,6 +153,7 @@ C_RAMTEST       *       &40000000+&C70  ; testing RAM
 C_FAULT         *       &40000000+&00F  ; failed tests
 C_PASSED        *       &40000000+&7C0  ; all passed
 C_WARMSTART     *       &40000000+&777  ; not tested
+C_DEFAULT       *       &40000000+&000  ; default (Black)
         ]
 
         [ VIDC_Type = "VIDC20"
@@ -147,6 +163,7 @@ C_RAMTEST       *       &40000000+&C07000  ; testing RAM (Blue)
 C_FAULT         *       &40000000+&0000F0  ; failed tests(Red)
 C_PASSED        *       &40000000+&70C000  ; all passed  (Green)
 C_WARMSTART     *       &40000000+&707070  ; not tested  (Mid grey)
+C_DEFAULT       *       &40000000+&000000  ; default (Black)
         ]
 ;
 ;
@@ -665,11 +682,15 @@ ts_Self_test_startup ROUT
 ; Here because its an ARM7500 'FE' variant
 ; Program the CPU, Memory and IO clock prescalers
 ; Set the prescalers to :-
-;	CPUCLK divide by 2
+;	CPUCLK divide by 2 unless FECPUSpeedNormal set
 ;	MEMCLK divide by 1
 ;	IOCLK  divide by 1
 ;
+ [ FECPUSpeedNormal
+	MOV     r0, #IOMD_CLKCTL_CpuclkNormal + IOMD_CLKCTL_MemclkNormal + IOMD_CLKCTL_IOclkNormal
+ |
 	MOV     r0, #IOMD_CLKCTL_CpuclkHalf + IOMD_CLKCTL_MemclkNormal + IOMD_CLKCTL_IOclkNormal
+ ]
         STRB    r0, [r2, #IOMD_CLKCTL] ; initialise all the prescalers.
 ;
 ; Set ROM speed, take care to preserve 16-bit mode bit, or all hell breaks loose...
@@ -685,12 +706,28 @@ ts_Self_test_startup ROUT
 ; though they aren't burst devices.
         LDRB    r0, [r2, #IOMD_ROMCR0]          ; Get contents of ROMCR0 in to r0
         AND     r0, r0, #&40                    ; clear all but the 16-bit mode flag
-        ORR     r0, r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_NSTicks_5 + IOMD_ROMCR_BTicks_4
+    [ ROMSpeedNormal
+        ORR     r0, r0, #IOMD_ROMCR_Normal :OR: IOMD_ROMCR_NSTicks_5 :OR: IOMD_ROMCR_BTicks_4
+    |
+        ORR     r0, r0, #IOMD_ROMCR_HalfSpeed :OR: IOMD_ROMCR_NSTicks_5 :OR: IOMD_ROMCR_BTicks_4
+    ]
         STRB    r0, [r2, #IOMD_ROMCR0]          ; Prog. the reg.s
   [ CanLiveOnROMCard
 	TST	pc, #ts_RC_2ndbank		; Not running out of 2nd ROM bank?
         ; Don't know what's in the 2nd bank -> program it to a slow default
-	MOVNE	r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
+    [ ExtROMis16bit
+     [ ROMSpeedNormal
+        MOVEQ   r0, #IOMD_ROMCR_Normal :OR: IOMD_ROMCR_16bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     |
+        MOVEQ   r0, #IOMD_ROMCR_HalfSpeed :OR: IOMD_ROMCR_16bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     ]
+    |
+     [ ROMSpeedNormal
+        MOVEQ   r0, #IOMD_ROMCR_Normal :OR: IOMD_ROMCR_32bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     |
+        MOVEQ   r0, #IOMD_ROMCR_HalfSpeed :OR: IOMD_ROMCR_32bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     ]
+    ]
         STRB    r0, [r2, #IOMD_ROMCR1]		; Otherwise program it the same
   ]
 	B	%FT10
@@ -720,12 +757,28 @@ ts_Self_test_startup ROUT
 
         LDRB    r0, [r2, #IOMD_ROMCR0]          ; Get contents of ROMCR0 in to r0
         AND     r0, r0, #&40                    ; clear all but the 16-bit mode flag
-        ORR     r0, r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_NSTicks_5 + IOMD_ROMCR_BTicks_4
+    [ ROMSpeedNormal
+        ORR     r0, r0, #IOMD_ROMCR_Normal :OR: IOMD_ROMCR_NSTicks_5 :OR: IOMD_ROMCR_BTicks_4
+    |
+        ORR     r0, r0, #IOMD_ROMCR_HalfSpeed :OR: IOMD_ROMCR_NSTicks_5 :OR: IOMD_ROMCR_BTicks_4
+    ]
         STRB    r0, [r2, #IOMD_ROMCR0]          ; Prog. the reg.s
   [ CanLiveOnROMCard
 	TST	pc, #ts_RC_2ndbank		; Not running out of 2nd ROM bank?
         ; Don't know what's in the 2nd bank -> program it to a slow default
-	MOVNE	r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
+    [ ExtROMis16bit
+     [ ROMSpeedNormal
+        MOVEQ   r0, #IOMD_ROMCR_Normal :OR: IOMD_ROMCR_16bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     |
+        MOVEQ   r0, #IOMD_ROMCR_HalfSpeed :OR: IOMD_ROMCR_16bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     ]
+    |
+     [ ROMSpeedNormal
+        MOVEQ   r0, #IOMD_ROMCR_Normal :OR: IOMD_ROMCR_32bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     |
+        MOVEQ   r0, #IOMD_ROMCR_HalfSpeed :OR: IOMD_ROMCR_32bit :OR: IOMD_ROMCR_NSTicks_7 :OR: IOMD_ROMCR_BurstOff
+     ]
+    ]
         STRB    r0, [r2, #IOMD_ROMCR1]		; Otherwise program it the same
   ]
 
@@ -737,27 +790,33 @@ ts_Self_test_startup ROUT
 ;
 ; From this point on we assume we can safely use all the processor
 ;
-; Initialise VIDC : Sync mode 0, border covers screen
+; Initialise VIDC
 ;
 
 ts_InitVIDC
         [ IO_Type = "IOMD"              ; If POSTbox fitted, ROM may still be mapped everywhere
-        MOV     r2,#IOMD_Base
-        MOV     r0, #IOMD_VREFCR_REF_16 ; switch on DRAM refresh
-        STR     r0, [r2, #IOMD_VREFCR]
+                ; Using IOMD
+                MOV     r2,#IOMD_Base
+                MOV     r0, #IOMD_VREFCR_REF_16 ; switch on DRAM refresh
+                STR     r0, [r2, #IOMD_VREFCR]
+                MOV     r1,#ts_VIDCPhys
 
-        ; choose monitor settings from ID bit 0
-        MOV     r1,#ts_VIDCPhys
-        ADRL    r2,TestVIDCTAB
-        LDR     r0,=IOMD_MonitorType
-        LDR     r0,[r0]
-        ANDS    r0,r0,#IOMD_MonitorIDMask
-        ADDEQ   r2,r2,#(TestVVIDCTAB-TestVIDCTAB)
-
-        |                               ; not IOMD
-        MOV     r1,#ts_VIDCPhys
-        ADRL    r2,TestVIDCTAB
-        ]
+                [ ChrontelSupport
+                        ; We have a Chrontel chip ... thus always set for VGA.
+                        ADRL    r2,TestVVIDCTAB
+                | ; NOT ChrontelSupport
+                        ; We don't have a Chrontel chip
+                        ; ... thus check MonitorType and select table as reqd.
+                        ADRL    r2,TestVIDCTAB
+                        LDR     r0,=IOMD_MonitorType
+                        LDR     r0,[r0]
+                        ANDS    r0,r0,#IOMD_MonitorIDMask
+                        ADDEQ   r2,r2,#(TestVVIDCTAB-TestVIDCTAB)
+                ] ; Endif - ChrontelSupport
+        | ; not IOMD
+                MOV     r1,#ts_VIDCPhys
+                ADRL    r2,TestVIDCTAB
+        ] ; Endif - IO_Type = "IOMD"
 
 10      LDR     r0, [r2],#4
         CMP     r0, #-1
@@ -1020,10 +1079,112 @@ ts_IOEBtest
         BL      ts_SendText
 10      B       ts_CMOStest
         ] ; IOEB IO world
+        ROUT
+
 ;
 ; Read CMOS
 ; Check the checksum, read the memory test flag.
 ;
+
+
+ts_CMOStest
+        ADR     r4,%FT1
+        BL      ts_SendText
+
+        [ ChecksumCMOS :LAND: STB
+        LDR     r0,=(ts_BBRAM + &4000)
+        MOV     r1,#&C0                 ; Get first RAM area
+        MOV     r2,#CMOSxseed
+        BL      ts_CMOSread
+        BNE     %FT10
+        MOV     r2, r0
+        LDR     r0,=(ts_BBRAM + &1000)  ; Accumulate the second RAM area
+        MOV     r1,#&2F
+        BL      ts_CMOSread
+        BNE     %FT10
+        RSB     r2, r0, #0              ; Subtract from the checksum byte
+        LDR     r0,=(ts_BBRAM + &3F00)
+        MOV     r1,#1
+        BL      ts_CMOSread
+        BNE     %FT10
+        MOV     r8, r0, LSL #24
+        ANDS    r0, r0, #&FF            ; A zero result ?
+        MOV     r1, #R_CHKFAILBIT
+        ADR     r4,%FT3                 ; Report checksum failure
+        BNE     %FT21                   ; failed .. report error
+        ]                               ; end ChecksumCMOS
+
+	[ :LNOT: AlwaysShortPOST	; Always do a short post on STBs
+        LDR     r0,=(ts_BBRAM + &FC00)  ; Read Misc1CMOS byte
+        MOV     r1,#1
+        MOV     r2,#0
+        BL      ts_CMOSread
+        BNE     %FT10
+        ANDS    r0,r0,#&80              ; Test the memory-test-disable bit
+        BEQ     %FT25
+	]
+        FAULT   #R_MEMSKIP              ; If set, skip the memory test
+        B       %FT25
+
+10
+; CMOS failed -> try E2
+    [ E2ROMSupport :LAND: STB
+        [ ChecksumCMOS
+
+                                        ; Accumulate the first RAM area
+        LDR     r0,=(ts_BBE2 + &4000)   ; r0 = base addr + start location
+        MOV     r1,#&C0                 ; r1 = length of data to read
+        MOV     r2,#CMOSxseed           ; r2 = checksum seed or previous value
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT20                   ; branch if NE - failed to ready at all.
+
+                                        ; Accumulate the second RAM area
+        MOV     r2, r0                  ; r2 = r0 = new checksum value.
+        LDR     r0,=(ts_BBE2 + &1000)   ; r0 = base addr + start location
+        MOV     r1,#&2F                 ; r1 = length of data to read
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
+        RSB     r2, r0, #0              ; Subtract from the checksum byte
+
+                                        ; Check to see if we need to Accumulate the THIRD area.
+        MOV     r1,#?CMOSRAMCache        ; r1 = size of the CMOS RAM
+        TEQ     r1,#240                 ; Is r1 = 240 bytes ?
+        BEQ     %FT15                   ; It is equal, go to checksum checking code
+
+                                        ; Accumulate the third RAM area
+        MOV     r2,r0                   ; r2 = r0 = new checksum value.
+        LDR     r0,=(ts_BBE2 + &10000)  ; r0 = base addr + start location
+        MOV     r1,#&300                ; r1 = length of data to read
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
+
+                                        ; read and check the shecksum value.
+15      RSB     r2, r0, #0              ; Subtract from the checksum byte
+        LDR     r0,=(ts_BBE2 + &3F00)   ; r0 = base addr + start location
+        MOV     r1,#1                   ; r1 = length of data to read
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
+
+                                        ; Check the checksum is correct
+        MOV     r8, r0, LSL #24         ; r8 = r0 << 24 : put the checksum value in r8 for displaying.
+        ANDS    r0, r0, #&FF            ; r0 = r0 + &FF : If alls ok s/be a zero result ...
+        MOV     r1, #R_CHKFAILBIT       ; r1 = checksum fail flag
+        ADR     r4,%FT3                 ; Report checksum failure
+        BNE     %FT21                   ; failed .. report error
+        ]                               ; end ChecksumCMOS
+
+	[ STB :LAND: :LNOT: AlwaysShortPOST	; Always do a short post on STBs
+        LDR     r0,=(ts_BBE2 + &FC00)   ; Read Misc1CMOS byte
+        MOV     r1,#1
+        MOV     r2,#0
+        BL      ts_CMOSread
+        BNE     %FT22
+        ANDS    r0,r0,#&80              ; Test the memory-test-disable bit
+        BEQ     %FT25
+	]
+        FAULT   #R_MEMSKIP              ; If set, skip the memory test
+        B       %FT25
+    ]
 
 1
         =       "SRAM  :",0
@@ -1033,87 +1194,66 @@ ts_IOEBtest
         =       "SRAM-C",&8e,&ff,&ff,0
         ALIGN
 
+20
+; CMOS failed -> try 2K E2
+    [ E2ROMSupport
+        [ ChecksumCMOS
 
-ts_CMOStest
-        ADR     r4,%BT1
-        BL      ts_SendText
+                                        ; Accumulate the first RAM area
+        LDR     r0,=(ts_BB2KE2 + &4000) ; r0 = base addr + start location
+        MOV     r1,#&C0                 ; r1 = length of data to read
+        MOV     r2,#CMOSxseed           ; r2 = checksum seed or previous value
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
 
-        [ ChecksumCMOS :LAND: STB
-        LDR     r0,=(ts_BBRAM + &4000)
-        MOV     r1,#&C0                 ; Get first RAM area
-        MOV     r2,#CMOSxseed
-        BL      ts_CMOSread
-        BNE     %10
-        MOV     r2, r0
-        LDR     r0,=(ts_BBRAM + &1000)  ; Accumulate the second RAM area
-        MOV     r1,#&2F
-        BL      ts_CMOSread
-        BNE     %10
+                                        ; Accumulate the second RAM area
+        MOV     r2, r0                  ; r2 = r0 = new checksum value.
+        LDR     r0,=(ts_BB2KE2 + &1000) ; r0 = base addr + start location
+        MOV     r1,#&2F                 ; r1 = length of data to read
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
         RSB     r2, r0, #0              ; Subtract from the checksum byte
-        LDR     r0,=(ts_BBRAM + &3F00)
-        MOV     r1,#1
-        BL      ts_CMOSread
-        BNE     %10
-        MOV     r8, r0, LSL #24
-        ANDS    r0, r0, #&FF            ; A zero result ?
-        MOV     r1, #R_CHKFAILBIT
+
+                                        ; Check to see if we need to Accumulate the THIRD area.
+        MOV     r1,#?CMOSRAMCache        ; r1 = size of the CMOS RAM
+        TEQ     r1,#240                 ; Is r1 = 240 bytes ?
+        BEQ     %FT15                   ; It is equal, go to checksum checking code
+
+                                        ; Accumulate the third RAM area
+        MOV     r2,r0                   ; r2 = r0 = new checksum value.
+        LDR     r0,=(ts_BB2KE2 + &10000); r0 = base addr + start location
+        MOV     r1,#&300                ; r1 = length of data to read
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
+
+                                        ; read and check the shecksum value.
+15      RSB     r2, r0, #0              ; Subtract from the checksum byte
+        LDR     r0,=(ts_BB2KE2 + &3F00) ; r0 = base addr + start location
+        MOV     r1,#1                   ; r1 = length of data to read
+        BL      ts_CMOSread             ; read the cmos r0 = new checksum. NE = failure; EQ = ok.
+        BNE     %FT22                   ; branch if NE - failed to ready at all.
+
+                                        ; Check the checksum is correct
+        MOV     r8, r0, LSL #24         ; r8 = r0 << 24 : put the checksum value in r8 for displaying.
+        ANDS    r0, r0, #&FF            ; r0 = r0 + &FF : If alls ok s/be a zero result ...
+        MOV     r1, #R_CHKFAILBIT       ; r1 = checksum fail flag
         ADR     r4,%BT3                 ; Report checksum failure
-        BNE     %21                     ; failed .. report error
+        BNE     %FT21                   ; failed .. report error
         ]                               ; end ChecksumCMOS
 
 	[ :LNOT: AlwaysShortPOST	; Always do a short post on STBs
-        LDR     r0,=(ts_BBRAM + &FC00)  ; Read Misc1CMOS byte
+        LDR     r0,=(ts_BB2KE2 + &FC00) ; Read Misc1CMOS byte
         MOV     r1,#1
         MOV     r2,#0
         BL      ts_CMOSread
-        BNE     %10
+        BNE     %FT22
         ANDS    r0,r0,#&80              ; Test the memory-test-disable bit
-        BEQ     %25
+        BEQ     %FT25
 	]
         FAULT   #R_MEMSKIP              ; If set, skip the memory test
-        B       %25
-
-10
-; CMOS failed -> try E2
-    [ E2ROMSupport :LAND: STB
-        [ ChecksumCMOS
-
-        LDR     r0,=(ts_BBE2 + &4000)
-        MOV     r1,#&C0                 ; Get first RAM area
-        MOV     r2,#CMOSxseed
-        BL      ts_CMOSread
-        BNE     %20
-        MOV     r2, r0
-        LDR     r0,=(ts_BBE2 + &1000)   ; Accumulate the second RAM area
-        MOV     r1,#&2F
-        BL      ts_CMOSread
-        BNE     %20
-        RSB     r2, r0, #0              ; Subtract from the checksum byte
-        LDR     r0,=(ts_BBE2 + &3F00)
-        MOV     r1,#1
-        BL      ts_CMOSread
-        BNE     %20
-        MOV     r8, r0, LSL #24
-        ANDS    r0, r0, #&FF            ; A zero result ?
-        MOV     r1, #R_CHKFAILBIT
-        ADR     r4,%BT3                 ; Report checksum failure
-        BNE     %21                     ; failed .. report error
-        ]                               ; end ChecksumCMOS
-
-	[ STB :LAND: :LNOT: AlwaysShortPOST	; Always do a short post on STBs
-        LDR     r0,=(ts_BBE2 + &FC00)   ; Read Misc1CMOS byte
-        MOV     r1,#1
-        MOV     r2,#0
-        BL      ts_CMOSread
-        BNE     %20
-        ANDS    r0,r0,#&80              ; Test the memory-test-disable bit
-        BEQ     %25
-	]
-        FAULT   #R_MEMSKIP              ; If set, skip the memory test
-        B       %25
+        B       %FT25
     ]
-
-20
+22
         MOV     r1,#R_CMSFAILBIT        ; Real fault - set the fault bit
         ADR     r4,%BT2                 ; Report fault accessing IIC
                                         ; (Bitmap & POST display)
@@ -1626,14 +1766,19 @@ ts_failmsg
 ts_R00  &       00
 
 
- [ STB :LAND: IOMD_C_FrontPanelLED = (1<<7)
-	; Define Long, Equal and short flash delays
+ [ STB :LAND: (((IOMD_C_FrontPanelLED <> 0) :LOR: ((IOMD_C_FrontPanelRightLED <> 0) :LAND: (IOMD_C_FrontPanelLeftLED <> 0))))
+        ; Define Long, Equal and short flash delays
 ts_Long_Flash      	*	&03		; Number of 1/4 Sec delays for a long flash
 ts_Short_Flash	   	*	&01		; Number of 1/4 Sec delays for a short flash
 ts_Equal_Flash     	*	&02		; Number of 1/4 Sec delays for a equal flash
 ts_Fail_Flash_Delay	*	&14		; Number of Flash Cycles for a Fail, with adaptor
 ts_Pass_Flash_Delay	*	&0A		; Number of Flash Cycles for a Pass, with adaptor
- ]
+
+IOMD_LED_GREENLED       *       IOMD_C_FrontPanelRightLED               ; The right LED should be the GREEN LED
+IOMD_LED_REDLED         *       IOMD_C_FrontPanelLeftLED                ; The left  LED should be the RED   LED
+IOMD_LED_BOTH           *       IOMD_LED_REDLED :OR: IOMD_LED_GREENLED  ;
+
+ ] ; Endif ((IOMD_C_FrontPanelLED <> 0) :LOR: ((IOMD_C_FrontPanelRightLED <> 0) :LAND: (IOMD_C_FrontPanelLeftLED <> 0)))
 
 ts_Report       ROUT
         MOV_fiq r7,r12_fiq              ; check for fault bits set
@@ -1679,9 +1824,10 @@ ts_Report_wait        ROUT
 	;
 	; Here if a Display or other type of adaptor found.
 	;
- [ STB :LAND: IOMD_C_FrontPanelLED = (1<<7)
+ [ STB :LAND: (((IOMD_C_FrontPanelLED <> 0) :LOR: ((IOMD_C_FrontPanelRightLED <> 0) :LAND: (IOMD_C_FrontPanelLeftLED <> 0))))
 	;
-	; IOMD_C_FrontPanelLED  = 1<<7, therefore an NC
+	; IOMD_C_FrontPanelLED <> 0 OR ((IOMD_C_FrontPanelRightLED <> 0) :AND: IOMD_C_FrontPanelLeftLED <> 0))
+        ; Thus we have some FP Leds to play with !
 	;
 	; Check to see if we are a PASS or FAIL
 	;
@@ -1697,6 +1843,8 @@ ts_flash_leds_fail
 	;
 	; Get here if the POST fails !
 	;
+        ; Set it so the RED LED is on.
+        BL      ts_led_redon_only               ; Ensure that the RED LED only is on,
 	; Check for display adpator, if fitted, flash LED's for 20 times
 	; else flash LEDs forever.
 	;
@@ -1735,10 +1883,12 @@ ts_flash_leds_pass
 	; If adaptor fitted, flash the LEDs for a 10 secs
         MOV_fiq r0,r12_fiq              	; restore the faultcode bits
         ANDS    r0,r0,#(R_EXTERN :OR: R_TESTED)	; If test adapter present,
-	BEQ	%FT50				; No Adaptor : Goto start the OS
+	BEQ	%FT55				; No Adaptor : Goto start the OS
                                        		; Adaptor    : Goto 10 Flash loops Code
 						; Fall through !
 
+        ; Set it so the RED LED is on.
+        BL      ts_led_redon_only               ; Ensure that the RED LED only is on,
 	; Loop for specified time
 	; Register usage ....
 	; 	r0, used by toggle leds & delay routines
@@ -1774,6 +1924,7 @@ ts_led_fail
 
 	MOV	pc,r13                          ; move r13 (r14) back to
 						; where we came from.
+
 ts_led_pass
 	; Code to flash the LED's through one flash cycle (on-off)
 	; This will take 1 Second to complete.
@@ -1795,13 +1946,61 @@ ts_led_pass
 	MOV	pc,r13                          ; move r13 (r14) back to
 						; where we came from.
 
+ts_led_redon_only
+	LDR	r1, =IOMD_IOLINES               ; r1 = addr of IOMD_IOLINES
+        LDRB    r0,[r1]                         ; load r0 with the byte pointed to by r1
+;        DREG    r0,"contents of loc->r1"
+        BIC     r0,r0,#IOMD_LED_GREENLED        ; Clear GREEN LED bit
+        ORR     r0,r0,#IOMD_LED_REDLED          ; Set   RED LED bit
+        ORR     r0,r0,#IOMD_C_ReadMask          ; OR with the default I/O settings
+        STRB    r0,[r1]                         ; store a byte of r0 in to loc pointed to by r1
+        MOV     pc, r14                         ; Return to caller
+
+ts_led_greenon_only
+	LDR	r1, =IOMD_IOLINES               ; r1 = addr of IOMD_IOLINES
+        LDRB    r0,[r1]                         ; load r0 with the byte pointed to by r1
+;        DREG    r0,"contents of loc->r1"
+        BIC     r0,r0,#IOMD_LED_REDLED          ; clear RED LED bit
+        ORR     r0,r0,#IOMD_LED_GREENLED        ; Set   GREEN LED bit
+        ORR     r0,r0,#IOMD_C_ReadMask          ; OR with the default I/O settings
+        STRB    r0,[r1]                         ; store a byte of r0 in to loc pointed to by r1
+        MOV     pc, r14                         ; Return to caller
+
+ts_led_bothon
+	LDR	r1, =IOMD_IOLINES               ; r1 = addr of IOMD_IOLINES
+        LDRB    r0,[r1]                         ; load r0 with the byte pointed to by r1
+;        DREG    r0,"contents of loc->r1"
+        ORR     r0,r0,#IOMD_LED_BOTH            ; Set Both Green & RED LED bits
+        ORR     r0,r0,#IOMD_C_ReadMask          ; OR with the default I/O settings
+        STRB    r0,[r1]                         ; store a byte of r0 in to loc pointed to by r1
+        MOV     pc, r14                         ; Return to caller
+
+ts_led_bothoff
+	LDR	r1, =IOMD_IOLINES               ; r1 = addr of IOMD_IOLINES
+        LDRB    r0,[r1]                         ; load r0 with the byte pointed to by r1
+;        DREG    r0,"contents of loc->r1"
+        BIC     r0,r0,#IOMD_LED_BOTH            ; Clear Both Green & RED LED bits
+        ORR     r0,r0,#IOMD_C_ReadMask          ; OR with the default I/O settings
+        STRB    r0,[r1]                         ; store a byte of r0 in to loc pointed to by r1
+        MOV     pc, r14                         ; Return to caller
+
+
+
 50
-	;
+        ; come here if we've finished showing pass/fail by flashing the LEDs
+        ; thus a test link or display aaptor was fitted
+        ; so turn on the LED's
+        BL      ts_led_bothon
+
+55
+        ; come here because we passed, but no display adaptor ot test link, thus LEDs weren't flashed
+	; so ........
 	; Continue on our way
 	;
- |
+ | ; else
 	;
-	; IOMD_C_FrontPanelLED  <> 1<<7, therefore not an NC
+	; ((IOMD_C_FrontPanelLED <> 0) :LOR: ((IOMD_C_FrontPanelRightLED <> 0) :LAND: (IOMD_C_FrontPanelLeftLED <> 0)))
+        ; Thus we use the old way of flashing the LED etc ....
 	;
 	; Indicate fault found : Set the border to fault colour and flash
 	; the disk LED, using the fault bitmap in r12_fiq to modulate the flashing.
@@ -1895,14 +2094,15 @@ ts_665LEDaddr      *       (ts_PCaddress :OR: (&3f2 :SHL: 2))
         ANDS    r2,r2,r2                ; all the bits displayed now ?
         BNE     %02
         MOV_fiq r0,r12_fiq              ; restore the faultcode bits
- ]
+ ] ; Endif ((IOMD_C_FrontPanelLED <> 0) :LOR: ((IOMD_C_FrontPanelRightLED <> 0) :LAND: (IOMD_C_FrontPanelLeftLED <> 0)))
 ;
+        MOV_fiq r0,r12_fiq              	; restore the faultcode bits
 ; Uncomment the following line if the POST code is to loop when the POST
 ; display adaptor (post box) is fitted.
 ;
 ;        ANDS    r0,r0,#(R_EXTERN :OR: R_TESTED) ; If the display adapter & test link are present,
 ;
-; Comment thi line out if POST Code is to loop when the POST display
+; Comment this line out if POST Code is to loop when the POST display
 ; adaptor (post box) is fitted.
 ;
         ANDS    r0,r0,# R_TESTED	; If the test link is present,
@@ -1927,7 +2127,7 @@ ts_Self_test_end
  	           				; EQ : No Adaptor fitted, don't show progress
 	BEQ	ts_Softstart			; EQ : Don't show colours
 	]
-        LDR     r1,=C_WARMSTART
+        LDR     r1,=C_DEFAULT
         LDR     r0,=ts_VIDCPhys         ; write the border colour
         STR     r1,[r0]
 
