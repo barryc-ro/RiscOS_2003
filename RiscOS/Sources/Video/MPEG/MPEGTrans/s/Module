@@ -60,6 +60,12 @@
 ; 15-Oct-98  TMD  1.67		Removed SendFirstSCR flag (obsolete).
 ; 10-Dec-98  BJGA 1.68		Changed module name to MPEGTransport, changed SWI chunk and added "Trans" prefix to * commands.
 ; 10-Feb-99  BJGA 1.69          Added detection of segment transitions using OVS NPTReferenceDescriptors in non-trick play mode.
+; 20-May-99  BJGA 1.70          Fixed a bug where, after switching back to normal play from trick play, video (but no audio)
+;                               would play briefly, then video would underrun.
+; 10-Feb-00  BJGA 1.71          Implemented StreamFlags_ResetOnGoodDataFollows and ResetStreamFlags_DeferReset.
+;                               Parses StreamModeDescriptors and issues UpCall_MPEG when they signal an End-of-Stream.
+;                               Added optional debug output to vdu of NPT parsing.
+;                               Bugfix: now zeroes NPTDescLength when we zero NPTCurrent.
 ;
 
         LEADR   Module_LoadAddr
@@ -68,6 +74,7 @@ TAB     *       9
 LF      *       10
 FF      *       12
 CR      *       13
+
 
                 GBLL    BuildAsMPEGControl
 BuildAsMPEGControl SETL {FALSE}
@@ -99,6 +106,8 @@ ParseOVSNPT	SETL	{TRUE}
 		GBLL	OnlyAcceptFirstPATandPMT
 OnlyAcceptFirstPATandPMT SETL {FALSE}			; for use with a faint signal, since we don't check CRCs.
 
+                GBLL    DebugNPT
+DebugNPT        SETL    {FALSE}                         ; print NPT debug to vdu
 
                 GBLL    debug
 debug           SETL    {FALSE}	                        ; this enables NdrDebug real-time debugging
@@ -222,6 +231,9 @@ CSH_CurrentAudioStream	#	4			; index of video stream to select within program (1
 CSH_TempAudioStream	#	4			; temporary decrementing copy of above
 
 CSH_LastResetStreamFlags #	4			; bits indicating what streams are active after last resetstream
+ [ ParseOVSNPT
+CSH_NextResetStreamFlags #      4                       ; flag bits to use if/when there is an internal reset (good-data-follows or segment-transition)
+ ]
  [ DoPEH
 CSH_ListOfPEHPIDs	#	4			; pointer to 1st PEHPID node for this stream
  ]
@@ -319,6 +331,25 @@ xdebug   SETL    {FALSE}
         LDRB    $tmp, [r0], #1
         ORR     $dst, $dst, $tmp, LSL #24
         MEND
+
+ [ DebugNPT
+; PrintBlock: dumps out a region of memory in bytewise order
+; $from    -> first address to print
+; $to      -> address after the last one to print
+; $scratch -> 4 bytes of temporary workspace
+; corrupts r0-r2, $from
+        MACRO
+        PrintBlock $from, $to, $scratch
+00      LDRB    r0, [$from]
+        MOV     r1, $scratch
+        MOV     r2, #4
+        SWI     XOS_ConvertHex2
+        SWI     XOS_Write0
+        ADD     $from, $from, #1
+        CMP     $from, $to
+        BNE     %BT00
+        MEND
+ ]
 
 ; **************** Module code starts here **********************
 
@@ -609,6 +640,9 @@ OpenStream Entry "r0-r2"
         AND     lr, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
         STR     lr, [r1, #CSH_NotReadyBits]             ; which bits are not yet ready to play
 	STR	lr, [r1, #CSH_LastResetStreamFlags]
+ [ ParseOVSNPT
+	STR     lr, [r1, #CSH_NextResetStreamFlags]
+ ]
 
         TST     r0, #StreamFlags_VideoPresent
         BEQ     %FT10
@@ -1263,7 +1297,10 @@ FreePackets Entry "r0-r5, wp"
 ;		bit 1 set => new stream has audio data
 ;		bit 2 set => discard data until we get data of trick mode specified by r2
 ;	        bit 3 set => OVS trick play mode
-;               bit 4 CLEAR => if we are supporting OVS NPT descriptors, discard data until a ContentID change signals Good Data Follows
+;               bit 4 set => don't actually reset, just cache the other flags until the next internal reset (r2 and r3 on exit are then invalid)
+;                            (this bit is ignored in internal calls)
+;               bit 5 CLEAR => if we are supporting OVS NPT descriptors, discard data until a ContentID change signals Good Data Follows
+;                            (this bit must only be set in internal calls, in which cases bit 4 will be ignored)
 ;	r1 = control stream handle
 ;	r2 = trick mode of required data (if bit 2 of r0 set):
 ; 		0 => fast forward
@@ -1281,6 +1318,14 @@ FreePackets Entry "r0-r5, wp"
 ;
 
 ResetStream Entry "r0-r3"
+ [ ParseOVSNPT
+        STR     r0, [r1, #CSH_NextResetStreamFlags]
+        TST     r0, #ResetStreamFlags_DeferReset
+        EXIT    NE
+        MOV     r3, #0                          ; only zero the following if it wasn't an internally-generated reset
+	STRB	r3, [r1, #CSH_NPTDescLength]	; no bytes in stored descriptor
+	STR	r3, [r1, #CSH_NPTCurrent]	; no current descriptor
+ ]
         BL      int_reset_stream
         STR     r2, [sp, #2*4]
         STR     r3, [sp, #3*4]
@@ -1296,12 +1341,23 @@ ResetStream Entry "r0-r3"
 
 int_reset_stream                                ; may also be called from within coroutines
         ALTENTRY                                ; must match ResetStream stack, so registers are returned correctly
+      [ DebugNPT
+        SWI     XOS_WriteS
+        =       "Reset: flags = ", 0
+        ALIGN
+        Push    "r0-r2"
+        SUB     sp, sp, #12
+        MOV     r1, sp
+        MOV     r2, #12
+        SWI     XOS_ConvertHex8
+        SWI     XOS_Write0
+        ADD     sp, sp, #12
+        Pull    "r0-r2"
+        SWI     XOS_NewLine
+      ]
 	MOV	r3, #0
 	STR	r3, [sp, #2*4]			; zero the returned r2
 	STR	r3, [sp, #3*4]			; zero the returned r3
- [ ParseOVSNPT
-	STR	r3, [r1, #CSH_NPTCurrent]	; no bytes in stored descriptor
- ]
 
         LDR     r3, [r1, #CSH_StreamFlags]
         TST     r0, #ResetStreamFlags_TrickPlayMode
@@ -1317,8 +1373,8 @@ int_reset_stream                                ; may also be called from within
  ]
  [ ParseOVSNPT
 	TST	r3, #StreamFlags_OVSNPTDescriptors		; if we're supporting OVS NPT descriptors
-        ANDNE   lr, r0, #ResetStreamFlags_SegmentTransition     ; and unless we don't need to wait for a Good Data Follows...
-        TEQNE   lr, #ResetStreamFlags_SegmentTransition
+        ANDNE   lr, r0, #ResetStreamFlags_InternalReset         ; and unless we don't need to wait for a Good Data Follows...
+        TEQNE   lr, #ResetStreamFlags_InternalReset
 	ORRNE	r3, r3, #StreamFlags_OVSNPTSkipping		; then discard data until we see contentID change
 	STRNE	r3, [r1, #CSH_StreamFlags]
  ]
@@ -2296,6 +2352,9 @@ ts_gottwozeros
  [ ParseOVSNPT
 
 NPTDescriptorTag	*	&17
+StreamModeDescriptorTag *       &19
+streamMode_EndOfStream  *       &07
+UpCallMPEG_EndOfStream  *       0
 
 ts_check_for_OVSNPT ROUT
 	CMP	r10, #1
@@ -2311,6 +2370,8 @@ ts_check_for_OVSNPT ROUT
 	SUB	r10, r10, r7				; remaining bytes of descriptors
 	TEQ	r9, #NPTDescriptorTag
 	BEQ	%FT10					; found NPT descriptor
+	TEQ     r9, #StreamModeDescriptorTag
+	BEQ     %FT50
 05
 	Push	"r10"
 	MOV	r10, r7
@@ -2318,7 +2379,14 @@ ts_check_for_OVSNPT ROUT
 	Pull	"r10"
 	B	ts_check_for_OVSNPT			; and try again
 
-10
+
+10      ; Handle NPTReferenceDescriptor
+      [ DebugNPT
+        SWI     XOS_WriteS
+        =       "NPTReferenceDescriptor received", 0
+        ALIGN
+        SWI     XOS_NewLine
+      ]
 	Push	"r5"
 	MOV	r5, r7					; length of this descriptor
 	CMP	r7, #CSH_NPTDescMaxLen			; maximum amount we can store
@@ -2335,14 +2403,64 @@ ts_check_for_OVSNPT ROUT
 	B	%BT20					; then loop
 
 30
+      [ DebugNPT
+        Push    "r0-r5"
+        ADR     r5, ControlStreamHandle
+        SUB     sp, sp, #4
+        SWI     XOS_WriteS
+        =       "ContentID=", 0
+        ALIGN
+        LDRB    r0, [r5, #CSH_NPTContentID]
+        MOV     r1, sp
+        MOV     r2, #4
+        SWI     XOS_ConvertHex2
+        SWI     XOS_Write0
+        SWI     XOS_WriteS
+        =       ", STC=", 0
+        ALIGN
+        LDRB    r0, [r5, #CSH_NPTSTCRef]
+        AND     r0, r0, #1
+        ADD     r0, r0, #'0'
+        SWI     XOS_WriteC
+        ADD     r3, r5, #CSH_NPTSTCRef+1
+        ADD     r4, r3, #4
+        PrintBlock r3, r4, sp
+        SWI     XOS_WriteS
+        =       ", NPT=", 0
+        ALIGN
+        LDRB    r0, [r5, #CSH_NPTNPTRef+3]
+        AND     r0, r0, #1
+        ADD     r0, r0, #'0'
+        SWI     XOS_WriteC
+        ADD     r3, r5, #CSH_NPTNPTRef+4
+        ADD     r4, r3, #4
+        PrintBlock r3, r4, sp
+        SWI     XOS_WriteS
+        =       ", ScaleNum=", 0
+        ALIGN
+        ADD     r3, r5, #CSH_NPTScaleNum
+        ADD     r4, r3, #2
+        PrintBlock r3, r4, sp
+        SWI     XOS_WriteS
+        =       ", ScaleDen=", 0
+        ALIGN
+        ADD     r3, r5, #CSH_NPTScaleDen
+        ADD     r4, r3, #2
+        PrintBlock r3, r4, sp
+        SWI     XOS_NewLine
+        ADD     sp, sp, #4
+        Pull    "r0-r5"
+      ]
 	MOV	r7, #1
 	STR	r7, [r1, #CSH_NPTCurrent]		; indicate NPT descriptor is current
 	LDRB	r7, [r1, #CSH_NPTContentID]		; get new contentID
 	AND	r7, r7, #&7F				; only bottom 7 bits are the contentID
 	LDR	lr, [r1, #CSH_StreamFlags]
-      [ {TRUE}
         LDR     r5, [r1, #CSH_LastContentID]		; see what ContentID was last time
-        TEQ     r5, r7                                  ; if it's changed
+        TEQ     r5, r7                                  ; if it's changed then it's a GDF
+        TSTNE   lr, #StreamFlags_ResetOnGoodDataFollows ;   and we may need to reset ourselves
+        BNE     %FT39
+        TEQ     r5, r7                                  ; if GDF
         TSTNE   lr, #StreamFlags_OVSNPTSkipping         ;   and we're skipping
         BICNE   lr, lr, #StreamFlags_OVSNPTSkipping     ;   then clear skipping bit from flags, and jump
         STRNE   lr, [r1, #CSH_StreamFlags]
@@ -2350,28 +2468,43 @@ ts_check_for_OVSNPT ROUT
         TEQ     r5, r7                                  ; unless it's the same, and we're not skipping and not in trick play mode
         TSTEQ   lr, #StreamFlags_OVSNPTSkipping :OR: StreamFlags_TrickPlayMode
         BNE     %FT40                                   ;   then jump
-        ; Reset decoder
+        ; It's a segment transition
+39      ; Reset decoder
         Push    "r0, r2, r3"
-        LDR     r0, [r1, #CSH_LastResetStreamFlags]     ; preserve Video/AudioPresent flags from last ResetStream
-        TST     lr, #StreamFlags_TrickPlayMode
-        ORRNE   r0, r0, #ResetStreamFlags_TrickPlayMode ; and preserve trick play state too
-        ORR     r0, r0, #ResetStreamFlags_SegmentTransition ; don't worry about waiting for a GDF
+        LDR     r0, [r1, #CSH_NextResetStreamFlags]
+        ORR     r0, r0, #ResetStreamFlags_InternalReset ; don't worry about waiting for a(nother) GDF
         BL      int_reset_stream
         Pull    "r0, r2, r3"
         ; drop through...
-      |
-	TST	lr, #StreamFlags_OVSNPTSkipping		; are we looking for a change right now
-	BEQ	%FT40					; no then skip
-	LDR	r5, [r1, #CSH_LastContentID]		; see what it was last time
-	TEQ	r5, r7					; have we changed?
-	BICNE	lr, lr, #StreamFlags_OVSNPTSkipping	; if so then clear skipping bit from flags
-	STRNE	lr, [r1, #CSH_StreamFlags]		; and store back
-      ]
 40
 	STR	r7, [r1, #CSH_LastContentID]		; always store new contentID as last
 	Pull	"r7"
 	Pull	"r5"					; wrong order to do in one go
 	B	%BT05					; skip any part of the descriptor we couldn't store
+
+
+50      ; Handle StreamModeDescriptor (for streamMode End of Stream)
+        Push    "r5"
+        SUB     r5, r7, #1                              ; we're only going to read the first byte of the descriptor
+        BL      ts_getbytedec
+        TEQ     r7, #streamMode_EndOfStream
+        BNE     %FT55
+      [ DebugNPT
+        SWI     XOS_WriteS
+        =       "End of Stream received", 0
+        ALIGN
+        SWI     XOS_NewLine
+      ]
+        Push    "r0-r3"
+        MOV     r0, #21 ; UpCall_MPEG
+        MOV     r1, #0
+        ADR     r2, ControlStreamHandle
+        MOV     r3, #UpCallMPEG_EndOfStream
+        SWI     XOS_UpCall
+        Pull    "r0-r3"
+55      MOV     r7, r5                                  ; r7 = original r7 - 1
+        Pull    "r5"
+        B       %BT05                                   ; continue (automatically skips last byte of descriptor)
 
  ]
 
