@@ -59,22 +59,23 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.<System>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.<System>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
-       -${CP} Resources.${LOCALE}.<System>.Sprites22 ${RESDIR}.${COMPONENT}.Sprites22 ${CPFLAGS}
-       -${CP} Resources.${LOCALE}.<System>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
-       -${CP} Resources.${LOCALE}.<System>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.<System>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
+       -${CP} LocalRes:<UserIF>.Sprites22 ${RESDIR}.${COMPONENT}.Sprites22 ${CPFLAGS}
+       -${CP} LocalRes:<UserIF>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
+       -${CP} LocalRes:<UserIF>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
+        ${CP} LocalRes:<UserIF>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	print LocalRes:<UserIF>.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
+        Access ${TARGET} rw/rw
 
 ${EXP_HDR}.Wimp: hdr.Wimp
         ${CP} hdr.Wimp $@ ${CPFLAGS}
@@ -83,3 +84,70 @@ ${EXP_HDR}.WimpSpace: hdr.WimpSpace
         ${CP} hdr.WimpSpace $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.Wimp: Hdr:ListOpts
+rm.Wimp: Hdr:Macros
+rm.Wimp: Hdr:System
+rm.Wimp: Hdr:SWIs
+rm.Wimp: Hdr:CPU.Generic26
+rm.Wimp: Hdr:IO.GenericIO
+rm.Wimp: Hdr:RISCOS
+rm.Wimp: Hdr:Machine.<Machine>
+rm.Wimp: Hdr:Machine.Machine
+rm.Wimp: Hdr:IO.IOMDL
+rm.Wimp: Hdr:CMOS
+rm.Wimp: Hdr:PublicWS
+rm.Wimp: Hdr:ModHand
+rm.Wimp: Hdr:Proc
+rm.Wimp: Hdr:EnvNumbers
+rm.Wimp: Hdr:Services
+rm.Wimp: Hdr:UpCall
+rm.Wimp: Hdr:VduExt
+rm.Wimp: Hdr:FSNumbers
+rm.Wimp: Hdr:HighFSI
+rm.Wimp: Hdr:HostFS
+rm.Wimp: Hdr:NDRDebug
+rm.Wimp: Hdr:Font
+rm.Wimp: Hdr:Wimp
+rm.Wimp: Hdr:Messages
+rm.Wimp: Hdr:NewErrors
+rm.Wimp: Hdr:Sprite
+rm.Wimp: Hdr:Variables
+rm.Wimp: Hdr:Hourglass
+rm.Wimp: Hdr:ResourceFS
+rm.Wimp: Hdr:Portable
+rm.Wimp: Hdr:MsgTrans
+rm.Wimp: hdr:ColourTran
+rm.Wimp: hdr:FPEmulator
+rm.Wimp: hdr:Territory
+rm.Wimp: hdr:Switcher
+rm.Wimp: hdr:PDriver
+rm.Wimp: hdr:ScrBlank
+rm.Wimp: hdr:OsWords
+rm.Wimp: hdr:Countries
+rm.Wimp: VersionASM
+rm.Wimp: hdr.WIMPMacros
+rm.Wimp: hdr.IconHigh
+rm.Wimp: Options.s.!Default
+rm.Wimp: Options.s.<System>
+rm.Wimp: Hdr:ImageSize.<ImageSize>
+rm.Wimp: Options.s.!Common
+rm.Wimp: Options.s.!Debug
+rm.Wimp: s.Wimp01
+rm.Wimp: s.!Palette
+rm.Wimp: s.Memory
+rm.Wimp: s.Wimp02
+rm.Wimp: s.Watchdog
+rm.Wimp: s.Tiling
+rm.Wimp: s.Wimp03
+rm.Wimp: s.Wimp04
+rm.Wimp: s.Wimp05
+rm.Wimp: s.Wimp06
+rm.Wimp: s.Iconbar
+rm.Wimp: s.Wimp07
+rm.Wimp: s.ProgErrs
+rm.Wimp: s.Wimp08
+rm.Wimp: s.Wimp08s
+rm.Wimp: s.Wimp09
+rm.Wimp: s.Wimp10
+rm.Wimp: s.NewSWIs
+rm.Wimp: s.AutoScroll
