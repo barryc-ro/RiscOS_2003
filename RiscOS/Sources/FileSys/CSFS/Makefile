@@ -129,9 +129,18 @@ install_rom: ${TARGET} dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-resources:
+resources: resources-${TYPE}
+
+resources-install: rm.${COMPONENT} dirs
+        ${CP} rm.${COMPONENT} ${RESDIR}.^.${RES}.${COMPONENT} ${CPFLAGS}
         ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied into ResourceFS at ${COMPONENT}
+
+resources-:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+        TokenCheck LocalRes:Messages
         ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
