@@ -46,7 +46,7 @@ TOKENS   = Hdr:Tokens
 # Libraries
 #
 CLIB      = CLIB:o.stubs
-TGRLIB    = CommonLib:o.commonlibm
+TGRLIB    = C:tgrlib.o.tgrlib
 RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
@@ -58,7 +58,7 @@ COMMONLIB = <CommonLib$Path>
 #
 # Include files
 #
-INCLUDES = -ICOMMONLIB:,C:
+INCLUDES = -IC:
 
 #
 # Export Paths for Messages module
@@ -112,8 +112,11 @@ resources:
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
+        ${RM} h.module
         ${RM} ${TARGET}
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} aof.* ${WFLAGS}
+        ${RM} aof
         @echo ${COMPONENT}: cleaned
 
 ${MODULE}: ${OBJS} ${TGRLIB}
