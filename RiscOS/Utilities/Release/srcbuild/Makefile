@@ -72,6 +72,7 @@ clean:
 install: ${TARGET}
 	${CP} ${TARGET} <Build$Dir>.Library.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
+
 #
 # Target
 #
@@ -90,9 +91,9 @@ o.riscos:	c.riscos
 o.riscos:	C:h.kernel
 o.riscos:	C:h.swis
 o.riscos:	h.srcbuild
+o.parse:	c.parse
+o.parse:	h.srcbuild
 o.build:	c.build
 o.build:	h.srcbuild
 o.build:	h.parse
 o.build:	h.riscos
-o.parse:	c.parse
-o.parse:	h.srcbuild
