@@ -5827,7 +5827,8 @@ static void handler(int signal)
 /*    wimp_reporterror(&er, wimp_EOK, PROGRAM_NAME); */
 /*    frontend_fatal_error(&er); */
 
-#if ROM
+   /* if a debug version then return here so that there is the chance of a backtrace */
+#if DEBUG == 0
    exit(EXIT_FAILURE);
 #endif
 }
