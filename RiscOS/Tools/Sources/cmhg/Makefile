@@ -29,9 +29,9 @@ WIPE    = -wipe
 SQUEEZE = squeeze
 
 # Uncomment his macro to make 32-bit code generation the default option
-#APCS    = -DUSE32BIT
+#USEAPCS    = -DUSE32BIT
 
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} ${APCS}
+CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} ${USEAPCS}
 ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK} -NOWarn
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
