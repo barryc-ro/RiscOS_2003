@@ -51,6 +51,7 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        -stripdepnd
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
