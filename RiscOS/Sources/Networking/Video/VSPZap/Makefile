@@ -22,12 +22,12 @@ DEFMOD  = DefMod
 AR	= LibFile
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS  = -pcc -c -depend !Depend ${INCLUDES} -zM -Wp -ffa -DRISCOS -DRISCOS_ATM25 -DRISCOS_MPEG
+CCFLAGS  = -pcc -c -depend !Depend ${INCLUDES} -zM -Wp -ffa -DRISCOS -DRISCOS_ATM25 -DRISCOS_MPEG -throwback
 # Flags for debugging ...
 #CCFLAGS  = 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-INCLUDES= -IC: -ITCPIPLibs:
+INCLUDES= -IC:,TCPIPLibs:include.
 
 #
 # Libraries
@@ -101,61 +101,53 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 
-#
+module.o:  module.c h.cmhg
+
+h.cmhg:   cmhg.VSPHdr
+          cmhg -d h.cmhg cmhg.VSPHdr
+
+
+
 # Dynamic dependencies:
+o.mbuf:	c.mbuf
+o.mbuf:	C:h.kernel
+o.mbuf:	C:h.swis
+o.mbuf:	TCPIPLibs:include.sys.h.types
+o.mbuf:	h.misc
+o.mbuf:	TCPIPLibs:include.sys.h.mbuf
 o.vspc:	c.vspc
-o.vspc:	h.types
+o.vspc:	TCPIPLibs:include.sys.h.types
 o.vspc:	C:h.kernel
 o.vspc:	C:h.swis
 o.vspc:	h.vsp
 o.vspc:	h.misc
 o.vspc:	h.zap
-o.poduleirq: s.poduleirq
-o.poduleirq: Hdr:ListOpts
-o.poduleirq: Hdr:Macros
-o.poduleirq: Hdr:System
-o.poduleirq: Hdr:EnvNumbers
 o.zap:	c.zap
-o.zap:	h.types
+o.zap:	TCPIPLibs:include.sys.h.types
 o.zap:	h.vsp
 o.zap:	h.zap
 o.zap:	h.misc
 o.zap:	C:h.kernel
 o.zap:	C:h.swis
-o.mbuf:	c.mbuf
-o.mbuf:	C:h.kernel
-o.mbuf:	C:h.swis
-o.mbuf:	h.types
-o.mbuf:	h.misc
-o.mbuf:	h.mbuf
 o.module:	c.module
-o.module:	h.types
-o.module:	h.stdio
+o.module:	TCPIPLibs:include.sys.h.types
+o.module:	C:h.stdio
 o.module:	h.vsp
-o.module:	h.misc
 o.module:	C:h.errno
 o.module:	h.zap
-o.module:	TCPIPLibs:sys.h.socket
-o.module:	TCPIPLibs:sys.h.cdefs
-o.module:	TCPIPLibs:sys.h.ioctl
-o.module:	TCPIPLibs:sys.h.ttycom
-o.module:	TCPIPLibs:sys.h.ioccom
-o.module:	TCPIPLibs:sys.h.ioccom
-o.module:	TCPIPLibs:sys.h.filio
-o.module:	TCPIPLibs:sys.h.ioccom
-o.module:	TCPIPLibs:sys.h.sockio
-o.module:	TCPIPLibs:sys.h.ioccom
-o.module:	TCPIPLibs:sys.h.cdefs
-o.module:	TCPIPLibs:netinet.h.in
-o.module:	TCPIPLibs:net.h.if
-o.module:	TCPIPLibs:sys.h.socket
-o.module:	TCPIPLibs:sys.h.time
-o.module:	TCPIPLibs:sys.h.cdefs
-o.module:	TCPIPLibs:net.h.if_arp
-o.module:	TCPIPLibs:sys.h.socket
-o.module:	TCPIPLibs:h.netdb
-o.module:	TCPIPLibs:sys.h.cdefs
+o.module:	h.misc
+o.module:	TCPIPLibs:include.sys.h.socket
+o.module:	TCPIPLibs:include.sys.h.ioctl
+o.module:	TCPIPLibs:include.sys.h.ttychars
+o.module:	TCPIPLibs:include.sys.h.ttydev
+o.module:	TCPIPLibs:include.netinet.h.in
+o.module:	TCPIPLibs:include.net.h.if
+o.module:	TCPIPLibs:include.sys.h.mbuf
+o.module:	TCPIPLibs:include.net.h.if_arp
+o.module:	TCPIPLibs:include.sys.h.socket
+o.module:	TCPIPLibs:include.h.netdb
 o.module:	C:h.kernel
 o.module:	C:h.swis
 o.module:	h.dci4
-o.module:	h.mbuf
+o.module:	TCPIPLibs:include.sys.h.mbuf
+o.module:	h.cmhg
