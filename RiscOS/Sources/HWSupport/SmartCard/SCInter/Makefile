@@ -8,6 +8,7 @@
 # 14-Jun-96  RWB 	  New for SCInterface
 # 11-Sep-96  RWB	  Corrected a major flaw in ROM build
 # 07 May 1997 RWB	  Now supports remote debug library
+# 22 May 1997 RWB	  Changed debug build
 
 #
 # Paths
@@ -59,6 +60,8 @@ COMPONENT = SCInter
 TARGET    = aof.${COMPONENT}
 EXPORTS   = ${EXP_C_H}.${COMPONENT}
 
+.SUFFIXES:   .od
+
 OBJS      =	\
 o.module	\
 o.sctrans	\
@@ -69,17 +72,32 @@ o.incard	\
 o.schlumb	\
 o.header
 
+DOBJS      =	\
+od.module	\
+od.sctrans	\
+od.irqs		\
+od.path		\
+od.orga		\
+od.incard	\
+od.schlumb	\
+od.header
+
 #
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
+.c.od:;     ${CC} ${CFLAGS} -o $@ $<
+.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.s.od:;     ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
 all: rm.${COMPONENT}
+
+debug: rm.${COMPONENT}D
 
 #
 # RISC OS ROM build rules:
@@ -95,17 +113,25 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
-
+dirs:
+        ${MKDIR} o
+        ${MKDIR} od
+        ${MKDIR} rm
+        ${MKDIR} linked
+        ${MKDIR} map
+        ${MKDIR} aof
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
@@ -119,9 +145,13 @@ rom_link:
 #
 # Target
 #
-rm.${COMPONENT}: ${OBJS} ${SERIALLIB} ${REMOTEDB}
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${REMOTEDB}
+rm.${COMPONENT}: ${OBJS} ${SERIALLIB} dirs
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         Access rm.${COMPONENT} RW/R
+
+rm.${COMPONENT}D: ${DOBJS} ${SERIALLIB} ${REMOTEDB} dirs
+        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
+        Access rm.${COMPONENT}D RW/R
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
