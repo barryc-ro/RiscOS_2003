@@ -20,7 +20,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -33,6 +33,8 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+DEBUGLIB  = <Lib$Dir>.DebugLib.o.DebugLibzm TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklib5zm
+
 
 #
 # Include files
@@ -40,7 +42,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 INCLUDES = -IC:
 
 #DFLAGS   = -dDEBUG
-DFLAGS   =
+#DFLAGS   =
 
 #
 # Program specific options:
@@ -48,6 +50,7 @@ DFLAGS   =
 COMPONENT = NVRAM
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
+TRACERAMTARGET = rm.${COMPONENT}db
 OBJS      = header.o module.o nvram.o msgfile.o parse.o trace.o
 EXPORTS   = ${EXP_H}.${COMPONENT} ${EXP_HDR}.${COMPONENT}
 RDIR      = ${RESDIR}.NVRAM
@@ -55,7 +58,7 @@ RDIR      = ${RESDIR}.NVRAM
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
@@ -63,6 +66,8 @@ RDIR      = ${RESDIR}.NVRAM
 # build a relocatable module:
 #
 all: ${RAMTARGET}
+
+trace: ${TRACERAMTARGET}
 
 #
 # RISC OS ROM build rules:
@@ -105,6 +110,9 @@ rom_link:
 
 ${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
+
+${TRACERAMTARGET}: ${OBJS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${DEBUGLIB}
 
 ${EXP_H}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
