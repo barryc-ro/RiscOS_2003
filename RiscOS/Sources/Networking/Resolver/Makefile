@@ -17,6 +17,7 @@ EXP_HDR = <Cexport$dir>
 #
 # Generic options:
 #
+include Makefiles:StdTools
 MKDIR   = cdir
 AS      = objasm
 CC      = cc
@@ -27,7 +28,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -W -c -depend !Depend -zM -zps1 -throwback -pcc -fn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
+CFLAGS  = -W -c -depend !Depend -zM -zps1 -throwback -pcc -fahn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -depend !Depend -p
@@ -36,17 +37,8 @@ CMHGFLAGS = -depend !Depend -p
 #
 # Libraries
 #
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.c_AbsSym
-INETLIB=TCPIPLibs:o.inetlibzm
-SOCKLIB=TCPIPLibs:o.socklibzm
-UNIXLIB=TCPIPLibs:o.unixlibzm
-DESKLIB=libs.desklib.DeskLib_rm
-ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
+include Makefiles:ModuleLibs
+
 #
 # Include files
 #
@@ -67,7 +59,7 @@ DEBOBJS   = od.res_query od.Events \
 	    od.Cache o.ExtLib od.Hosts o.Resolver \
 	    od.res_comp od.res_init od.res_mkquer  \
 	    od.StrCaseCmp Stubs.o od.SWI
-LIBS      = ${DESKLIB} ${INETLIB} ${SOCKLIB} ${UNIXLIB} ${ASMUTILS}
+LIBS      = ${DESKLIB} ${NET4LIBS} ${ASMUTILS}
 EXPORTS   =
 
 #
