@@ -424,7 +424,7 @@ const char *memfind( const char *area, int len, char *search, int *nearly )
     return NULL;
 }
 
-#if 0
+#ifndef USING_INET5
 /* Damn and blast all Acorn socket libraries. Or at least their headers. */
 struct iovec { void *iov_base; int iov_len; };
 extern int socketwritev( int d, struct iovec *iov, int iovcnt );
@@ -1602,9 +1602,6 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             http_queue_allow_write( c );
 
     case status_GETTING_BODY:
-        /* Now idempotent and quick to return */
-        http_flush_data_to_file(c);
-
 #ifndef NO_SECURE
         if ( ( c->flags & http_open_flags_TUNNEL )
              && (c->rc/100) == 2 )
@@ -1628,9 +1625,19 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
             http_set_status( c, status_AUTHENTICATING );
 
+            /* Complete flush of the six bytes of cack that BT is liable
+             * to have sent us
+             */
+            c->data_so_far = 0;
+            c->buf_off = 0;
+            c->buf_used = 0;
+
             http_prosecute( c );
+            return NULL;
         }
 #endif
+        /* Now idempotent and quick to return */
+        http_flush_data_to_file(c);
 
         /* It's IMPORTANT that if status becomes COMPLETED_FILE then we drop
          * through and don't return: we don't want Partial Content replies to
@@ -1642,8 +1649,9 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         {
             int block;
 
-            if ( c->data_size > -1
-                && c->data_so_far == c->data_size )
+            if ( ( c->data_size > -1
+                   && c->data_so_far == c->data_size )
+                 || c->flags & http_open_flags_HEAD )
             {
                 fdebugf( log_file, "%p: got all %d of my %d bytes (total=%d): file complete\n", c, c->data_size, c->data_so_far, c->total_size );
                 http_set_status( c, status_COMPLETED_FILE );
@@ -1719,6 +1727,17 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                         fdebugf(log_file, "%p: end of server push\n", c );
 
                         http_set_status( c, status_COMPLETED_FILE );
+                        if ( c->flags &
+                             (http_open_flags_IMAGE | http_flags_RANGEBROKEN ) )
+                        {
+                            fdebugf( log_file, "%p: this image was wrecked\n", c );
+                            c->flags |= http_flags_GOTFIRST;
+                            c->data_so_far = 0;
+                            /* break from the while loop, then falls through
+                             * the switch and requeues
+                             */
+                            break;
+                        }
                         http_socket_close( c );
                         http_orphan_queue( c );
                         return NULL;
@@ -1777,7 +1796,8 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
     case status_COMPLETED_FILE:
         if ( (c->flags & http_flags_GOTFIRST)
-             && c->data_so_far < c->total_size )
+             && (c->data_so_far < c->total_size
+                 || (c->flags & http_flags_RANGEBROKEN) ) )
         {
             http_requeue( c );
             return NULL;
@@ -2015,6 +2035,7 @@ static void http_show_flags( http_connection *c )
     if ( f & http_flags_KEPTALIVE )     fdebugf( log_file, " kept-alive" );
     if ( f & http_flags_NOTALIVE )      fdebugf( log_file, " not-alive" );
     if ( f & http_flags_DOESRANGE )     fdebugf( log_file, " does-range" );
+    if ( f & http_flags_RANGEBROKEN )   fdebugf( log_file, " range-broken" );
     if ( f & http_flags_GOTFIRST )      fdebugf( log_file, " got-first" );
     if ( f & http_flags_CHUNKED )       fdebugf( log_file, " chunked" );
 
@@ -2456,6 +2477,9 @@ static void http_requeue( http_connection *c )
         c->flags &= http_open_flags_ALLUSER | http_flags_SERVER
                     | http_flags_GOTFIRST;
 
+        if ( c->flags & http_flags_RANGEBROKEN )
+            c->flags &= ~http_flags_GOTFIRST;
+
         if ( c->socket == -1 )
         {
             /* Must start a new connection */
@@ -2473,6 +2497,10 @@ static void http_requeue( http_connection *c )
 
     c->flags &= http_open_flags_ALLUSER | http_flags_SERVER
                 | http_flags_GOTFIRST;
+
+    if ( c->flags & http_flags_RANGEBROKEN )
+        c->flags &= ~http_flags_GOTFIRST;
+
 
     /* Add to end of queue */
     qptr = q->queue;
@@ -2849,7 +2877,8 @@ void http_send_request(http_connection *c)
 
 #ifndef NO_SECURE
     /* semi-bodge */
-    if ( c->flags & http_open_flags_TUNNEL )
+    if ( c->flags & http_open_flags_TUNNEL
+         && !c->SSL )
     {
         char *host = c->object + 8; /* "https://" */
         char *slash = strchr( host, '/' );
@@ -2959,6 +2988,10 @@ int http_send_request_headers( http_connection *c )
             /* end of supplied headers -- send Content-Length if reqd */
             *tmp_buffer = 0;
 
+#if DEBUG
+            http_show_flags(c);
+#endif
+
             if (c->bh)
             {
                 if (c->data_size == -1)
@@ -2984,7 +3017,8 @@ int http_send_request_headers( http_connection *c )
              * few bytes. If we've already had the first few bytes, ask for
              * the remainder.
              */
-            if ( c->flags & http_flags_GOTFIRST )
+            if ( c->flags & http_flags_GOTFIRST
+                 && !(c->flags & http_flags_RANGEBROKEN) )
             {
                 /* Unbelievably, F**kWitScape Enterprise Server gets it wrong
                  * if you ask it for "bytes=256-" ... it only gives you 1000
@@ -2996,16 +3030,23 @@ int http_send_request_headers( http_connection *c )
                               c->total_size-1 );
                 fdebugf( log_file, "%p: txheader Range: bytes=" IMAGE_HEADER1_T
                                    "-%d\n", c, c->total_size-1 );
+                c->flags &= ~http_open_flags_IMAGE;
             }
             else if ( ( c->flags & http_open_flags_IMAGE )
-                      && !( c->flags & ( http_open_flags_PRIORITY
-                                        | http_open_flags_HEAD ) )
+                      && !( c->flags & ( http_open_flags_HEAD
+                                         | http_flags_RANGEBROKEN ) )
                       && !c->bh )
             {
                 strcat( tmp_buffer, "Range: bytes=0-" IMAGE_HEADER_T "\r\n" );
                 fdebugf( log_file, "%p: txheader Range: bytes=0-"
                                    IMAGE_HEADER_T "\n", c );
             }
+            else
+                c->flags &= ~http_open_flags_IMAGE;
+
+            /* open_flags_IMAGE is now true ONLY if we've sent the range:
+             * header
+             */
 
             strcat(tmp_buffer, "\r\n");
         }
@@ -3122,7 +3163,20 @@ char* http_getline(http_connection *c, int read)
     /* pdh: might as well always read it */
     if ( MAX_LINE - c->buf_off - 1 > 0 )
     {
-        rc = http_recv( c, c->buffer + c->buf_off, MAX_LINE - c->buf_off - 1);
+        /* pdh: for the insecure prefix to a tunnelled conversation, peek
+         * don't read
+        if ( (c->flags & http_open_flags_TUNNEL)
+             && !c->SSL )
+        {
+            rc = recv(c->socket,c->buffer + c->buf_off,
+                            MAX_LINE - c->buf_off - 1, MSG_PEEK);
+            if ( rc>0 )
+                fdebugf( log_file, "%p: peeked %d bytes\n", c, rc );
+        }
+        else
+         */
+            rc = http_recv( c, c->buffer + c->buf_off,
+                            MAX_LINE - c->buf_off - 1);
 
         if ( rc==0 )
         {
@@ -3184,6 +3238,17 @@ char* http_getline(http_connection *c, int read)
     if (end)
     {
         c->buf_used = (end - c->buffer) + 1;
+
+        /* pdh: for the insecure prefix to a tunnelled conversation, we know
+         * we want to read this much now
+        if ( (c->flags & http_open_flags_TUNNEL)
+             && !c->SSL )
+        {
+            recv( c->socket, c->buffer, c->buf_used, 0 );
+            fdebugf( log_file, "%p: really read %d\n", c, c->buf_used );
+        }
+         */
+
         if (end[-1] == '\r')
             end[-1] = 0;
         end[0] = 0;
@@ -3572,7 +3637,24 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
          * if we've only asked for *one* byte range -- this is not as per spec!
          */
 
+        /* 25/4/97: No, it's worse than that. At least one server (the
+         * succinctly-named Open-Market-Secure-WebServer/2.0.12/RC0) returns
+         * mime junk and *doesn't tell us the total size* -- this is useless
+         * and means we must rerequest the whole image.
+         */
+
         char *p = strchr( value, ';' );
+
+        if ( prefixcmp( value, "MULTIPART/X-BYTERANGES" ) == 0
+             && c->total_size == 0 )
+        {
+            /* Nothing we can do. Restart the request and bear a grudge
+             * against this server in future.
+             */
+            http_set_server_flag( c, http_flags_RANGEBROKEN );
+            fdebugf( log_file, "%p: BYTE RANGES ARE BROKEN\n", c );
+
+        }
 
         if ( p )
         {
@@ -3600,8 +3682,9 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
 
                         c->nearlyboundary = -1; /* magic value */
 
-                        fdebugf(log_file, "%p: server push, boundary is '%s'\n",
-                                c, c->boundary+1 );
+                        fdebugf(log_file, "%p: server push, boundary is '%s'"
+                                           " total_size is %d\n",
+                                c, c->boundary+1, c->total_size );
 
                         /* client doesn't see this header (important for
                          * set_file_type to work)

@@ -26,7 +26,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff -wp ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff -wp ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4 -DUSING_INET5
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
@@ -137,9 +137,9 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
+o.mimemap:	c.mimemap
+o.mimemap:	C:h.kernel
+o.mimemap:	h.mimemap
 o.mimemap:	c.mimemap
 o.mimemap:	C:h.kernel
 o.mimemap:	h.mimemap
@@ -197,9 +197,12 @@ o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
 o.http:	h.csfs
-os.files:	c.files
-os.files:	C:h.kernel
-os.files:	h.files
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
 os.files:	c.files
 os.files:	C:h.kernel
 os.files:	h.files
