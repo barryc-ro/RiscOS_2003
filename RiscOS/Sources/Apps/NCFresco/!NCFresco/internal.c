@@ -49,10 +49,7 @@ static char *checked(int flag)
 static void get_form_size(int *width, int *height)
 {
     int char_height;
-/*
-    int char_width = webfonts[WEBFONT_TTY].space_width;
-    *width = (text_safe_box.x1 - text_safe_box.x0)/char_width - 8;
- */
+
     *width = webfont_tty_width(text_safe_box.x1 - text_safe_box.x0, 0) - 8;
 
     char_height = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
@@ -1108,6 +1105,10 @@ static int internal_action_opentoolbar(const char *query, const char *bfile, con
     else if (strcasecomp(bar, "openurl") == NULL)
     {
 	event = fevent_TOOLBAR_OPENURL;
+    }
+    else if (strcasecomp(bar, "vcr") == NULL)
+    {
+	event = fevent_TOOLBAR_CODEC;
     }
 
     if (event != -1)

@@ -328,39 +328,35 @@ os_error *fe_show_file_in_frame(fe_view v, char *file, char *frame)
 
 /* ------------------------------------------------------------------------------------------- */
 
-int fe_reload_possible(fe_view v)
+static os_error *fe__reload_possible(fe_view v, void *handle)
 {
-    return v && v->displaying && v->browser_mode == fe_browser_mode_WEB;
+    int *possible = handle;
+    
+    if (v && v->displaying && v->browser_mode == fe_browser_mode_WEB)
+	*possible++;
+
+    return NULL;
 }
 
-os_error *fe_reload(fe_view v)
+static os_error *fe__reload(fe_view v, void *handle)
 {
-    be_doc doc;
     os_error *ep = NULL;
 
-    if (!fe_reload_possible(v))
-        return NULL;
-
-    doc = v->displaying;
-
-    if (doc)
+    if (v && v->displaying && v->browser_mode == fe_browser_mode_WEB)
     {
         char *url;
 
-#if 0
-	backend_image_expire(doc, NULL);
-#else
 	/* First, flush all the images. */
-	ep = backend_doc_flush_image(doc, 0, be_openurl_flag_DEFER_IMAGES);
+	ep = backend_doc_flush_image(v->displaying, 0, be_openurl_flag_DEFER_IMAGES);
 	if (ep)
 	    return ep;
-#endif
+
+	if (!ep) ep = backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
+
 	/* We have to take a copy because if the file is from local disc
 	 * the 'displaying' doc will be removed before
 	 * the operation has completed
 	 */
-	if (!ep) ep = backend_doc_info(doc, NULL, NULL, &url, NULL);
-
         if (!ep)
         {
             url = strdup(url);
@@ -370,6 +366,19 @@ os_error *fe_reload(fe_view v)
     }
 
     return ep;
+    NOT_USED(handle);
+}
+
+int fe_reload_possible(fe_view v)
+{
+    int possible = 0;
+    iterate_frames(v, fe__reload_possible, &possible);
+    return possible != 0;
+}
+
+os_error *fe_reload(fe_view v)
+{
+    return iterate_frames(v, fe__reload, NULL);
 }
 
 /* ------------------------------------------------------------------------------------------- */

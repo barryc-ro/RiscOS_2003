@@ -269,6 +269,13 @@ static void misc_event_handler(int event, fe_view v)
     case fevent_OPEN_WRITEABLE:
 	tb_open_url_and_close();
 	break;
+
+    case fevent_STOP_OR_RELOAD:
+	if (fe_abort_fetch_possible(v))
+	    frontend_complain(fe_abort_fetch(v));
+	else
+	    frontend_complain(fe_reload(v));
+	break;
     }
 }
 

@@ -33,6 +33,7 @@
 #define fevent_SUB_CLASS_STATUS             0x0090
 #define fevent_SUB_CLASS_TOOLBAR            0x00A0
 #define fevent_SUB_CLASS_MISC2              0x00B0
+#define fevent_SUB_CLASS_CODEC              0x00C0
 
 /* global events */
 
@@ -143,12 +144,20 @@
 #define fevent_TOOLBAR_RELATED		    0x20A6
 #define fevent_TOOLBAR_OPENURL		    0x20A7
 #define fevent_TOOLBAR_NC1		    0x20A8
+#define fevent_TOOLBAR_CODEC		    0x20A9
 #define fevent_TOOLBAR_EXIT		    0x20AF /* unstack */
 
 #define fevent_PRINT_LETTER		    0x20B0
 #define fevent_PRINT_LEGAL		    0x20B1
 #define fevent_OPEN_WRITEABLE		    0x20B2
 #define fevent_STOP_OR_RELOAD		    0x20B3
+
+#define fevent_CODEC_STOP		    0x20C0
+#define fevent_CODEC_PLAY		    0x20C1
+#define fevent_CODEC_PAUSE		    0x20C2
+#define fevent_CODEC_REWIND		    0x20C3
+#define fevent_CODEC_FFWD		    0x20C4
+#define fevent_CODEC_RECORD		    0x20C5
 
 #define fevent_URLS_MASK	            0x00ff
 

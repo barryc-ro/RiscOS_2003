@@ -686,6 +686,10 @@ static void tb_bar_details_exit_fn(void)
     fe_dispose_view(fe_locate_view(TARGET_INFO));
 }
 
+static void tb_bar_codec_exit_fn(void)
+{
+}
+
 static void tb_bar_related_exit_fn(void)
 {
     fe_dispose_view(fe_locate_view(TARGET_INFO));
@@ -727,7 +731,8 @@ static tb_bar_descriptor bar_names[] =
     { "detailsT", NULL, tb_bar_details_entry_fn, tb_bar_details_exit_fn, I_DIRECTION },
     { "relatedT", NULL, tb_bar_related_entry_fn, tb_bar_related_exit_fn, I_DIRECTION },
     { "openurlT", NULL, 0, 0, I_DIRECTION },
-    { "statusWn", "statusW", 0, 0, fevent_MENU }
+    { "statusWn", "statusW", 0, 0, fevent_MENU },
+    { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION }
 };
 
 static tb_bar_info *tb_bar_init(int bar_num)
@@ -834,12 +839,19 @@ void tb_status_unstack(void)
     
     STBDBG(("tb_status_unstack(): in\n"));
 
-    tb_bar_dispose();
-
-    if (bar_list && old_state != status_CLOSED)
+    if (bar_list && bar_list->next)
     {
-	tb_status_show(old_state == status_OPEN_SMALL);
-	setfocus(bar_list->object_handle);
+	tb_bar_dispose();
+
+	if (old_state != status_CLOSED)
+	{
+	    tb_status_show(old_state == status_OPEN_SMALL);
+	    setfocus(bar_list->object_handle);
+	}
+    }
+    else
+    {
+	tb_status_hide(FALSE);
     }
 
     STBDBG(("tb_status_unstack(): out\n"));
@@ -942,7 +954,9 @@ int tb_init(int *m_list)
     frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "debugM", &menu_object[1]));
 #endif
 
-    tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
+    if (config_display_control_initial == 8)
+	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
+
     STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
 
     MemCheck_RestoreChecking(checking);
@@ -1562,21 +1576,27 @@ void tb_status_rotate(void)
 {
     if (bar_list)
     {
-	char sprite_name[13];
+	char sprite_name[40];
 
 	if (++turn_ctr == config_animation_frames)
 	    turn_ctr = 0;
 
-	sprintf(sprite_name, "%s%02d", config_animation_name, turn_ctr);
-	setfield(bar_list->object_handle, I_WORLD, sprite_name, FALSE);
-/* 	(os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 962, I_WORLD, sprite_name); */
+	sprintf(sprite_name, "%s%02d,%s%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 0x140140, I_WORLD, sprite_name);
+
+	sprintf(sprite_name, "%shl%02d,%shl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 1, bar_list->object_handle, 0x140140, I_WORLD, sprite_name);
     }
 }
 
 void tb_status_rotate_reset(void)
 {
     turn_ctr = -1;
-    tb_status_rotate();
+    if (bar_list)
+    {
+	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 0x140140, I_WORLD, "pgbtn,pgbtn");
+	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 1, bar_list->object_handle, 0x140140, I_WORLD, "pgbtnhl,pgbtnhl");
+    }
 }
 
 /*

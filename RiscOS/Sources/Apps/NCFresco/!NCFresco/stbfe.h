@@ -125,6 +125,8 @@ extern fe_view fe_locate_view(const char *name);
 extern void fe_submit_form(fe_view v, const char *id);
 extern void fe_open_keyboard(fe_view v);
 
+extern os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle);
+
 /* From internal.h */
 
 extern int print__copies, print__ul;

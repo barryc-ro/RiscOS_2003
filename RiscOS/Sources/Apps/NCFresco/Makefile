@@ -6,6 +6,9 @@
 #############################################################################
 #
 # $Log$
+# Revision 1.1.2.3  1997/02/19 14:17:47  smiddle
+# Sources fully up to date with ANT and Acorn changes since November
+#
 # Revision 1.1.2.2  1997/02/18 19:41:28  smiddle
 # Fixed up makefile and include so it would compile with external resources
 #
@@ -1000,17 +1003,17 @@ NCFRESCO_BUILDSTAMP:
 # Create a fresh directory holding the items that constitute
 # a release. Rebuild from scratch every time to be certain
 # that lingering files such as cookies don't end up here.
-NCFRESCO_DIST:  NCFRESCO_RISCOS
+NCFRESCO_DIST:  NCFRESCO_BUILD
 		@echo "Building the NCFRESCO RELEASE directory"
 		-@$(RM) -r $(RELS)
 		-@mkdir $(REL)
 		@mkdir $(RELS)
 		@cp -p \!NCFresco/Resources/UK/\!Boot1,feb $(RELS)/\!Boot,feb
-		@cp -p \!NCFresco/Resources/UK/\!Run1,feb $(RELS)/\!Run,feb
-		@cp -p \!NCFresco/\!RunImage,ff8 $(RELS)
-		@cp -p \!NCFresco/Resources/UK/\!Sprites,ff9 $(RELS)
+		@cp -p \!NCFresco/Resources/UK/\!Run3,feb $(RELS)/\!Run,feb
+		@cp -p ./abs/ncfresco $(RELS)/\!RunImage,ff8
+		@cp -p \!NCFresco/Resources/UK/\!Sprites3,ff9 $(RELS)/\!Sprites,ff9
 		@cp -p \!NCFresco/Resources/UK/Res,fae $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Sprites,ff9 $(RELS)
+		@cp -p \!NCFresco/Resources/UK/Sprites3,ff9 $(RELS)/Sprites,ff9
 		@cp -p \!NCFresco/Resources/UK/TileV,ff9 $(RELS)
 		@cp -p \!NCFresco/Resources/UK/TileN,ff9 $(RELS)
 		@cp -p \!NCFresco/Resources/UK/\!Help $(RELS)
@@ -1035,7 +1038,7 @@ NCFRESCO_DIST:  NCFRESCO_RISCOS
 		@echo "Please check this directory thoroughly before releasing it!"
 		@echo ""
 
-NCFRESCO_RELEASE: NCFRESCO_DIST
+NCFRESCO_RELEASE: NCFRESCO_BUILD
 		@echo "Building NCFRESCO release pack"
 		@cp -pr $(RELS) ../release/browser
 		@./fixlicense ../release/browser/\!NCFresco/\!RunImage,ff8 1000000 "Acorn Network Computers Dev"
@@ -1046,13 +1049,13 @@ NCFRESCO_RELEASE: NCFRESCO_DIST
 		@echo "Done"
 
 
-NCFRESCO_TEST_RUNIMAGE: NCFRESCO_RISCOS
+NCFRESCO_TEST_RUNIMAGE: NCFRESCO_BUILD
 		@echo "Updating NCFresco installation on bungle"
-		@rcp -r \!NCFresco/\!RunImage,ff8 'bungle:/export/home/ncd/default/boot/WWW/Dev/\!NCFresco'
+		@rcp -r abs/ncfresco 'bungle:/export/home/ncd/default/boot/WWW/Dev/\!NCFresco'
 		@echo "Done"
 		@echo ""
 
-NCFRESCO_TEST_RUNIMAGE_STAMP: NCFRESCO_RISCOS
+NCFRESCO_TEST_RUNIMAGE_STAMP: NCFRESCO_BUILD
 		@echo "Updating NCFresco installation on bungle"
 		@rcp -r ../release/browser/\!NCFresco/\!RunImage,ff8 'bungle:/export/home/ncd/default/boot/WWW/Dev/\!NCFresco'
 		@echo "Done"

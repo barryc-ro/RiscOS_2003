@@ -416,7 +416,7 @@ static void fe_type_file(fe_view v, const char *file_name)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle)
+os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle)
 {
     fe_view v;
     os_error *e = NULL;
@@ -1785,31 +1785,11 @@ static os_error *fe__abort_fetch_possible(fe_view v, void *handle)
 
     if (v->displaying)
     {
-#if 1
 	if (!v->had_completed || v->images_waiting)
         {
             (*possible)++;
       	    return NULL;
       	}
-	    
-#else
-	int fl;
-        int waiting, fetching, fetched, errors, in_trans, so_far;
-
-	if (backend_doc_info(v->displaying, &fl, NULL, NULL, NULL) == NULL &&
-	    (fl & be_doc_info_FETCHING) != 0)
-        {
-            (*possible)++;
-      	    return NULL;
-	}
-
-        if (backend_doc_images(v->displaying, &waiting, &fetching, &fetched, &errors, &in_trans, &so_far) == NULL &&
-            (waiting + fetching) != 0)
-        {
-            (*possible)++;
-      	    return NULL;
-        }
-#endif
     }
 
     return NULL;
