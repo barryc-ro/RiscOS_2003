@@ -61,6 +61,7 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,7 +98,7 @@
 #define strnul(s) ((s) [0] == '\0')
 
 static BOOL Started_Printing; /*used to suppress leading newlines in the
-                                text area. JRC 18 June 1991*/
+                                text area. J R C 18 June 1991*/
 
 static int scaleup (int xx)
 
@@ -135,7 +136,7 @@ static draw_usedFont [256];
 #define draw_font_vmove     11
 #define draw_font_colour    18
 #define draw_font_true_colour \
-                            19 /*JRC 22 Nov '89*/
+                            19 /*J R C 22 Nov '89*/
 #define draw_font_comment   21
 #define draw_font_underline 25
 #define draw_font_setfont   26
@@ -167,10 +168,10 @@ static int lineNum;
 static BOOL isSep (int c)
 
 {
-   #ifdef XTRACE
-      ftracef0 ("isSep\n");
-   #endif
-   return isprint (c) && isspace (c);
+  #ifdef XTRACE
+    ftracef0 ("isSep\n");
+  #endif
+  return c == ' ' || c == '\t'; /*J R C 24th Jul 1995*/
 }
 
 /* Globals used for address and maximum length of current chunk */
@@ -344,6 +345,100 @@ static int draw_getNum (int from, char *base, int *to, BOOL negative,
 }
 
 /*
+ Function    : draw_getFloat
+ Purpose     : get a float out of a string
+ Parameters  : offset into string
+               pointer to string
+               pointer to double (NULL -> no assignment)
+               flag: TRUE if negative numbers are allowed
+               flag: TRUE if the terminator must be present
+         OUT : updated offset
+ Returns     : termination code (see below)
+ Description : skip leading space; read a float; find terminator (if
+               required). Sets the termination code on the basis of what was
+               read, as follows:
+
+               OK: number read ok, terminator was <spaces>\n or <spaces>/,
+                   or no terminator required. Output pointer is character
+                   after terminator)
+               BAD: no number could be read, or invalid terminator
+               MORE: number read ok, terminator was another digit
+                              (output pointer points to digit)
+               The string is accessed via offsets to avoid flex block
+               problems.
+*/
+
+static int draw_getFloat (int from, char *base, double *to, BOOL negative,
+    BOOL terminate, int *rest)
+
+{ int r;
+  double d;
+  char *end;
+
+  #if TRACE
+    ftracef (__FILE__, __LINE__,
+        "draw_getFloat (\"%.10s...\"): from %d, to 0x%X, -ve %s, "
+        "terminate %s, rest 0x%X\n",
+        &base [from], from, to, whether (negative),
+        whether (terminate), rest);
+  #endif
+  /*Skip leading spaces*/
+  while (isSep (base [from])) from++;
+
+  /*Skip leading minus and digits (and .)*/
+  if (isdigit (base [from]) || base [from] == '.')
+    r = from;
+  else if (negative && base [from] == '-')
+    r = from + 1;
+  else
+  { ftracef0 ("draw_getFloat -> draw_numBAD\n");
+    return draw_numBAD;
+  }
+  while (isdigit (base [r]) || base [r] == '.') r++;
+
+  /*Get the value*/
+  d = strtod (&base [from], &end);
+  ftracef1 ("Read %f\n", d);
+
+  if (r == from || end == &base [from] || d == HUGE_VAL || d == -HUGE_VAL)
+  { ftracef0 ("draw_getFloat -> draw_numBAD\n");
+    return draw_numBAD;
+  }
+  if (to != NULL) *to = d;
+
+  if (!terminate)
+  { if (base [r] == '/')
+      /*Termination is allowed, just not compulsory.*/
+      *rest = r + 1;
+    else
+      *rest = r;
+    ftracef1 ("draw_getFloat -> draw_numOK, next \'%c\'\n",
+        base [*rest]);
+    return draw_numOK;
+  }
+  else
+  { /*Skip trailing spaces*/
+    while (isSep (base [r])) r++;
+
+    if (isdigit (base [r]))
+    { *rest = r;
+      ftracef1 ("draw_getFloat -> draw_numMORE, next \'%c\'\n",
+        base [*rest]);
+      return draw_numMORE;
+    }
+    else if (isTerm (base [r]))
+    { *rest = r + 1;
+      ftracef1 ("draw_getFloat -> draw_numOK, next \'%c\'\n",
+        base [*rest]);
+      return draw_numOK;
+    }
+    else
+    { ftracef0 ("draw_getFloat -> draw_numBAD\n");
+      return draw_numBAD;
+  } }
+}
+
+/*
  Function    : draw_text_setFont
  Purpose     : locate and record font
  Parameters  : pointer to start of font definition sequence
@@ -372,7 +467,8 @@ static char *draw_text_setFont (char *in, font *fonts, BOOL whinge,
     draw_usedFont [handle], and return the handle in *handle. Otherwise,
     look up the font name in draw_fontcat and return its entry number.*/
 
-{ int fontNumber, end, pointSize, scaleSize, pointWidth, scaleWidth;
+{ int fontNumber, end, scaleSize, scaleWidth;
+  double pointSize, pointWidth;
   char *name, displaced;
   os_error *err;
   font fontHandle;
@@ -399,10 +495,10 @@ static char *draw_text_setFont (char *in, font *fonts, BOOL whinge,
   *in = '\0';
 
   /* Get point size, and maybe width */
-  ftracef0 ("calling draw_getNum()\n");
-  if (draw_getNum (1, in, &pointSize, FALSE, TRUE, &end) == draw_numMORE)
-  { ftracef0 ("calling draw_getNum() again\n");
-    draw_getNum (end, in, &pointWidth, FALSE, TRUE, &end);
+  ftracef0 ("calling draw_getFloat()\n");
+  if (draw_getFloat (1, in, &pointSize, FALSE, TRUE, &end) == draw_numMORE)
+  { ftracef0 ("calling draw_getFloat() again\n");
+    draw_getFloat (end, in, &pointWidth, FALSE, TRUE, &end);
   }
   else
     pointWidth = pointSize;
@@ -415,7 +511,7 @@ static char *draw_text_setFont (char *in, font *fonts, BOOL whinge,
   else if (fonts != NULL)
   { /*Find sizes at current scaling*/
     if (draw_displ_scalefactor == 0.0)
-      scaleSize  = 16*pointSize, scaleWidth = 16*pointWidth;
+      scaleSize  = (int) (16*pointSize), scaleWidth = (int) (16*pointWidth);
     else
       scaleSize  = (int) (16*draw_displ_scalefactor*pointSize),
       scaleWidth = (int) (16*draw_displ_scalefactor*pointWidth);
@@ -458,7 +554,7 @@ static char *draw_text_setFont (char *in, font *fonts, BOOL whinge,
 
 static void  draw_text_setColour (int colour, int backcolour)
 
-{ font fonth  = 0; /*was -1 JRC 23 Nov '89*/
+{ font fonth  = 0; /*was -1 J R C 23 Nov '89*/
   int  offset = 14;
 
   ftracef2 ("draw_text_setColour: colour: 0x%X; backcolour: 0x%X\n",
@@ -809,32 +905,30 @@ static char *draw_text_getString (char *in, font *fonts,
     if (out >= chunkLen) break;
 
     if (*in == '\t')  /* tab -> space */
-    { /*if (currentFont != -1) No need to check font here. JRC 25 Jan 1990*/
+    { /*if (currentFont != -1) No need to check font here. J R C 25 Jan 1990*/
       { chunk [out++] = ' ';
         Started_Printing = printing = TRUE;
       }
       in++;
     }
     else if (*in == '\n')
-    { if (currentFont == -1 || !Started_Printing)
+    { in++;
+      if (currentFont != -1 && Started_Printing)
         /*Skip newlines before first valid font - or if not printing yet
-          JRC 24 Jan 1990*/
-        in++;
-      else
-      { /*Newline - paragraph break if either followed by another
-          newline. Used to be also if it was the first printable
-          character, but that can't happen now. JRC 24 Jan 1990*/
-        if (!printing || *++in == '\n')
+          J R C 24 Jan 1990*/
+      { if (!printing || *in == '\n' || isSep (*in))
+            /*Newline-space also starts a new paragraph. J R C 24th Jul 1995*/
         { /* Paragraph termination */
           chunk [out++] = '\n';
-          in++;
+          if (*in == '\n') in++; /*Do not skip over a space, if it was
+              one. J R C 24th Jul 1995*/
           getOut = TRUE;
         }
         else
-        { /*Newline not preceded or followed by a space generates a space*/
-          if (!isSep (chunk [out - 1]) && !isSep (*in) && *in != '\t')
+          /*Newline not preceded or followed by a space generates a space*/
+          if (!(isSep (chunk [out - 1]) || isSep (*in)))
             chunk [out++] = ' ';
-    } } }
+    } }
     else if (*in < ' ')
       /* skip control character */
       in++;
@@ -849,7 +943,7 @@ static char *draw_text_getString (char *in, font *fonts,
     else                                      /* \ -> special sequence */
     { switch (*++in)
       { case '\\':                              /* \\ : replace by \ */
-          if (TRUE /*currentFont != -1 JRC*/)
+          if (TRUE /*currentFont != -1 J R C*/)
           { chunk [out++] = '\\';
             Started_Printing = printing = TRUE;
           }
@@ -1137,7 +1231,7 @@ static int draw_text_getLine (int offset, os_error **error, int width,
           i += 4;
         break;
 
-        case draw_font_true_colour: /*JRC 22 Nov '89*/
+        case draw_font_true_colour: /*J R C 22 Nov '89*/
           i += 8;
         break;
 
@@ -1338,7 +1432,7 @@ static int draw_text_paintCheck (int offset, int y, /*draw_bboxtyp *clip,*/
             t += 4;
           break;
 
-          case draw_font_true_colour: /*JRC 22 Nov '89*/
+          case draw_font_true_colour: /*J R C 22 Nov '89*/
             draw_text_setColour
             ( chunk [t + 4] << 8 | chunk [t + 5] << 16 | chunk [t + 6] << 24,
               chunk [t + 1] << 8 | chunk [t + 2] << 16 | chunk [t + 3] << 24
@@ -1503,7 +1597,7 @@ static void draw_text_stateScan (char *chunk, int start, int end,
 
       case draw_font_true_colour:
         c += 7;
-      break; /*JRC 22 Nov '89*/
+      break; /*J R C 22 Nov '89*/
 
       case draw_font_vmove:
       { int move = chunk [c] | chunk [c + 1] << 8 | chunk [c + 2] << 16;
@@ -1905,12 +1999,12 @@ BOOL draw_text_verifyTextArea (char *text, int length, int *columns,
               return FALSE;
             }
 
-            ftracef0 ("calling draw_getNum()\n");
-            if ((sizeTerm = draw_getNum (0, text, NULL, FALSE, TRUE, &i)) ==
+            ftracef0 ("calling draw_getFloat()\n");
+            if ((sizeTerm = draw_getFloat (0, text, NULL, FALSE, TRUE, &i)) ==
                 draw_numMORE)
             { /* Read second number */
-              ftracef0 ("calling draw_getNum()\n");
-              if (draw_getNum (i, text, NULL, FALSE, TRUE, &i) != draw_numOK)
+              ftracef0 ("calling draw_getFloat()\n");
+              if (draw_getFloat (i, text, NULL, FALSE, TRUE, &i) != draw_numOK)
               { draw_report ("TextF3", 0);
                 return FALSE;
               }
@@ -1983,7 +2077,7 @@ BOOL draw_text_verifyTextArea (char *text, int length, int *columns,
               }
               if (*++text == '/') text++;
             #else
-              /*JRC 20 June 1991 allow any number here*/
+              /*J R C 20 June 1991 allow any number here*/
               { int i;
 
                 ftracef0 ("calling draw_getNum()\n");
