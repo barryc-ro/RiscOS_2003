@@ -1,0 +1,1480 @@
+# Makefile for NFSSTB
+#
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 05-May-95  RWB          Mangled.
+#
+
+#
+# Paths
+#
+EXP_HDR = <export$dir>
+
+#
+# Generic options:
+#
+MKDIR   = cdir
+AS      = objasm
+CC      = cc
+CMHG    = cmhg
+CP      = copy
+LD      = link
+RM      = remove
+WIPE    = -wipe
+CD	= dir
+
+
+AFLAGS = -depend !Depend -Stamp -quit
+CFLAGS  = -c -zM -wdp -ffcah -zps0 ${INCLUDES} -depend !Depend -Darm -DDEBUGON=$(DBUG) -DNETACCESSCOUNT
+CPCCFLAGS=-c -zM -pcc -ffa -zps ${INCLUDES} -DDEBUGON=$(DBUG) -DNETACCESSCOUNT
+CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
+
+#
+# Libraries
+#
+CLIB      = CLIB:o.stubs
+RLIB      = RISCOSLIB:o.risc_oslib
+RSTUBS    = RISCOSLIB:o.rstubs
+ROMSTUBS  = RISCOSLIB:o.romstubs
+ROMCSTUBS = RISCOSLIB:o.romcstubs
+ABSSYM    = RISC_OSLib:o.AbsSym
+
+#
+# Include files
+#
+INCLUDES = -IC: -I^.AUN.include.h -I^.AUN.include
+
+#
+# Debug flag
+#
+DBUG = 0
+#
+# Program specific options:
+#
+COMPONENT = NFSSTB
+TARGET    = rm.NFS
+ROMTARGET = aof.NFS
+OBJS      =	  \
+  o.nfscmhg   	  \
+  o.ModuleWrap    \
+  o.Commands      \
+  o.Utils         \
+  o.Clients       \
+  o.ChangeInfo    \
+  o.PutBytesX     \
+  o.pathmunge     \
+  o.Cache         \
+  o.printfuncs    \
+  o.chains        \
+  o.enumdir       \
+  o._Args         \
+  o._Close        \
+  o._File         \
+  o._Func         \
+  o._GBPB         \
+  o._GetBytes     \
+  o._Open         \
+  o._PutBytes     \
+  o.Interface     \
+  o.RMInfo        \
+  o.Static        \
+  o.allerrs       \
+  o.nfs_prot_c    \
+  o.nfs_prot_x    \
+  o.pcnfsd_c      \
+  o.pcnfsd_x      \
+  o.mount_clnt    \
+  o.mount_xdr     \
+  o.Hourglass     \
+  o.extensions    \
+  o.access        \
+  o.nfsrw         \
+  o.db 		  \
+  o.rquota	  \
+  ^.libs.rpc.rpclibzm       \
+  ^.libs.rpc.o.rpc_common   \
+  ^.libs.inetlib.inetlibzm  \
+  ^.libs.socklib.socklibzm  \
+  ^.libs.unixlib.unixlibzm
+
+#
+# Rule patterns
+#
+.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} -o $@ $<
+.s.o:;      ${AS} ${AFLAGS} $< $@
+
+#
+# build a NFS module
+#
+all: ${TARGET}
+        @echo ${COMPONENT}: all complete
+
+#
+# RISC OS ROM build rules:
+#
+rom: ${ROMTARGET}
+        @echo ${COMPONENT}: rom module built
+
+export: 
+        @echo ${COMPONENT}: export complete
+
+install_rom: ${ROMTARGET}
+        ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom module installed
+
+clean:
+        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} ${TARGET} ${WFLAGS}
+        ${WIPE} ${ROMTARGET} ${WFLAGS}
+        ${WIPE} map.NFSSTB ${WFLAGS}
+	${CD} ^.libs.inetlib
+	amu_machine clean
+	${CD} ^.rpc
+	amu_machine clean
+	${CD} ^.socklib
+	amu_machine clean
+	${CD} ^.unixlib
+	amu_machine clean
+	${CD} ^.^.NFS
+        @echo ${COMPONENT}: cleaned
+
+#
+# Target 
+#
+${TARGET}: ${OBJS}
+        ${LD} -o $@ -rmf ${OBJS} ${CLIB}
+
+#
+# ROM Target 
+#
+${ROMTARGET}: ${OBJS}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        
+#
+# Final link for the ROM Image (using given base address)
+#
+rom_link:
+        ${MKDIR} linked
+        ${MKDIR} map
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
+#
+# Some rules that need explicitly declaring
+#
+
+o.nfscmhg :     cmhg.nfscmhg
+                cmhg cmhg.nfscmhg o.nfscmhg
+
+o.mount_clnt :  c.mount_clnt
+                $(CC) ${CPCCFLAGS} c.mount_clnt
+
+o.mount_xdr :   c.mount_xdr
+                $(CC) ${CPCCFLAGS} c.mount_xdr
+
+# The following dependancies should make the files required from other build frameworks
+
+^.libs.inetlib.inetlibzm  : 
+	${CD} ^.libs.inetlib
+	amu_machine all
+	back
+^.libs.rpc.rpclibzm   : 
+	${CD} ^.libs.rpc
+	amu_machine all
+	back
+^.libs.socklib.socklibzm  :
+	${CD} ^.libs.socklib
+	amu_machine all
+	back
+^.libs.unixlib.unixlibzm  :
+	${CD} ^.libs.unixlib
+	amu_machine all
+	back
+
+
+# Dynamic dependencies:
+^.rpc.o.rpc_common:	^.rpc.c.rpc_common
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.rpc
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.types
+^.rpc.o.rpc_common:	^.AUN.include.sys.h.types
+^.rpc.o.rpc_common:	^.AUN.include.sys.h.time
+^.rpc.o.rpc_common:	^.AUN.include.sys.h.time
+^.rpc.o.rpc_common:	^.AUN.include.netinet.h.in
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.xdr
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.auth
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.clnt
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.rpc_msg
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.auth_unix
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.svc
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.svc_auth
+^.rpc.o.rpc_common:	^.AUN.include.rpc.h.netdb
+o.ModuleWrap:	c.ModuleWrap
+o.ModuleWrap:	h.NFS
+o.ModuleWrap:	h.db
+o.ModuleWrap:	h.errno
+o.ModuleWrap:	C:h.kernel
+o.ModuleWrap:	^.AUN.include.rpc.h.rpc
+o.ModuleWrap:	^.AUN.include.rpc.h.types
+o.ModuleWrap:	^.AUN.include.sys.h.types
+o.ModuleWrap:	^.AUN.include.sys.h.time
+o.ModuleWrap:	^.AUN.include.netinet.h.in
+o.ModuleWrap:	^.AUN.include.rpc.h.xdr
+o.ModuleWrap:	^.AUN.include.rpc.h.auth
+o.ModuleWrap:	^.AUN.include.rpc.h.clnt
+o.ModuleWrap:	^.AUN.include.rpc.h.rpc_msg
+o.ModuleWrap:	^.AUN.include.rpc.h.auth_unix
+o.ModuleWrap:	^.AUN.include.rpc.h.svc
+o.ModuleWrap:	^.AUN.include.rpc.h.svc_auth
+o.ModuleWrap:	^.AUN.include.rpc.h.netdb
+o.ModuleWrap:	h.Consts
+o.ModuleWrap:	C:h.swis
+o.ModuleWrap:	h.Types
+o.ModuleWrap:	h.nfs_prot
+o.ModuleWrap:	h.mount
+o.ModuleWrap:	h.pcnfsd
+o.ModuleWrap:	h.AllErrs
+o.ModuleWrap:	h.Chains
+o.ModuleWrap:	h.Commands
+o.ModuleWrap:	h.printfuncs
+o.ModuleWrap:	h.RMInfo
+o.ModuleWrap:	h.Static
+o.ModuleWrap:	h.Utils
+o.ModuleWrap:	h.Clients
+o.ModuleWrap:	h.pathmunge
+o.ModuleWrap:	h.Cache
+o.ModuleWrap:	h.veneers
+o.ModuleWrap:	h.Interface
+o.ModuleWrap:	h.fsentries
+o.ModuleWrap:	h.enumdir
+o.ModuleWrap:	h._Func
+o.ModuleWrap:	h._GBPB
+o.ModuleWrap:	h._Open
+o.ModuleWrap:	h.Hourglass
+o.ModuleWrap:	h.extensions
+o.ModuleWrap:	h.ChangeInfo
+o.ModuleWrap:	h.PutBytesX
+o.ModuleWrap:	h.ModuleWrap
+o.Commands:	c.Commands
+o.Commands:	h.NFS
+o.Commands:	h.db
+o.Commands:	h.errno
+o.Commands:	C:h.kernel
+o.Commands:	^.AUN.include.rpc.h.rpc
+o.Commands:	^.AUN.include.rpc.h.types
+o.Commands:	^.AUN.include.sys.h.types
+o.Commands:	^.AUN.include.sys.h.time
+o.Commands:	^.AUN.include.netinet.h.in
+o.Commands:	^.AUN.include.rpc.h.xdr
+o.Commands:	^.AUN.include.rpc.h.auth
+o.Commands:	^.AUN.include.rpc.h.clnt
+o.Commands:	^.AUN.include.rpc.h.rpc_msg
+o.Commands:	^.AUN.include.rpc.h.auth_unix
+o.Commands:	^.AUN.include.rpc.h.svc
+o.Commands:	^.AUN.include.rpc.h.svc_auth
+o.Commands:	^.AUN.include.rpc.h.netdb
+o.Commands:	h.Consts
+o.Commands:	C:h.swis
+o.Commands:	h.Types
+o.Commands:	h.nfs_prot
+o.Commands:	h.mount
+o.Commands:	h.pcnfsd
+o.Commands:	h.AllErrs
+o.Commands:	h.Chains
+o.Commands:	h.Commands
+o.Commands:	h.printfuncs
+o.Commands:	h.RMInfo
+o.Commands:	h.Static
+o.Commands:	h.Utils
+o.Commands:	h.Clients
+o.Commands:	h.pathmunge
+o.Commands:	h.Cache
+o.Commands:	h.veneers
+o.Commands:	h.Interface
+o.Commands:	h.fsentries
+o.Commands:	h.enumdir
+o.Commands:	h._Func
+o.Commands:	h._GBPB
+o.Commands:	h._Open
+o.Commands:	h.Hourglass
+o.Commands:	h.extensions
+o.Commands:	h.ChangeInfo
+o.Commands:	h.PutBytesX
+o.Commands:	h.ModuleWrap
+o.Utils:	c.Utils
+o.Utils:	h.NFS
+o.Utils:	h.db
+o.Utils:	h.errno
+o.Utils:	C:h.kernel
+o.Utils:	^.AUN.include.rpc.h.rpc
+o.Utils:	^.AUN.include.rpc.h.types
+o.Utils:	^.AUN.include.sys.h.types
+o.Utils:	^.AUN.include.sys.h.time
+o.Utils:	^.AUN.include.netinet.h.in
+o.Utils:	^.AUN.include.rpc.h.xdr
+o.Utils:	^.AUN.include.rpc.h.auth
+o.Utils:	^.AUN.include.rpc.h.clnt
+o.Utils:	^.AUN.include.rpc.h.rpc_msg
+o.Utils:	^.AUN.include.rpc.h.auth_unix
+o.Utils:	^.AUN.include.rpc.h.svc
+o.Utils:	^.AUN.include.rpc.h.svc_auth
+o.Utils:	^.AUN.include.rpc.h.netdb
+o.Utils:	h.Consts
+o.Utils:	C:h.swis
+o.Utils:	h.Types
+o.Utils:	h.nfs_prot
+o.Utils:	h.mount
+o.Utils:	h.pcnfsd
+o.Utils:	h.AllErrs
+o.Utils:	h.Chains
+o.Utils:	h.Commands
+o.Utils:	h.printfuncs
+o.Utils:	h.RMInfo
+o.Utils:	h.Static
+o.Utils:	h.Utils
+o.Utils:	h.Clients
+o.Utils:	h.pathmunge
+o.Utils:	h.Cache
+o.Utils:	h.veneers
+o.Utils:	h.Interface
+o.Utils:	h.fsentries
+o.Utils:	h.enumdir
+o.Utils:	h._Func
+o.Utils:	h._GBPB
+o.Utils:	h._Open
+o.Utils:	h.Hourglass
+o.Utils:	h.extensions
+o.Utils:	h.ChangeInfo
+o.Utils:	h.PutBytesX
+o.Utils:	h.ModuleWrap
+o.Utils:	h.rquota
+o.Clients:	c.Clients
+o.Clients:	h.NFS
+o.Clients:	h.db
+o.Clients:	h.errno
+o.Clients:	C:h.kernel
+o.Clients:	^.AUN.include.rpc.h.rpc
+o.Clients:	^.AUN.include.rpc.h.types
+o.Clients:	^.AUN.include.sys.h.types
+o.Clients:	^.AUN.include.sys.h.time
+o.Clients:	^.AUN.include.netinet.h.in
+o.Clients:	^.AUN.include.rpc.h.xdr
+o.Clients:	^.AUN.include.rpc.h.auth
+o.Clients:	^.AUN.include.rpc.h.clnt
+o.Clients:	^.AUN.include.rpc.h.rpc_msg
+o.Clients:	^.AUN.include.rpc.h.auth_unix
+o.Clients:	^.AUN.include.rpc.h.svc
+o.Clients:	^.AUN.include.rpc.h.svc_auth
+o.Clients:	^.AUN.include.rpc.h.netdb
+o.Clients:	h.Consts
+o.Clients:	C:h.swis
+o.Clients:	h.Types
+o.Clients:	h.nfs_prot
+o.Clients:	h.mount
+o.Clients:	h.pcnfsd
+o.Clients:	h.AllErrs
+o.Clients:	h.Chains
+o.Clients:	h.Commands
+o.Clients:	h.printfuncs
+o.Clients:	h.RMInfo
+o.Clients:	h.Static
+o.Clients:	h.Utils
+o.Clients:	h.Clients
+o.Clients:	h.pathmunge
+o.Clients:	h.Cache
+o.Clients:	h.veneers
+o.Clients:	h.Interface
+o.Clients:	h.fsentries
+o.Clients:	h.enumdir
+o.Clients:	h._Func
+o.Clients:	h._GBPB
+o.Clients:	h._Open
+o.Clients:	h.Hourglass
+o.Clients:	h.extensions
+o.Clients:	h.ChangeInfo
+o.Clients:	h.PutBytesX
+o.Clients:	h.ModuleWrap
+o.Clients:	h.rquota
+o.ChangeInfo:	c.ChangeInfo
+o.ChangeInfo:	h.NFS
+o.ChangeInfo:	h.db
+o.ChangeInfo:	h.errno
+o.ChangeInfo:	C:h.kernel
+o.ChangeInfo:	^.AUN.include.rpc.h.rpc
+o.ChangeInfo:	^.AUN.include.rpc.h.types
+o.ChangeInfo:	^.AUN.include.sys.h.types
+o.ChangeInfo:	^.AUN.include.sys.h.time
+o.ChangeInfo:	^.AUN.include.netinet.h.in
+o.ChangeInfo:	^.AUN.include.rpc.h.xdr
+o.ChangeInfo:	^.AUN.include.rpc.h.auth
+o.ChangeInfo:	^.AUN.include.rpc.h.clnt
+o.ChangeInfo:	^.AUN.include.rpc.h.rpc_msg
+o.ChangeInfo:	^.AUN.include.rpc.h.auth_unix
+o.ChangeInfo:	^.AUN.include.rpc.h.svc
+o.ChangeInfo:	^.AUN.include.rpc.h.svc_auth
+o.ChangeInfo:	^.AUN.include.rpc.h.netdb
+o.ChangeInfo:	h.Consts
+o.ChangeInfo:	C:h.swis
+o.ChangeInfo:	h.Types
+o.ChangeInfo:	h.nfs_prot
+o.ChangeInfo:	h.mount
+o.ChangeInfo:	h.pcnfsd
+o.ChangeInfo:	h.AllErrs
+o.ChangeInfo:	h.Chains
+o.ChangeInfo:	h.Commands
+o.ChangeInfo:	h.printfuncs
+o.ChangeInfo:	h.RMInfo
+o.ChangeInfo:	h.Static
+o.ChangeInfo:	h.Utils
+o.ChangeInfo:	h.Clients
+o.ChangeInfo:	h.pathmunge
+o.ChangeInfo:	h.Cache
+o.ChangeInfo:	h.veneers
+o.ChangeInfo:	h.Interface
+o.ChangeInfo:	h.fsentries
+o.ChangeInfo:	h.enumdir
+o.ChangeInfo:	h._Func
+o.ChangeInfo:	h._GBPB
+o.ChangeInfo:	h._Open
+o.ChangeInfo:	h.Hourglass
+o.ChangeInfo:	h.extensions
+o.ChangeInfo:	h.ChangeInfo
+o.ChangeInfo:	h.PutBytesX
+o.ChangeInfo:	h.ModuleWrap
+o.PutBytesX:	c.PutBytesX
+o.PutBytesX:	h.NFS
+o.PutBytesX:	h.db
+o.PutBytesX:	h.errno
+o.PutBytesX:	C:h.kernel
+o.PutBytesX:	^.AUN.include.rpc.h.rpc
+o.PutBytesX:	^.AUN.include.rpc.h.types
+o.PutBytesX:	^.AUN.include.sys.h.types
+o.PutBytesX:	^.AUN.include.sys.h.time
+o.PutBytesX:	^.AUN.include.netinet.h.in
+o.PutBytesX:	^.AUN.include.rpc.h.xdr
+o.PutBytesX:	^.AUN.include.rpc.h.auth
+o.PutBytesX:	^.AUN.include.rpc.h.clnt
+o.PutBytesX:	^.AUN.include.rpc.h.rpc_msg
+o.PutBytesX:	^.AUN.include.rpc.h.auth_unix
+o.PutBytesX:	^.AUN.include.rpc.h.svc
+o.PutBytesX:	^.AUN.include.rpc.h.svc_auth
+o.PutBytesX:	^.AUN.include.rpc.h.netdb
+o.PutBytesX:	h.Consts
+o.PutBytesX:	C:h.swis
+o.PutBytesX:	h.Types
+o.PutBytesX:	h.nfs_prot
+o.PutBytesX:	h.mount
+o.PutBytesX:	h.pcnfsd
+o.PutBytesX:	h.AllErrs
+o.PutBytesX:	h.Chains
+o.PutBytesX:	h.Commands
+o.PutBytesX:	h.printfuncs
+o.PutBytesX:	h.RMInfo
+o.PutBytesX:	h.Static
+o.PutBytesX:	h.Utils
+o.PutBytesX:	h.Clients
+o.PutBytesX:	h.pathmunge
+o.PutBytesX:	h.Cache
+o.PutBytesX:	h.veneers
+o.PutBytesX:	h.Interface
+o.PutBytesX:	h.fsentries
+o.PutBytesX:	h.enumdir
+o.PutBytesX:	h._Func
+o.PutBytesX:	h._GBPB
+o.PutBytesX:	h._Open
+o.PutBytesX:	h.Hourglass
+o.PutBytesX:	h.extensions
+o.PutBytesX:	h.ChangeInfo
+o.PutBytesX:	h.PutBytesX
+o.PutBytesX:	h.ModuleWrap
+o.pathmunge:	c.pathmunge
+o.pathmunge:	h.NFS
+o.pathmunge:	h.db
+o.pathmunge:	h.errno
+o.pathmunge:	C:h.kernel
+o.pathmunge:	^.AUN.include.rpc.h.rpc
+o.pathmunge:	^.AUN.include.rpc.h.types
+o.pathmunge:	^.AUN.include.sys.h.types
+o.pathmunge:	^.AUN.include.sys.h.time
+o.pathmunge:	^.AUN.include.netinet.h.in
+o.pathmunge:	^.AUN.include.rpc.h.xdr
+o.pathmunge:	^.AUN.include.rpc.h.auth
+o.pathmunge:	^.AUN.include.rpc.h.clnt
+o.pathmunge:	^.AUN.include.rpc.h.rpc_msg
+o.pathmunge:	^.AUN.include.rpc.h.auth_unix
+o.pathmunge:	^.AUN.include.rpc.h.svc
+o.pathmunge:	^.AUN.include.rpc.h.svc_auth
+o.pathmunge:	^.AUN.include.rpc.h.netdb
+o.pathmunge:	h.Consts
+o.pathmunge:	C:h.swis
+o.pathmunge:	h.Types
+o.pathmunge:	h.nfs_prot
+o.pathmunge:	h.mount
+o.pathmunge:	h.pcnfsd
+o.pathmunge:	h.AllErrs
+o.pathmunge:	h.Chains
+o.pathmunge:	h.Commands
+o.pathmunge:	h.printfuncs
+o.pathmunge:	h.RMInfo
+o.pathmunge:	h.Static
+o.pathmunge:	h.Utils
+o.pathmunge:	h.Clients
+o.pathmunge:	h.pathmunge
+o.pathmunge:	h.Cache
+o.pathmunge:	h.veneers
+o.pathmunge:	h.Interface
+o.pathmunge:	h.fsentries
+o.pathmunge:	h.enumdir
+o.pathmunge:	h._Func
+o.pathmunge:	h._GBPB
+o.pathmunge:	h._Open
+o.pathmunge:	h.Hourglass
+o.pathmunge:	h.extensions
+o.pathmunge:	h.ChangeInfo
+o.pathmunge:	h.PutBytesX
+o.pathmunge:	h.ModuleWrap
+o.pathmunge:	h.enumdir
+o.Cache:	c.Cache
+o.Cache:	h.NFS
+o.Cache:	h.db
+o.Cache:	h.errno
+o.Cache:	C:h.kernel
+o.Cache:	^.AUN.include.rpc.h.rpc
+o.Cache:	^.AUN.include.rpc.h.types
+o.Cache:	^.AUN.include.sys.h.types
+o.Cache:	^.AUN.include.sys.h.time
+o.Cache:	^.AUN.include.netinet.h.in
+o.Cache:	^.AUN.include.rpc.h.xdr
+o.Cache:	^.AUN.include.rpc.h.auth
+o.Cache:	^.AUN.include.rpc.h.clnt
+o.Cache:	^.AUN.include.rpc.h.rpc_msg
+o.Cache:	^.AUN.include.rpc.h.auth_unix
+o.Cache:	^.AUN.include.rpc.h.svc
+o.Cache:	^.AUN.include.rpc.h.svc_auth
+o.Cache:	^.AUN.include.rpc.h.netdb
+o.Cache:	h.Consts
+o.Cache:	C:h.swis
+o.Cache:	h.Types
+o.Cache:	h.nfs_prot
+o.Cache:	h.mount
+o.Cache:	h.pcnfsd
+o.Cache:	h.AllErrs
+o.Cache:	h.Chains
+o.Cache:	h.Commands
+o.Cache:	h.printfuncs
+o.Cache:	h.RMInfo
+o.Cache:	h.Static
+o.Cache:	h.Utils
+o.Cache:	h.Clients
+o.Cache:	h.pathmunge
+o.Cache:	h.Cache
+o.Cache:	h.veneers
+o.Cache:	h.Interface
+o.Cache:	h.fsentries
+o.Cache:	h.enumdir
+o.Cache:	h._Func
+o.Cache:	h._GBPB
+o.Cache:	h._Open
+o.Cache:	h.Hourglass
+o.Cache:	h.extensions
+o.Cache:	h.ChangeInfo
+o.Cache:	h.PutBytesX
+o.Cache:	h.ModuleWrap
+o.Cache:	h.nfsrw
+o.Cache:	h.NFS
+o.Cache:	^.AUN.include.sys.h.time
+o.printfuncs:	c.printfuncs
+o.printfuncs:	h.NFS
+o.printfuncs:	h.db
+o.printfuncs:	h.errno
+o.printfuncs:	C:h.kernel
+o.printfuncs:	^.AUN.include.rpc.h.rpc
+o.printfuncs:	^.AUN.include.rpc.h.types
+o.printfuncs:	^.AUN.include.sys.h.types
+o.printfuncs:	^.AUN.include.sys.h.time
+o.printfuncs:	^.AUN.include.netinet.h.in
+o.printfuncs:	^.AUN.include.rpc.h.xdr
+o.printfuncs:	^.AUN.include.rpc.h.auth
+o.printfuncs:	^.AUN.include.rpc.h.clnt
+o.printfuncs:	^.AUN.include.rpc.h.rpc_msg
+o.printfuncs:	^.AUN.include.rpc.h.auth_unix
+o.printfuncs:	^.AUN.include.rpc.h.svc
+o.printfuncs:	^.AUN.include.rpc.h.svc_auth
+o.printfuncs:	^.AUN.include.rpc.h.netdb
+o.printfuncs:	h.Consts
+o.printfuncs:	C:h.swis
+o.printfuncs:	h.Types
+o.printfuncs:	h.nfs_prot
+o.printfuncs:	h.mount
+o.printfuncs:	h.pcnfsd
+o.printfuncs:	h.AllErrs
+o.printfuncs:	h.Chains
+o.printfuncs:	h.Commands
+o.printfuncs:	h.printfuncs
+o.printfuncs:	h.RMInfo
+o.printfuncs:	h.Static
+o.printfuncs:	h.Utils
+o.printfuncs:	h.Clients
+o.printfuncs:	h.pathmunge
+o.printfuncs:	h.Cache
+o.printfuncs:	h.veneers
+o.printfuncs:	h.Interface
+o.printfuncs:	h.fsentries
+o.printfuncs:	h.enumdir
+o.printfuncs:	h._Func
+o.printfuncs:	h._GBPB
+o.printfuncs:	h._Open
+o.printfuncs:	h.Hourglass
+o.printfuncs:	h.extensions
+o.printfuncs:	h.ChangeInfo
+o.printfuncs:	h.PutBytesX
+o.printfuncs:	h.ModuleWrap
+o.chains:	c.chains
+o.chains:	h.NFS
+o.chains:	h.db
+o.chains:	h.errno
+o.chains:	C:h.kernel
+o.chains:	^.AUN.include.rpc.h.rpc
+o.chains:	^.AUN.include.rpc.h.types
+o.chains:	^.AUN.include.sys.h.types
+o.chains:	^.AUN.include.sys.h.time
+o.chains:	^.AUN.include.netinet.h.in
+o.chains:	^.AUN.include.rpc.h.xdr
+o.chains:	^.AUN.include.rpc.h.auth
+o.chains:	^.AUN.include.rpc.h.clnt
+o.chains:	^.AUN.include.rpc.h.rpc_msg
+o.chains:	^.AUN.include.rpc.h.auth_unix
+o.chains:	^.AUN.include.rpc.h.svc
+o.chains:	^.AUN.include.rpc.h.svc_auth
+o.chains:	^.AUN.include.rpc.h.netdb
+o.chains:	h.Consts
+o.chains:	C:h.swis
+o.chains:	h.Types
+o.chains:	h.nfs_prot
+o.chains:	h.mount
+o.chains:	h.pcnfsd
+o.chains:	h.AllErrs
+o.chains:	h.Chains
+o.chains:	h.Commands
+o.chains:	h.printfuncs
+o.chains:	h.RMInfo
+o.chains:	h.Static
+o.chains:	h.Utils
+o.chains:	h.Clients
+o.chains:	h.pathmunge
+o.chains:	h.Cache
+o.chains:	h.veneers
+o.chains:	h.Interface
+o.chains:	h.fsentries
+o.chains:	h.enumdir
+o.chains:	h._Func
+o.chains:	h._GBPB
+o.chains:	h._Open
+o.chains:	h.Hourglass
+o.chains:	h.extensions
+o.chains:	h.ChangeInfo
+o.chains:	h.PutBytesX
+o.chains:	h.ModuleWrap
+o.enumdir:	c.enumdir
+o.enumdir:	h.NFS
+o.enumdir:	h.db
+o.enumdir:	h.errno
+o.enumdir:	C:h.kernel
+o.enumdir:	^.AUN.include.rpc.h.rpc
+o.enumdir:	^.AUN.include.rpc.h.types
+o.enumdir:	^.AUN.include.sys.h.types
+o.enumdir:	^.AUN.include.sys.h.time
+o.enumdir:	^.AUN.include.netinet.h.in
+o.enumdir:	^.AUN.include.rpc.h.xdr
+o.enumdir:	^.AUN.include.rpc.h.auth
+o.enumdir:	^.AUN.include.rpc.h.clnt
+o.enumdir:	^.AUN.include.rpc.h.rpc_msg
+o.enumdir:	^.AUN.include.rpc.h.auth_unix
+o.enumdir:	^.AUN.include.rpc.h.svc
+o.enumdir:	^.AUN.include.rpc.h.svc_auth
+o.enumdir:	^.AUN.include.rpc.h.netdb
+o.enumdir:	h.Consts
+o.enumdir:	C:h.swis
+o.enumdir:	h.Types
+o.enumdir:	h.nfs_prot
+o.enumdir:	h.mount
+o.enumdir:	h.pcnfsd
+o.enumdir:	h.AllErrs
+o.enumdir:	h.Chains
+o.enumdir:	h.Commands
+o.enumdir:	h.printfuncs
+o.enumdir:	h.RMInfo
+o.enumdir:	h.Static
+o.enumdir:	h.Utils
+o.enumdir:	h.Clients
+o.enumdir:	h.pathmunge
+o.enumdir:	h.Cache
+o.enumdir:	h.veneers
+o.enumdir:	h.Interface
+o.enumdir:	h.fsentries
+o.enumdir:	h.enumdir
+o.enumdir:	h._Func
+o.enumdir:	h._GBPB
+o.enumdir:	h._Open
+o.enumdir:	h.Hourglass
+o.enumdir:	h.extensions
+o.enumdir:	h.ChangeInfo
+o.enumdir:	h.PutBytesX
+o.enumdir:	h.ModuleWrap
+o._Args:	c._Args
+o._Args:	h.NFS
+o._Args:	h.db
+o._Args:	h.errno
+o._Args:	C:h.kernel
+o._Args:	^.AUN.include.rpc.h.rpc
+o._Args:	^.AUN.include.rpc.h.types
+o._Args:	^.AUN.include.sys.h.types
+o._Args:	^.AUN.include.sys.h.time
+o._Args:	^.AUN.include.netinet.h.in
+o._Args:	^.AUN.include.rpc.h.xdr
+o._Args:	^.AUN.include.rpc.h.auth
+o._Args:	^.AUN.include.rpc.h.clnt
+o._Args:	^.AUN.include.rpc.h.rpc_msg
+o._Args:	^.AUN.include.rpc.h.auth_unix
+o._Args:	^.AUN.include.rpc.h.svc
+o._Args:	^.AUN.include.rpc.h.svc_auth
+o._Args:	^.AUN.include.rpc.h.netdb
+o._Args:	h.Consts
+o._Args:	C:h.swis
+o._Args:	h.Types
+o._Args:	h.nfs_prot
+o._Args:	h.mount
+o._Args:	h.pcnfsd
+o._Args:	h.AllErrs
+o._Args:	h.Chains
+o._Args:	h.Commands
+o._Args:	h.printfuncs
+o._Args:	h.RMInfo
+o._Args:	h.Static
+o._Args:	h.Utils
+o._Args:	h.Clients
+o._Args:	h.pathmunge
+o._Args:	h.Cache
+o._Args:	h.veneers
+o._Args:	h.Interface
+o._Args:	h.fsentries
+o._Args:	h.enumdir
+o._Args:	h._Func
+o._Args:	h._GBPB
+o._Args:	h._Open
+o._Args:	h.Hourglass
+o._Args:	h.extensions
+o._Args:	h.ChangeInfo
+o._Args:	h.PutBytesX
+o._Args:	h.ModuleWrap
+o._Close:	c._Close
+o._Close:	h.NFS
+o._Close:	h.db
+o._Close:	h.errno
+o._Close:	C:h.kernel
+o._Close:	^.AUN.include.rpc.h.rpc
+o._Close:	^.AUN.include.rpc.h.types
+o._Close:	^.AUN.include.sys.h.types
+o._Close:	^.AUN.include.sys.h.time
+o._Close:	^.AUN.include.netinet.h.in
+o._Close:	^.AUN.include.rpc.h.xdr
+o._Close:	^.AUN.include.rpc.h.auth
+o._Close:	^.AUN.include.rpc.h.clnt
+o._Close:	^.AUN.include.rpc.h.rpc_msg
+o._Close:	^.AUN.include.rpc.h.auth_unix
+o._Close:	^.AUN.include.rpc.h.svc
+o._Close:	^.AUN.include.rpc.h.svc_auth
+o._Close:	^.AUN.include.rpc.h.netdb
+o._Close:	h.Consts
+o._Close:	C:h.swis
+o._Close:	h.Types
+o._Close:	h.nfs_prot
+o._Close:	h.mount
+o._Close:	h.pcnfsd
+o._Close:	h.AllErrs
+o._Close:	h.Chains
+o._Close:	h.Commands
+o._Close:	h.printfuncs
+o._Close:	h.RMInfo
+o._Close:	h.Static
+o._Close:	h.Utils
+o._Close:	h.Clients
+o._Close:	h.pathmunge
+o._Close:	h.Cache
+o._Close:	h.veneers
+o._Close:	h.Interface
+o._Close:	h.fsentries
+o._Close:	h.enumdir
+o._Close:	h._Func
+o._Close:	h._GBPB
+o._Close:	h._Open
+o._Close:	h.Hourglass
+o._Close:	h.extensions
+o._Close:	h.ChangeInfo
+o._Close:	h.PutBytesX
+o._Close:	h.ModuleWrap
+o._File:	c._File
+o._File:	h.NFS
+o._File:	h.db
+o._File:	h.errno
+o._File:	C:h.kernel
+o._File:	^.AUN.include.rpc.h.rpc
+o._File:	^.AUN.include.rpc.h.types
+o._File:	^.AUN.include.sys.h.types
+o._File:	^.AUN.include.sys.h.time
+o._File:	^.AUN.include.netinet.h.in
+o._File:	^.AUN.include.rpc.h.xdr
+o._File:	^.AUN.include.rpc.h.auth
+o._File:	^.AUN.include.rpc.h.clnt
+o._File:	^.AUN.include.rpc.h.rpc_msg
+o._File:	^.AUN.include.rpc.h.auth_unix
+o._File:	^.AUN.include.rpc.h.svc
+o._File:	^.AUN.include.rpc.h.svc_auth
+o._File:	^.AUN.include.rpc.h.netdb
+o._File:	h.Consts
+o._File:	C:h.swis
+o._File:	h.Types
+o._File:	h.nfs_prot
+o._File:	h.mount
+o._File:	h.pcnfsd
+o._File:	h.AllErrs
+o._File:	h.Chains
+o._File:	h.Commands
+o._File:	h.printfuncs
+o._File:	h.RMInfo
+o._File:	h.Static
+o._File:	h.Utils
+o._File:	h.Clients
+o._File:	h.pathmunge
+o._File:	h.Cache
+o._File:	h.veneers
+o._File:	h.Interface
+o._File:	h.fsentries
+o._File:	h.enumdir
+o._File:	h._Func
+o._File:	h._GBPB
+o._File:	h._Open
+o._File:	h.Hourglass
+o._File:	h.extensions
+o._File:	h.ChangeInfo
+o._File:	h.PutBytesX
+o._File:	h.ModuleWrap
+o._File:	h.access
+o._File:	h.NFS
+o._Func:	c._Func
+o._Func:	h.NFS
+o._Func:	h.db
+o._Func:	h.errno
+o._Func:	C:h.kernel
+o._Func:	^.AUN.include.rpc.h.rpc
+o._Func:	^.AUN.include.rpc.h.types
+o._Func:	^.AUN.include.sys.h.types
+o._Func:	^.AUN.include.sys.h.time
+o._Func:	^.AUN.include.netinet.h.in
+o._Func:	^.AUN.include.rpc.h.xdr
+o._Func:	^.AUN.include.rpc.h.auth
+o._Func:	^.AUN.include.rpc.h.clnt
+o._Func:	^.AUN.include.rpc.h.rpc_msg
+o._Func:	^.AUN.include.rpc.h.auth_unix
+o._Func:	^.AUN.include.rpc.h.svc
+o._Func:	^.AUN.include.rpc.h.svc_auth
+o._Func:	^.AUN.include.rpc.h.netdb
+o._Func:	h.Consts
+o._Func:	C:h.swis
+o._Func:	h.Types
+o._Func:	h.nfs_prot
+o._Func:	h.mount
+o._Func:	h.pcnfsd
+o._Func:	h.AllErrs
+o._Func:	h.Chains
+o._Func:	h.Commands
+o._Func:	h.printfuncs
+o._Func:	h.RMInfo
+o._Func:	h.Static
+o._Func:	h.Utils
+o._Func:	h.Clients
+o._Func:	h.pathmunge
+o._Func:	h.Cache
+o._Func:	h.veneers
+o._Func:	h.Interface
+o._Func:	h.fsentries
+o._Func:	h.enumdir
+o._Func:	h._Func
+o._Func:	h._GBPB
+o._Func:	h._Open
+o._Func:	h.Hourglass
+o._Func:	h.extensions
+o._Func:	h.ChangeInfo
+o._Func:	h.PutBytesX
+o._Func:	h.ModuleWrap
+o._Func:	h.enumdir
+o._GBPB:	c._GBPB
+o._GBPB:	h.NFS
+o._GBPB:	h.db
+o._GBPB:	h.errno
+o._GBPB:	C:h.kernel
+o._GBPB:	^.AUN.include.rpc.h.rpc
+o._GBPB:	^.AUN.include.rpc.h.types
+o._GBPB:	^.AUN.include.sys.h.types
+o._GBPB:	^.AUN.include.sys.h.time
+o._GBPB:	^.AUN.include.netinet.h.in
+o._GBPB:	^.AUN.include.rpc.h.xdr
+o._GBPB:	^.AUN.include.rpc.h.auth
+o._GBPB:	^.AUN.include.rpc.h.clnt
+o._GBPB:	^.AUN.include.rpc.h.rpc_msg
+o._GBPB:	^.AUN.include.rpc.h.auth_unix
+o._GBPB:	^.AUN.include.rpc.h.svc
+o._GBPB:	^.AUN.include.rpc.h.svc_auth
+o._GBPB:	^.AUN.include.rpc.h.netdb
+o._GBPB:	h.Consts
+o._GBPB:	C:h.swis
+o._GBPB:	h.Types
+o._GBPB:	h.nfs_prot
+o._GBPB:	h.mount
+o._GBPB:	h.pcnfsd
+o._GBPB:	h.AllErrs
+o._GBPB:	h.Chains
+o._GBPB:	h.Commands
+o._GBPB:	h.printfuncs
+o._GBPB:	h.RMInfo
+o._GBPB:	h.Static
+o._GBPB:	h.Utils
+o._GBPB:	h.Clients
+o._GBPB:	h.pathmunge
+o._GBPB:	h.Cache
+o._GBPB:	h.veneers
+o._GBPB:	h.Interface
+o._GBPB:	h.fsentries
+o._GBPB:	h.enumdir
+o._GBPB:	h._Func
+o._GBPB:	h._GBPB
+o._GBPB:	h._Open
+o._GBPB:	h.Hourglass
+o._GBPB:	h.extensions
+o._GBPB:	h.ChangeInfo
+o._GBPB:	h.PutBytesX
+o._GBPB:	h.ModuleWrap
+o._GetBytes:	c._GetBytes
+o._GetBytes:	h.NFS
+o._GetBytes:	h.db
+o._GetBytes:	h.errno
+o._GetBytes:	C:h.kernel
+o._GetBytes:	^.AUN.include.rpc.h.rpc
+o._GetBytes:	^.AUN.include.rpc.h.types
+o._GetBytes:	^.AUN.include.sys.h.types
+o._GetBytes:	^.AUN.include.sys.h.time
+o._GetBytes:	^.AUN.include.netinet.h.in
+o._GetBytes:	^.AUN.include.rpc.h.xdr
+o._GetBytes:	^.AUN.include.rpc.h.auth
+o._GetBytes:	^.AUN.include.rpc.h.clnt
+o._GetBytes:	^.AUN.include.rpc.h.rpc_msg
+o._GetBytes:	^.AUN.include.rpc.h.auth_unix
+o._GetBytes:	^.AUN.include.rpc.h.svc
+o._GetBytes:	^.AUN.include.rpc.h.svc_auth
+o._GetBytes:	^.AUN.include.rpc.h.netdb
+o._GetBytes:	h.Consts
+o._GetBytes:	C:h.swis
+o._GetBytes:	h.Types
+o._GetBytes:	h.nfs_prot
+o._GetBytes:	h.mount
+o._GetBytes:	h.pcnfsd
+o._GetBytes:	h.AllErrs
+o._GetBytes:	h.Chains
+o._GetBytes:	h.Commands
+o._GetBytes:	h.printfuncs
+o._GetBytes:	h.RMInfo
+o._GetBytes:	h.Static
+o._GetBytes:	h.Utils
+o._GetBytes:	h.Clients
+o._GetBytes:	h.pathmunge
+o._GetBytes:	h.Cache
+o._GetBytes:	h.veneers
+o._GetBytes:	h.Interface
+o._GetBytes:	h.fsentries
+o._GetBytes:	h.enumdir
+o._GetBytes:	h._Func
+o._GetBytes:	h._GBPB
+o._GetBytes:	h._Open
+o._GetBytes:	h.Hourglass
+o._GetBytes:	h.extensions
+o._GetBytes:	h.ChangeInfo
+o._GetBytes:	h.PutBytesX
+o._GetBytes:	h.ModuleWrap
+o._Open:	c._Open
+o._Open:	h.NFS
+o._Open:	h.db
+o._Open:	h.errno
+o._Open:	C:h.kernel
+o._Open:	^.AUN.include.rpc.h.rpc
+o._Open:	^.AUN.include.rpc.h.types
+o._Open:	^.AUN.include.sys.h.types
+o._Open:	^.AUN.include.sys.h.time
+o._Open:	^.AUN.include.netinet.h.in
+o._Open:	^.AUN.include.rpc.h.xdr
+o._Open:	^.AUN.include.rpc.h.auth
+o._Open:	^.AUN.include.rpc.h.clnt
+o._Open:	^.AUN.include.rpc.h.rpc_msg
+o._Open:	^.AUN.include.rpc.h.auth_unix
+o._Open:	^.AUN.include.rpc.h.svc
+o._Open:	^.AUN.include.rpc.h.svc_auth
+o._Open:	^.AUN.include.rpc.h.netdb
+o._Open:	h.Consts
+o._Open:	C:h.swis
+o._Open:	h.Types
+o._Open:	h.nfs_prot
+o._Open:	h.mount
+o._Open:	h.pcnfsd
+o._Open:	h.AllErrs
+o._Open:	h.Chains
+o._Open:	h.Commands
+o._Open:	h.printfuncs
+o._Open:	h.RMInfo
+o._Open:	h.Static
+o._Open:	h.Utils
+o._Open:	h.Clients
+o._Open:	h.pathmunge
+o._Open:	h.Cache
+o._Open:	h.veneers
+o._Open:	h.Interface
+o._Open:	h.fsentries
+o._Open:	h.enumdir
+o._Open:	h._Func
+o._Open:	h._GBPB
+o._Open:	h._Open
+o._Open:	h.Hourglass
+o._Open:	h.extensions
+o._Open:	h.ChangeInfo
+o._Open:	h.PutBytesX
+o._Open:	h.ModuleWrap
+o._Open:	h.access
+o._Open:	h.NFS
+o._PutBytes:	c._PutBytes
+o._PutBytes:	h.NFS
+o._PutBytes:	h.db
+o._PutBytes:	h.errno
+o._PutBytes:	C:h.kernel
+o._PutBytes:	^.AUN.include.rpc.h.rpc
+o._PutBytes:	^.AUN.include.rpc.h.types
+o._PutBytes:	^.AUN.include.sys.h.types
+o._PutBytes:	^.AUN.include.sys.h.time
+o._PutBytes:	^.AUN.include.netinet.h.in
+o._PutBytes:	^.AUN.include.rpc.h.xdr
+o._PutBytes:	^.AUN.include.rpc.h.auth
+o._PutBytes:	^.AUN.include.rpc.h.clnt
+o._PutBytes:	^.AUN.include.rpc.h.rpc_msg
+o._PutBytes:	^.AUN.include.rpc.h.auth_unix
+o._PutBytes:	^.AUN.include.rpc.h.svc
+o._PutBytes:	^.AUN.include.rpc.h.svc_auth
+o._PutBytes:	^.AUN.include.rpc.h.netdb
+o._PutBytes:	h.Consts
+o._PutBytes:	C:h.swis
+o._PutBytes:	h.Types
+o._PutBytes:	h.nfs_prot
+o._PutBytes:	h.mount
+o._PutBytes:	h.pcnfsd
+o._PutBytes:	h.AllErrs
+o._PutBytes:	h.Chains
+o._PutBytes:	h.Commands
+o._PutBytes:	h.printfuncs
+o._PutBytes:	h.RMInfo
+o._PutBytes:	h.Static
+o._PutBytes:	h.Utils
+o._PutBytes:	h.Clients
+o._PutBytes:	h.pathmunge
+o._PutBytes:	h.Cache
+o._PutBytes:	h.veneers
+o._PutBytes:	h.Interface
+o._PutBytes:	h.fsentries
+o._PutBytes:	h.enumdir
+o._PutBytes:	h._Func
+o._PutBytes:	h._GBPB
+o._PutBytes:	h._Open
+o._PutBytes:	h.Hourglass
+o._PutBytes:	h.extensions
+o._PutBytes:	h.ChangeInfo
+o._PutBytes:	h.PutBytesX
+o._PutBytes:	h.ModuleWrap
+o.Interface: s.Interface
+o.RMInfo: s.RMInfo
+o.Static:	c.Static
+o.Static:	h.NFS
+o.Static:	h.db
+o.Static:	h.errno
+o.Static:	C:h.kernel
+o.Static:	^.AUN.include.rpc.h.rpc
+o.Static:	^.AUN.include.rpc.h.types
+o.Static:	^.AUN.include.sys.h.types
+o.Static:	^.AUN.include.sys.h.time
+o.Static:	^.AUN.include.netinet.h.in
+o.Static:	^.AUN.include.rpc.h.xdr
+o.Static:	^.AUN.include.rpc.h.auth
+o.Static:	^.AUN.include.rpc.h.clnt
+o.Static:	^.AUN.include.rpc.h.rpc_msg
+o.Static:	^.AUN.include.rpc.h.auth_unix
+o.Static:	^.AUN.include.rpc.h.svc
+o.Static:	^.AUN.include.rpc.h.svc_auth
+o.Static:	^.AUN.include.rpc.h.netdb
+o.Static:	h.Consts
+o.Static:	C:h.swis
+o.Static:	h.Types
+o.Static:	h.nfs_prot
+o.Static:	h.mount
+o.Static:	h.pcnfsd
+o.Static:	h.AllErrs
+o.Static:	h.Chains
+o.Static:	h.Commands
+o.Static:	h.printfuncs
+o.Static:	h.RMInfo
+o.Static:	h.Static
+o.Static:	h.Utils
+o.Static:	h.Clients
+o.Static:	h.pathmunge
+o.Static:	h.Cache
+o.Static:	h.veneers
+o.Static:	h.Interface
+o.Static:	h.fsentries
+o.Static:	h.enumdir
+o.Static:	h._Func
+o.Static:	h._GBPB
+o.Static:	h._Open
+o.Static:	h.Hourglass
+o.Static:	h.extensions
+o.Static:	h.ChangeInfo
+o.Static:	h.PutBytesX
+o.Static:	h.ModuleWrap
+o.allerrs: s.allerrs
+o.nfs_prot_c:	c.nfs_prot_c
+o.nfs_prot_c:	^.AUN.include.rpc.h.rpc
+o.nfs_prot_c:	^.AUN.include.rpc.h.types
+o.nfs_prot_c:	^.AUN.include.sys.h.types
+o.nfs_prot_c:	^.AUN.include.sys.h.time
+o.nfs_prot_c:	^.AUN.include.sys.h.time
+o.nfs_prot_c:	^.AUN.include.netinet.h.in
+o.nfs_prot_c:	^.AUN.include.rpc.h.xdr
+o.nfs_prot_c:	^.AUN.include.rpc.h.auth
+o.nfs_prot_c:	^.AUN.include.rpc.h.clnt
+o.nfs_prot_c:	^.AUN.include.rpc.h.rpc_msg
+o.nfs_prot_c:	^.AUN.include.rpc.h.auth_unix
+o.nfs_prot_c:	^.AUN.include.rpc.h.svc
+o.nfs_prot_c:	^.AUN.include.rpc.h.svc_auth
+o.nfs_prot_c:	^.AUN.include.rpc.h.netdb
+o.nfs_prot_c:	^.AUN.include.sys.h.time
+o.nfs_prot_c:	h.nfs_prot
+o.nfs_prot_x:	c.nfs_prot_x
+o.nfs_prot_x:	^.AUN.include.rpc.h.rpc
+o.nfs_prot_x:	^.AUN.include.rpc.h.types
+o.nfs_prot_x:	^.AUN.include.sys.h.types
+o.nfs_prot_x:	^.AUN.include.sys.h.time
+o.nfs_prot_x:	^.AUN.include.sys.h.time
+o.nfs_prot_x:	^.AUN.include.netinet.h.in
+o.nfs_prot_x:	^.AUN.include.rpc.h.xdr
+o.nfs_prot_x:	^.AUN.include.rpc.h.auth
+o.nfs_prot_x:	^.AUN.include.rpc.h.clnt
+o.nfs_prot_x:	^.AUN.include.rpc.h.rpc_msg
+o.nfs_prot_x:	^.AUN.include.rpc.h.auth_unix
+o.nfs_prot_x:	^.AUN.include.rpc.h.svc
+o.nfs_prot_x:	^.AUN.include.rpc.h.svc_auth
+o.nfs_prot_x:	^.AUN.include.rpc.h.netdb
+o.nfs_prot_x:	h.nfs_prot
+o.pcnfsd_c:	c.pcnfsd_c
+o.pcnfsd_c:	^.AUN.include.rpc.h.rpc
+o.pcnfsd_c:	^.AUN.include.rpc.h.types
+o.pcnfsd_c:	^.AUN.include.sys.h.types
+o.pcnfsd_c:	^.AUN.include.sys.h.time
+o.pcnfsd_c:	^.AUN.include.sys.h.time
+o.pcnfsd_c:	^.AUN.include.netinet.h.in
+o.pcnfsd_c:	^.AUN.include.rpc.h.xdr
+o.pcnfsd_c:	^.AUN.include.rpc.h.auth
+o.pcnfsd_c:	^.AUN.include.rpc.h.clnt
+o.pcnfsd_c:	^.AUN.include.rpc.h.rpc_msg
+o.pcnfsd_c:	^.AUN.include.rpc.h.auth_unix
+o.pcnfsd_c:	^.AUN.include.rpc.h.svc
+o.pcnfsd_c:	^.AUN.include.rpc.h.svc_auth
+o.pcnfsd_c:	^.AUN.include.rpc.h.netdb
+o.pcnfsd_c:	^.AUN.include.sys.h.time
+o.pcnfsd_c:	h.pcnfsd
+o.pcnfsd_x:	c.pcnfsd_x
+o.pcnfsd_x:	^.AUN.include.rpc.h.rpc
+o.pcnfsd_x:	^.AUN.include.rpc.h.types
+o.pcnfsd_x:	^.AUN.include.sys.h.types
+o.pcnfsd_x:	^.AUN.include.sys.h.time
+o.pcnfsd_x:	^.AUN.include.sys.h.time
+o.pcnfsd_x:	^.AUN.include.netinet.h.in
+o.pcnfsd_x:	^.AUN.include.rpc.h.xdr
+o.pcnfsd_x:	^.AUN.include.rpc.h.auth
+o.pcnfsd_x:	^.AUN.include.rpc.h.clnt
+o.pcnfsd_x:	^.AUN.include.rpc.h.rpc_msg
+o.pcnfsd_x:	^.AUN.include.rpc.h.auth_unix
+o.pcnfsd_x:	^.AUN.include.rpc.h.svc
+o.pcnfsd_x:	^.AUN.include.rpc.h.svc_auth
+o.pcnfsd_x:	^.AUN.include.rpc.h.netdb
+o.pcnfsd_x:	h.pcnfsd
+o.Hourglass:	c.Hourglass
+o.Hourglass:	h.NFS
+o.Hourglass:	h.db
+o.Hourglass:	h.errno
+o.Hourglass:	C:h.kernel
+o.Hourglass:	^.AUN.include.rpc.h.rpc
+o.Hourglass:	^.AUN.include.rpc.h.types
+o.Hourglass:	^.AUN.include.sys.h.types
+o.Hourglass:	^.AUN.include.sys.h.time
+o.Hourglass:	^.AUN.include.netinet.h.in
+o.Hourglass:	^.AUN.include.rpc.h.xdr
+o.Hourglass:	^.AUN.include.rpc.h.auth
+o.Hourglass:	^.AUN.include.rpc.h.clnt
+o.Hourglass:	^.AUN.include.rpc.h.rpc_msg
+o.Hourglass:	^.AUN.include.rpc.h.auth_unix
+o.Hourglass:	^.AUN.include.rpc.h.svc
+o.Hourglass:	^.AUN.include.rpc.h.svc_auth
+o.Hourglass:	^.AUN.include.rpc.h.netdb
+o.Hourglass:	h.Consts
+o.Hourglass:	C:h.swis
+o.Hourglass:	h.Types
+o.Hourglass:	h.nfs_prot
+o.Hourglass:	h.mount
+o.Hourglass:	h.pcnfsd
+o.Hourglass:	h.AllErrs
+o.Hourglass:	h.Chains
+o.Hourglass:	h.Commands
+o.Hourglass:	h.printfuncs
+o.Hourglass:	h.RMInfo
+o.Hourglass:	h.Static
+o.Hourglass:	h.Utils
+o.Hourglass:	h.Clients
+o.Hourglass:	h.pathmunge
+o.Hourglass:	h.Cache
+o.Hourglass:	h.veneers
+o.Hourglass:	h.Interface
+o.Hourglass:	h.fsentries
+o.Hourglass:	h.enumdir
+o.Hourglass:	h._Func
+o.Hourglass:	h._GBPB
+o.Hourglass:	h._Open
+o.Hourglass:	h.Hourglass
+o.Hourglass:	h.extensions
+o.Hourglass:	h.ChangeInfo
+o.Hourglass:	h.PutBytesX
+o.Hourglass:	h.ModuleWrap
+o.extensions:	c.extensions
+o.extensions:	h.NFS
+o.extensions:	h.db
+o.extensions:	h.errno
+o.extensions:	C:h.kernel
+o.extensions:	^.AUN.include.rpc.h.rpc
+o.extensions:	^.AUN.include.rpc.h.types
+o.extensions:	^.AUN.include.sys.h.types
+o.extensions:	^.AUN.include.sys.h.time
+o.extensions:	^.AUN.include.netinet.h.in
+o.extensions:	^.AUN.include.rpc.h.xdr
+o.extensions:	^.AUN.include.rpc.h.auth
+o.extensions:	^.AUN.include.rpc.h.clnt
+o.extensions:	^.AUN.include.rpc.h.rpc_msg
+o.extensions:	^.AUN.include.rpc.h.auth_unix
+o.extensions:	^.AUN.include.rpc.h.svc
+o.extensions:	^.AUN.include.rpc.h.svc_auth
+o.extensions:	^.AUN.include.rpc.h.netdb
+o.extensions:	h.Consts
+o.extensions:	C:h.swis
+o.extensions:	h.Types
+o.extensions:	h.nfs_prot
+o.extensions:	h.mount
+o.extensions:	h.pcnfsd
+o.extensions:	h.AllErrs
+o.extensions:	h.Chains
+o.extensions:	h.Commands
+o.extensions:	h.printfuncs
+o.extensions:	h.RMInfo
+o.extensions:	h.Static
+o.extensions:	h.Utils
+o.extensions:	h.Clients
+o.extensions:	h.pathmunge
+o.extensions:	h.Cache
+o.extensions:	h.veneers
+o.extensions:	h.Interface
+o.extensions:	h.fsentries
+o.extensions:	h.enumdir
+o.extensions:	h._Func
+o.extensions:	h._GBPB
+o.extensions:	h._Open
+o.extensions:	h.Hourglass
+o.extensions:	h.extensions
+o.extensions:	h.ChangeInfo
+o.extensions:	h.PutBytesX
+o.extensions:	h.ModuleWrap
+o.access:	c.access
+o.access:	h.access
+o.access:	h.NFS
+o.access:	h.db
+o.access:	h.errno
+o.access:	C:h.kernel
+o.access:	^.AUN.include.rpc.h.rpc
+o.access:	^.AUN.include.rpc.h.types
+o.access:	^.AUN.include.sys.h.types
+o.access:	^.AUN.include.sys.h.time
+o.access:	^.AUN.include.netinet.h.in
+o.access:	^.AUN.include.rpc.h.xdr
+o.access:	^.AUN.include.rpc.h.auth
+o.access:	^.AUN.include.rpc.h.clnt
+o.access:	^.AUN.include.rpc.h.rpc_msg
+o.access:	^.AUN.include.rpc.h.auth_unix
+o.access:	^.AUN.include.rpc.h.svc
+o.access:	^.AUN.include.rpc.h.svc_auth
+o.access:	^.AUN.include.rpc.h.netdb
+o.access:	h.Consts
+o.access:	C:h.swis
+o.access:	h.Types
+o.access:	h.nfs_prot
+o.access:	h.mount
+o.access:	h.pcnfsd
+o.access:	h.AllErrs
+o.access:	h.Chains
+o.access:	h.Commands
+o.access:	h.printfuncs
+o.access:	h.RMInfo
+o.access:	h.Static
+o.access:	h.Utils
+o.access:	h.Clients
+o.access:	h.pathmunge
+o.access:	h.Cache
+o.access:	h.veneers
+o.access:	h.Interface
+o.access:	h.fsentries
+o.access:	h.enumdir
+o.access:	h._Func
+o.access:	h._GBPB
+o.access:	h._Open
+o.access:	h.Hourglass
+o.access:	h.extensions
+o.access:	h.ChangeInfo
+o.access:	h.PutBytesX
+o.access:	h.ModuleWrap
+o.nfsrw:	c.nfsrw
+o.nfsrw:	h.NFS
+o.nfsrw:	h.db
+o.nfsrw:	h.errno
+o.nfsrw:	C:h.kernel
+o.nfsrw:	^.AUN.include.rpc.h.rpc
+o.nfsrw:	^.AUN.include.rpc.h.types
+o.nfsrw:	^.AUN.include.sys.h.types
+o.nfsrw:	^.AUN.include.sys.h.time
+o.nfsrw:	^.AUN.include.netinet.h.in
+o.nfsrw:	^.AUN.include.rpc.h.xdr
+o.nfsrw:	^.AUN.include.rpc.h.auth
+o.nfsrw:	^.AUN.include.rpc.h.clnt
+o.nfsrw:	^.AUN.include.rpc.h.rpc_msg
+o.nfsrw:	^.AUN.include.rpc.h.auth_unix
+o.nfsrw:	^.AUN.include.rpc.h.svc
+o.nfsrw:	^.AUN.include.rpc.h.svc_auth
+o.nfsrw:	^.AUN.include.rpc.h.netdb
+o.nfsrw:	h.Consts
+o.nfsrw:	C:h.swis
+o.nfsrw:	h.Types
+o.nfsrw:	h.nfs_prot
+o.nfsrw:	h.mount
+o.nfsrw:	h.pcnfsd
+o.nfsrw:	h.AllErrs
+o.nfsrw:	h.Chains
+o.nfsrw:	h.Commands
+o.nfsrw:	h.printfuncs
+o.nfsrw:	h.RMInfo
+o.nfsrw:	h.Static
+o.nfsrw:	h.Utils
+o.nfsrw:	h.Clients
+o.nfsrw:	h.pathmunge
+o.nfsrw:	h.Cache
+o.nfsrw:	h.veneers
+o.nfsrw:	h.Interface
+o.nfsrw:	h.fsentries
+o.nfsrw:	h.enumdir
+o.nfsrw:	h._Func
+o.nfsrw:	h._GBPB
+o.nfsrw:	h._Open
+o.nfsrw:	h.Hourglass
+o.nfsrw:	h.extensions
+o.nfsrw:	h.ChangeInfo
+o.nfsrw:	h.PutBytesX
+o.nfsrw:	h.ModuleWrap
+o.nfsrw:	h.nfsrw
+o.nfsrw:	h.NFS
+o.db:	c.db
+o.db:	h.NFS
+o.db:	h.db
+o.db:	h.errno
+o.db:	C:h.kernel
+o.db:	^.AUN.include.rpc.h.rpc
+o.db:	^.AUN.include.rpc.h.types
+o.db:	^.AUN.include.sys.h.types
+o.db:	^.AUN.include.sys.h.time
+o.db:	^.AUN.include.netinet.h.in
+o.db:	^.AUN.include.rpc.h.xdr
+o.db:	^.AUN.include.rpc.h.auth
+o.db:	^.AUN.include.rpc.h.clnt
+o.db:	^.AUN.include.rpc.h.rpc_msg
+o.db:	^.AUN.include.rpc.h.auth_unix
+o.db:	^.AUN.include.rpc.h.svc
+o.db:	^.AUN.include.rpc.h.svc_auth
+o.db:	^.AUN.include.rpc.h.netdb
+o.db:	h.Consts
+o.db:	C:h.swis
+o.db:	h.Types
+o.db:	h.nfs_prot
+o.db:	h.mount
+o.db:	h.pcnfsd
+o.db:	h.AllErrs
+o.db:	h.Chains
+o.db:	h.Commands
+o.db:	h.printfuncs
+o.db:	h.RMInfo
+o.db:	h.Static
+o.db:	h.Utils
+o.db:	h.Clients
+o.db:	h.pathmunge
+o.db:	h.Cache
+o.db:	h.veneers
+o.db:	h.Interface
+o.db:	h.fsentries
+o.db:	h.enumdir
+o.db:	h._Func
+o.db:	h._GBPB
+o.db:	h._Open
+o.db:	h.Hourglass
+o.db:	h.extensions
+o.db:	h.ChangeInfo
+o.db:	h.PutBytesX
+o.db:	h.ModuleWrap
+o.rquota:	c.rquota
+o.rquota:	^.AUN.include.rpc.h.rpc
+o.rquota:	^.AUN.include.rpc.h.types
+o.rquota:	^.AUN.include.sys.h.types
+o.rquota:	^.AUN.include.sys.h.time
+o.rquota:	^.AUN.include.sys.h.time
+o.rquota:	^.AUN.include.netinet.h.in
+o.rquota:	^.AUN.include.rpc.h.xdr
+o.rquota:	^.AUN.include.rpc.h.auth
+o.rquota:	^.AUN.include.rpc.h.clnt
+o.rquota:	^.AUN.include.rpc.h.rpc_msg
+o.rquota:	^.AUN.include.rpc.h.auth_unix
+o.rquota:	^.AUN.include.rpc.h.svc
+o.rquota:	^.AUN.include.rpc.h.svc_auth
+o.rquota:	^.AUN.include.rpc.h.netdb
+o.rquota:	h.rquota
+^.libs.rpc.o.rpc_common:	^.libs.rpc.c.rpc_common
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.rpc
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.types
+^.libs.rpc.o.rpc_common:	^.AUN.include.sys.h.types
+^.libs.rpc.o.rpc_common:	^.AUN.include.sys.h.time
+^.libs.rpc.o.rpc_common:	^.AUN.include.sys.h.time
+^.libs.rpc.o.rpc_common:	^.AUN.include.netinet.h.in
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.xdr
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.auth
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.clnt
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.rpc_msg
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.auth_unix
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.svc
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.svc_auth
+^.libs.rpc.o.rpc_common:	^.AUN.include.rpc.h.netdb
