@@ -95,7 +95,7 @@ module.h: cmhg.Hdr
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export:
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
@@ -137,10 +137,6 @@ rom_link:
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
-
-
-#${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 
 #---------------------------------------------------------------------------
