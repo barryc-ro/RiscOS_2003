@@ -27,8 +27,8 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -Wc -depend !Depend ${THROWBACK} -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -wp
-CMHGFLAGS = -p ${THROWBACK} ${DFLAGS} ${INCLUDES}
+CFLAGS  = -c -Wc -depend !Depend ${THROWBACK} -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} -wp
+CMHGFLAGS = -depend !Depend -p ${THROWBACK} ${DFLAGS} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #
@@ -72,6 +72,7 @@ EXPORTS   = h.webftp
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -102,6 +103,7 @@ clean:
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
+        ${RM} h.header
         ${STRIP}
         @echo ${COMPONENT}: cleaned
 
@@ -147,5 +149,10 @@ test: o.test1
 
 o.test1: c.test1
         ${CC} -c ${INCLUDES} ${DFLAGS} -o $@ c.test1
+
+# Static dependencies
+
+o.webftp:  h.header
+o.misc:    h.header
 
 # Dynamic dependencies:
