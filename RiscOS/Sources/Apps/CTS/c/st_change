@@ -1,0 +1,582 @@
+/*
+ *  CTS (st_change.c)
+ *
+ * Copyright (C) Element 14 Ltd. 1999
+ *
+ */
+
+/* ANSI includes */
+#include <stdio.h>
+#include <string.h>
+
+/* System includes */
+#include "DebugLib/DebugLib.h"
+
+/* Local includes */
+#include "ctstypes.h"
+#include "ctsbrowser.h"
+#include "ctsintern.h"
+#include "ctsui.h"
+#include "utils.h"
+#include "plugclient.h"
+#include "smartcard.h"
+#include "st_aux.h"
+#include "statetable.h"
+#include "st_change.h"
+
+
+/* State machine for "Close" command handling */
+cts_statetable_result_change cts_statetable_change_SM (cts_statetable_action action_code,
+                                                       cts_browser_message *bm,
+                                                       cts_server_message *sm)
+{
+  cts_statetable_result_change rc;
+
+  static cts_statetable_states_change state = S_Change_Idle;
+  static cts_server_message *change_message = NULL;
+
+#ifdef DEBUGLIB
+  static cts_statetable_states_change last_state = S_Change_Idle;
+  last_state = state;
+#endif
+
+  if (action_code == AC_Start)
+  {
+    dprintf (("StateMachine", "SM> Change - Initialising (moving to WaitingOKCancel state)\n"));
+    /* Open "password change" dbox (code 22) */
+    cts_ui_open_dbox (sm->plugin, NULL, ui_code_22);
+    change_message = sm;
+    state = S_Change_WaitingOKCancel;
+    return RC_Change_Pending;
+  }
+
+  switch (state)
+  {
+    /* STATE - Idle */
+    case S_Change_Idle:
+      switch (action_code)
+      {
+        case AC_Cancel:
+          /* Slightly invalid action but handle it anyway */
+          rc = RC_Change_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          rc = RC_Change_Error;
+      }
+      break;
+
+    /* STATE - Waiting for password change dbox OK or Cancel click */
+    case S_Change_WaitingOKCancel:
+      switch (action_code)
+      {
+        case AC_BrowserMessage:
+          /* Close "password change" dbox */
+          cts_ui_close_dbox (bm->plugin);
+
+          /* Check it's a dbox message */
+          if (strcmp (bm->command, "dbox") == 0)
+          {
+            /* Check for "OK" action */
+            if (cts_browser_parameter_lookup_by_tag (bm, btag_OK))
+            {
+              int pass_min, pass_max;
+              const char *new_pass, *old_pass;
+              ui_code_identifiers code;
+
+              cts_statetable_password_check_result result;
+
+              /* Compare new passwords, plus check length and type */
+              result = cts_statetable_aux_check_new_password (change_message, bm, &new_pass, &old_pass,
+                                                              &pass_min, &pass_max);
+              switch (result)
+              {
+                case Password_Different:
+                  /* Open "confirmation password incorrect" dbox */
+                  code = ui_code_26;
+                  break;
+
+                case Password_TypeFail_LettersDigitsSymbols:
+                  /* Open "letters, digits and symbols only" dbox */
+                  code = ui_code_27_3;
+                  break;
+
+                case Password_TypeFail_LettersDigits:
+                  /* Open "letters and digits only" dbox */
+                  code = ui_code_27_2;
+                  break;
+
+                case Password_TypeFail_Digits:
+                  /* Open "digits only" dbox */
+                  code = ui_code_27_1;
+                  break;
+
+                case Password_LenFail_EqualLen:
+                  /* Open "invalid length use xx chars" dbox */
+                  code = ui_code_28_1;
+                  break;
+
+                case Password_LenFail_RangeLen:
+                  /* Open "invalid length use between xx and yy chars" dbox */
+                  code = ui_code_28_1;
+                  break;
+
+                default:
+                case Password_OK:
+                  /* Open "accessing smart card" dbox */
+                  code = ui_code_01_2;
+                  break;
+              }
+
+              /* Open appropriate dbox */
+              cts_ui_open_dbox (sm->plugin, NULL, code);
+              if (code == ui_code_01_2)
+              {
+                /* Send "verify" command -- TODO */
+                state = S_Change_ReceiveVerifyResponse;
+                rc = RC_Change_Pending;
+              }
+              else
+              {
+                state = S_Change_RetryPasswordDialogue;
+                rc = RC_Change_Pending;
+              }
+            }
+            else if (cts_browser_parameter_lookup_by_tag (bm, btag_CANCEL))
+            {
+              /* Free the "change" command message */
+              cts_server_message_destroy (change_message);
+              change_message = NULL;
+              rc = RC_Change_Terminated;
+              state = S_Change_Idle;
+            }
+            else
+            {
+              /* Any other dbox action in this state is illegal */
+              rc = RC_Change_Error;
+              state = S_Change_Idle;
+              /* Free the "change" command message */
+              cts_server_message_destroy (change_message);
+              change_message = NULL;
+            }
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Change_Error;
+            state = S_Change_Idle;
+            /* Free the "change" command message */
+            cts_server_message_destroy (change_message);
+            change_message = NULL;
+          }
+          /* Free the browser message */
+          cts_browser_message_destroy (bm);
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Change_Pending;
+          break;
+
+        case AC_Cancel:
+          /* Close "password change" dbox */
+          cts_ui_close_dbox (change_message->plugin);
+          /* Free the "change" command message */
+          cts_server_message_destroy (change_message);
+          change_message = NULL;
+          state = S_Change_Idle;
+          rc = RC_Change_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Change_Idle;
+          rc = RC_Change_Error;
+      }
+      break;
+
+
+    /* STATE - Waiting for response to "verify" command */
+    case S_Change_ReceiveVerifyResponse:
+      switch (action_code)
+      {
+#ifdef CANCELACTION_ALLOWED
+        case AC_BrowserMessage:
+          /* Close "accessing smart card" dbox */
+          cts_ui_close_dbox (bm->plugin);
+
+          /* Check it's a dbox message */
+          if (strcmp (bm->command, "dbox") == 0)
+          {
+            /* Check for "Cancel" action */
+            if (cts_browser_parameter_lookup_by_tag (bm, btag_CANCEL))
+            {
+              /* Open cancel confirm dbox (code 05) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_05);
+              rc = RC_Change_CancelDialogue;
+            }
+            else
+            {
+              /* Any other dbox action in this state is illegal */
+              rc = RC_Change_Error;
+              state = S_Change_Idle;
+            }
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Change_Error;
+            state = S_Change_Idle;
+          }
+          /* Free the browser message */
+          cts_browser_message_destroy (bm);
+          /* Free the "change" command message */
+          cts_server_message_destroy (change_message);
+          change_message = NULL;
+          break;
+#endif
+        case AC_Continue:
+        {
+          cts_sc_status status;
+          cts_sc_pin_op_response_codes response;
+          size_t tries_remaining;
+          char sw1sw2_response[2];
+          char buffer[10];
+          int err_num = 0;
+
+          /* Check for response completion -- TODO */
+          status = cts_sc_read_data (buffer, 10, NULL, sw1sw2_response);
+          switch (status)
+          {
+            case cts_sc_status_COMPLETE:
+              cts_sc_pin_op_response (cts_sc_pin_op_VERIFY, sw1sw2_response, &response, &tries_remaining);
+              switch (response)
+              {
+                case pin_op_SUCCESS:
+                  /* Finished */
+                  /* Send "change" command -- TODO */
+                  state = S_Change_ReceiveChangeResponse;
+                  rc = RC_Change_Pending;
+                  break;
+
+                case pin_op_FAIL_RETRY_INVALID:
+                  /* Open error message dbox (code 25-2) */
+                  cts_ui_open_dbox (sm->plugin, NULL, ui_code_25_2);
+                  state = S_Change_RetryPasswordDialogue;
+                  rc =  RC_Change_Pending;
+                  break;
+
+                case pin_op_FAIL_RETRY_VALID:
+                  /* Open error message dbox (code 25-1) */
+                  cts_ui_open_dbox (sm->plugin, NULL, ui_code_25_1, /* num of tries left -- TODO */999);
+                  state = S_Change_RetryPasswordDialogue;
+                  rc =  RC_Change_Pending;
+                  break;
+
+                case pin_op_FAIL_WAS_LOCKED:
+                  /* Open error message dbox (code 23) */
+                  cts_ui_open_dbox (sm->plugin, NULL, ui_code_23);
+                  state = S_Change_SpecialErrorDialogue;
+                  rc =  RC_Change_Pending;
+                  break;
+
+                case pin_op_FAIL_NOW_LOCKED:
+                  /* Open error message dbox (code 24) */
+                  cts_ui_open_dbox (sm->plugin, NULL, ui_code_24);
+                  state = S_Change_SpecialErrorDialogue;
+                  rc =  RC_Change_Pending;
+                  break;
+
+                case pin_op_FAIL_NO_EFID:
+                case pin_op_FAIL_UNKNOWN:
+                default:
+                  /* Smart card error */
+                  err_num = /* from smart card ..*/1;
+
+                  /* Open error message dbox (code 30) */
+                  cts_ui_open_dbox (sm->plugin, NULL, ui_code_30, err_num);
+                  state = S_Change_SpecialErrorDialogue;
+                  rc =  RC_Change_Pending;
+              }
+#if 0
+                else if (/*communication error*/0)
+                {
+                  /* Close "accessing smart card" dbox */
+                  cts_ui_close_dbox (change_message->plugin);
+                  /* Open error message dbox (code 03) */
+                  cts_ui_open_dbox (sm->plugin, NULL, ui_code_03);
+                  /* Free the "change" command message */
+                  cts_server_message_destroy (change_message);
+                  change_message = NULL;
+                  rc =  RC_Change_ErrorDialogue;
+                  state = S_Change_Idle;
+                }
+#endif
+            case cts_sc_status_INPROGRESS:
+              rc = RC_Change_Pending;
+              break;
+
+            case cts_sc_status_FAILED:
+            default:
+              state = S_Change_Idle;
+              rc = RC_Change_Error;
+          }
+          break;
+        }
+
+        case AC_Cancel:
+          /* Close "accessing smart card" dbox */
+          cts_ui_close_dbox (change_message->plugin);
+          /* Free the "change" command message */
+          cts_server_message_destroy (change_message);
+          change_message = NULL;
+          state = S_Change_Idle;
+          rc = RC_Change_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Change_Idle;
+          rc = RC_Change_Error;
+      }
+      break;
+
+    /* STATE - Waiting for response to smart card "ChangeKey" command */
+    case S_Change_ReceiveChangeResponse:
+      switch (action_code)
+      {
+#ifdef CANCELACTION_ALLOWED
+        case AC_BrowserMessage:
+          /* Close "accessing smart card" dbox */
+          cts_ui_close_dbox (bm->plugin);
+
+          /* Check it's a dbox message */
+          if (strcmp (bm->command, "dbox") == 0)
+          {
+            /* Check for "Cancel" action */
+            if (cts_browser_parameter_lookup_by_tag (bm, btag_CANCEL))
+            {
+              /* Open cancel confirm dbox (code 05) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_05);
+              rc = RC_Change_CancelDialogue;
+            }
+            else
+            {
+              /* Any other dbox action in this state is illegal */
+              rc = RC_Change_Error;
+              state = S_Change_Idle;
+            }
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Change_Error;
+            state = S_Change_Idle;
+          }
+          /* Free the browser message */
+          cts_browser_message_destroy (bm);
+          /* Free the "change" command message */
+          cts_server_message_destroy (change_message);
+          change_message = NULL;
+          break;
+#endif
+        case AC_Continue:
+          /* poll for response completion -- TODO */
+          if (/*finished*/1)
+          {
+            /* Close "accessing smart card" dbox */
+            cts_ui_close_dbox (change_message->plugin);
+
+            if (/*command error -- TODO */0)
+            {
+              ui_code_identifiers code;
+              int err_num = 0;
+
+              if (/*password locked -- TODO */0)
+                code = ui_code_23;
+              else if (/*password wrong and locked -- TODO*/0)
+                code = ui_code_24;
+              else
+              {
+                /* Smart card error */
+                err_num = /* from smart card -- TODO*/1;
+                code = ui_code_30;
+              }
+              /* Open error message dbox (code 23,24,30) */
+              cts_ui_open_dbox (sm->plugin, NULL, code, err_num);
+              state = S_Change_SpecialErrorDialogue;
+              rc =  RC_Change_Pending;
+            }
+            else if (/*communication error -- TODO */0)
+            {
+              /* Open error message dbox (code 03) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_03);
+              /* Free the "change" command message */
+              cts_server_message_destroy (change_message);
+              change_message = NULL;
+              rc =  RC_Change_ErrorDialogue;
+              state = S_Change_Idle;
+            }
+            else if (/*key change succeeded -- TODO */1)
+            {
+              /* Finished */
+              /* Open "communicating with server" dbox (code 01-1) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_1);
+              /* Send response (includes change result) */
+              cts_statetable_aux_sendresult_change (change_message, NULL/*TODO*/);
+              /* Free the "change" command message */
+              cts_server_message_destroy (change_message);
+              change_message = NULL;
+              state = S_Change_Idle;
+              rc = RC_Change_Finished;
+            }
+          }
+          else
+          {
+            rc = RC_Change_Pending;
+          }
+          break;
+
+        case AC_Cancel:
+          /* Close "accessing smart card" dbox */
+          cts_ui_close_dbox (change_message->plugin);
+          /* Free the "change" command message */
+          cts_server_message_destroy (change_message);
+          change_message = NULL;
+          state = S_Change_Idle;
+          rc = RC_Change_Cancelled;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Change_Idle;
+          rc = RC_Change_Error;
+      }
+      break;
+
+    /* STATE - Waiting for special error dialogue box to complete */
+    case S_Change_SpecialErrorDialogue:
+      switch (action_code)
+      {
+        case AC_BrowserMessage:
+          /* Close dbox */
+          cts_ui_close_dbox (bm->plugin);
+
+          /* Check it's a dbox message */
+          if (strcmp (bm->command, "dbox") == 0)
+          {
+            /* Check for "OK" action */
+            if (cts_browser_parameter_lookup_by_tag (bm, btag_OK))
+            {
+              /* Open "communicating with server" dbox (code 01-1) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_1);
+              /* Send response (includes change result) */
+              cts_statetable_aux_sendresult_change (change_message, NULL/*TODO*/);
+              state = S_Change_Idle;
+              rc = RC_Change_Finished;
+            }
+            else
+            {
+              /* Any other dbox action in this state is illegal */
+              rc = RC_Change_Error;
+              state = S_Change_Idle;
+            }
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Change_Error;
+            state = S_Change_Idle;
+          }
+          /* Free the browser message */
+          cts_browser_message_destroy (bm);
+          /* Free the "change" command message */
+          cts_server_message_destroy (change_message);
+          change_message = NULL;
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Change_Pending;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Change_Idle;
+          rc = RC_Change_Error;
+      }
+      break;
+
+    /* STATE - Waiting for retry password dialogue box to complete */
+    case S_Change_RetryPasswordDialogue:
+      switch (action_code)
+      {
+        case AC_BrowserMessage:
+          /* Close dbox */
+          cts_ui_close_dbox (bm->plugin);
+
+          /* Check it's a dbox message */
+          if (strcmp (bm->command, "dbox") == 0)
+          {
+            /* Check for "OK" action */
+            if (cts_browser_parameter_lookup_by_tag (bm, btag_OK))
+            {
+              /* Re-open "password change" dbox (code 22) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_22);
+              state = S_Change_WaitingOKCancel;
+              rc = RC_Change_Pending;
+            }
+            else
+            {
+              /* Any other dbox action in this state is illegal */
+              rc = RC_Change_Error;
+              state = S_Change_Idle;
+              /* Free the "change" command message */
+              cts_server_message_destroy (change_message);
+              change_message = NULL;
+            }
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            rc = RC_Change_Error;
+            state = S_Change_Idle;
+            /* Free the "change" command message */
+            cts_server_message_destroy (change_message);
+            change_message = NULL;
+          }
+          /* Free the browser message */
+          cts_browser_message_destroy (bm);
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Change_Pending;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Change_Idle;
+          rc = RC_Change_Error;
+      }
+      break;
+
+    /* INVALID STATE */
+    default:
+      /* Error */
+      state = S_Change_Idle;
+      rc = RC_Change_Error;
+      break;
+  }
+
+#ifdef DEBUGLIB
+  if (last_state != state)
+  {
+    dprintf (("StateMachine", "SM> Change - Changed state from %d to %d\n", last_state, state));
+    last_state = state;
+  }
+#endif
+
+  return rc;
+}

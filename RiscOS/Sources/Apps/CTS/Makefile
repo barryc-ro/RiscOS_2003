@@ -142,6 +142,15 @@ OBJS =\
  o.plugclient\
  o.smartcard\
  o.statetable\
+ o.st_aux\
+ o.st_basic\
+ o.st_change\
+ o.st_errorclose\
+ o.st_verify\
+ o.st_apdu\
+ o.st_text\
+ o.st_open\
+ o.st_started\
  o.utils
 
 OBJSZ =\
@@ -153,8 +162,16 @@ OBJSZ =\
  oz.plugclient\
  oz.smartcard\
  oz.statetable\
+ oz.st_aux\
+ oz.st_basic\
+ oz.st_change\
+ oz.st_errorclose\
+ oz.st_verify\
+ oz.st_apdu\
+ oz.st_text\
+ oz.st_open\
+ oz.st_started\
  oz.utils
-
 
 OBJSD =\
  od.client\
@@ -165,6 +182,15 @@ OBJSD =\
  od.plugclient\
  od.smartcard\
  od.statetable\
+ od.st_aux\
+ od.st_basic\
+ od.st_change\
+ od.st_errorclose\
+ od.st_verify\
+ od.st_apdu\
+ od.st_text\
+ od.st_open\
+ od.st_started\
  od.utils
  
 #OBJSDZ =
