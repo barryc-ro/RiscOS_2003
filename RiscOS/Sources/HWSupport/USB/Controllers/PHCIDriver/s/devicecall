@@ -19,12 +19,73 @@ device_block    & device_name  - device_block
                 & 8                             ; default RX buffer flags
                 & 1024                          ; default RX buffer size
                 & 8                             ; default TX buffer flags
-                & 512                           ; default TX buffer size
+                & 4096                          ; default TX buffer size
                 & 0                             ; reserved field (must be zero)
 
                 & 0                             ; end of table
 
                 ALIGN
+
+; endpoint structure
+                    ^ 0, r2
+ep_next             # 4 ; \ link the structures together
+ep_prev             # 4 ; /
+ep_ptd_chain        # 4 ; link contents of payload together so we know what to scan when parsing.
+ep_devicefs         # 4
+ep_fileswitch       # 4
+ep_buffer           # 4
+ep_buffer_priv      # 4
+ep_ptd_header0      # 1 ; Actual bytes [7:0]
+ep_ptd_header1      # 1 ; Completion code [3:0], Active, Toggle, Actual bytes [8:9]
+ep_ptd_header2      # 1 ; Max packet size [7:0]
+ep_ptd_header3      # 1 ; Endpoint number [3:0], Last, Speed, Max packet size [9:8]
+ep_ptd_header4      # 1 ; Total bytes [7:0]
+ep_ptd_header5      # 1 ; reserved [4 bits], Direction PID [1:0] (SETUP,OUT,IN), Total bytes [9:8]
+ep_ptd_header6      # 1 ; Format, Function address [6:0]
+ep_ptd_header7      # 1 ; reserved
+ep_interval         # 4
+ep_interval_count   # 4
+ep_scratch          # 4 ; used by control transfers to store setup
+ep_scratch2         # 4
+ep_state            # 4 ; used by control transfers to store state
+ep_pollword         # 4 ; used by control transfers to signify end of transfer (inverse completion code)
+ep_workspace        * :INDEX:@
+
+ep_state_setup      * 1
+ep_state_data       * 2
+ep_state_ack        * 3
+
+
+; Macros for manipulating fields from payload descriptors
+
+; Read the actual bytes field (lower word)
+                MACRO
+$label          LDRActualBytes $rd, $rn
+$label          MOV     $rd, $rn, LSL#22
+                MOV     $rd, $rd, LSR#22
+                MEND
+
+; Read max packet size (lower word)
+                MACRO
+$label          LDRMaxPacket    $rd, $rn
+$label          MOV     $rd, $rn, LSL#6
+                MOV     $rd, $rd, LSR#22
+                MEND
+
+; Write total bytes (upper word), assumes less than 1024
+                MACRO
+$label          STRTotalBytes   $rd, $rn
+$label          MOV     $rn, $rn, LSR#10
+                MOV     $rn, $rn, LSL#10
+                ORR     $rn, $rn , $rd
+                MEND
+
+; Read total bytes (upper word), assumes less than 1024
+                MACRO
+$label          LDRTotalBytes   $rd, $rn
+$label          MOV     $rd, $rn, LSL#22
+                MOV     $rd, $rd, LSR#22
+                MEND
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -47,8 +108,8 @@ register_device Entry "r0-r7"
                 MOV     r3, r11				; passed in as r8
                 MOV     r4, wp                         	; -> workspace
                 ADRL    r5, device_validation           ; validation
-                MOV     r6, #1				; max RX stream
-                MOV     r7, #1                          ; max TX stream
+                MOV     r6, #127			; max RX stream
+                MOV     r7, #127                        ; max TX stream
                 SWI     XDeviceFS_Register
                 STRVS   r0, [sp]
                 EXIT    VS
@@ -113,6 +174,8 @@ handle_device_call ROUT
                 JumpAddress lr, device_call_exit, forward       ; load return address
 		MOV	r11, r8			; sort out port workspace
 
+                Debug   devicecall, "device call: ", r0, r2
+
                 CMP     r0, #(%20-%10)/4	; validate reason code
                 ADDCC   pc, pc, r0, LSL #2 	; despatch
 		B	%20
@@ -120,8 +183,8 @@ handle_device_call ROUT
                 B       initialise              ; 0  initialise
                 B       finalise                ; 1  finalise
                 B       wakeup_tx               ; 2  wake up for TX
-                MOV     pc, lr                  ; 3  wake up for RX
-                MOV     pc, lr                  ; 4  sleep rx
+                B       wakeup_rx               ; 3  wake up for RX
+                B       sleep_rx                ; 4  sleep rx
                 MOV     pc, lr                  ; 5  enumerate directory
                 B       create_tx_buffer        ; 6  create buffer for TX
                 B       create_rx_buffer        ; 7  create buffer for RX
@@ -133,6 +196,8 @@ handle_device_call ROUT
                 MOV     pc, lr
 		B	ioctl			; 14 IOCtl
 20
+                TEQ     r0, #&80000000          ; usb request
+                BEQ     usb_request
                 Pull    lr
                 ORR     lr, lr, #V_bit
                 RestPSR lr,,cf
@@ -169,7 +234,7 @@ device_call_exit
 ; corresponding to the field in the device open string in the following order :
 ;
 
-device_validation = "address/Nendpoint/Ncontrol,isochronous,bulk,interrupt/Smaxpacket/Ninterval/N",0
+device_validation = "address/Nendpoint/Ncontrol,isochronous,bulk,interrupt/Smaxpacket/Ninterval/Nfull,low/S",0
 
                     ^ 0, r6
 valid_address       # 4
@@ -177,411 +242,511 @@ valid_endpoint      # 4
 valid_type          # 4
 valid_maxpacket     # 4
 valid_interval      # 4
+valid_speed         # 4
 
 ; If the field is not present, it will be &deaddead
 
-initialise      Entry "r0,r4-r5"
-; [ debug
-;;		DREG	r2, "initialise stream : "
-;;		DREG	r4, "   fileswitch handle : "
-; ]
-;		LDR	r10, BaseAddress
-;
-;                TST     r3, #1                  ; tx or rx stream ?
-;                STREQ   r2, InputStream		; stash input handle
-;		STREQ	r4, InputFSHandle
-;                STRNE   r2, OutputStream 	; stash output handle
-;		STRNE	r4, OutputFSHandle
-;
-		LDR	r5, =&deaddead
-                ; address
-                LDR     r0, valid_address
-                CMP     r0, r5
-                MOVEQ   r0, #0
-;
-                ; endpoint
-                LDR     r0, valid_endpoint
-                CMP     r0, r5
-                MOVEQ   r0, #0
-;
-                ; type
-                LDR     r0, valid_type
-                CMP     r0, r5
-                MOVEQ   r0, #0
+initialise      Entry "r0-r5"
 
-                TEQ     r0, #3  ; interrupt pipe
-;                BNE     %f10
-                ADR     r2, RHInterruptBuffer
-                B       %f20
-;10
-;                TST     r3, #1                  ; tx or rx stream ?
-;                ADREQ   r2, RHControlBufferIn
-;                ADRNE   r2, RHControlBufferOut
+                ; Create new endpoint structure and zero it
+                MOV     r3, #ep_workspace
+                MOV     r0, #ModHandReason_Claim
+                SWI     XOS_Module
+
+                MOV     r0, #0
+10
+                SUBS    r3, r3, #1
+                STRNEB  r0, [r2, r3]
+                BNE     %b10
+
+                ; record handles
+                LDR     r0, [sp, #Proc_RegOffset + 2*4]
+                STR     r0, ep_devicefs
+                STR     r4, ep_fileswitch
+
+                ; set direction bit
+                LDR     r0, [sp, #Proc_RegOffset + 3*4]
+                TST     r0, #1
+                MOVEQ   r1, #1:SHL:3
+                MOVNE   r1, #1:SHL:2
+                STRB    r1, ep_ptd_header5
+
+                ; decode special field
+                LDMIA   r6, {r0-r1, r3-r6}
+
+		LDR	r7, =&deaddead
+                CMP     r0, r7  ; address
+                MOVEQ   r0, #0
+                CMP     r1, r7  ; endpoint
+                MOVEQ   r1, #0
+                CMP     r3, r7  ; type
+                MOVEQ   r3, #0
+                CMP     r4, r7  ; maxpacket
+                MOVEQ   r4, #8
+                CMP     r5, r7  ; interval
+                MOVEQ   r5, #0
+                CMP     r6, r7  ; speed
+                MOVEQ   r6, #0
+
+                ; set address and format bit if it's isochronous
+                TEQ     r3, #1
+                ORREQ   r0, r0, #&80
+                STRB    r0, ep_ptd_header6
+
+                ; if this is the address of the root hub, maybe set interrupt handle
+                LDR     r7, RHAddress
+                TEQ     r0, r7
+                TEQEQ   r1, #1
+                STREQ   r2, RHInterrupt
+                DebugIf EQ, devicecall, "Root hub endpoint set to ", r2
+
+                ; set maxpacket size
+                STRB    r4, ep_ptd_header2
+
+                ; set rest of maxpacket size, speed and endpoint number
+                MOV     r4, r4, LSR#8
+                ORR     r4, r4, r6, LSL#2
+                ORR     r4, r4, r1, LSL#4
+                STRB    r4, ep_ptd_header3
+
+                STR     r5, ep_interval
+
+                ; start in setup state if we're a control endpoint
+                TEQ     r3, #0
+                MOVEQ   r0, #1
+                STREQ   r0, ep_state
+
+                ; Link into chain
+                ASSERT  :INDEX:EPHead              = :INDEX:EPHeadControl
+                ASSERT  :INDEX:EPHeadIsochronous   = :INDEX:EPHeadControl + 4
+                ASSERT  :INDEX:EPHeadBulk          = :INDEX:EPHeadIsochronous + 4
+                ASSERT  :INDEX:EPHeadInterrupt     = :INDEX:EPHeadBulk + 4
+
+                ADR     r0, EPHead
+                LDR     r0, [r0, r3, LSL#2] ; load appropriate head
+
+                BL      validate_new_endpoint
+                BVC     %f20
+                STR     r0, [sp, #Proc_RegOffset]
+                MOV     r0, #ModHandReason_Free
+                SWI     XOS_Module
+                SETV
+                EXIT
 20
-                ; maxpacket
-                LDR     r0, valid_maxpacket
-                CMP     r0, r5
-                MOVEQ   r0, #0
+                ; link up the chain
+                STR     r0, ep_next
+                TEQ     r0, #0
+                STRNE   r2, [r0, #:INDEX:ep_prev]
+                MOV     r0, #0
+                STR     r0, ep_prev
+                ADR     r0, EPHead
+                STR     r2, [r0, r3, LSL#2]
+                STR     r2, [sp, #Proc_RegOffset + 2*4]     ; pass stream handle back to DeviceFS
+
+		Debug	devicecall, "initialising stream: ", R2
+
+                EXIT
+
+; check that the current head (the new endpoint) isn't a duplicate.
+; E: R2 = the head endpoint
+; X: VS if it's a duplicate
+validate_new_endpoint
+                Entry   "R2"
+
+
+                EXIT
+
+                LTORG
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-                ; interval
-                LDR     r0, valid_interval
-                CMP     r0, r5
-                MOVEQ   r0, #0
-
-; right now we'll just do the interrupt pipe, we'll simply activate RHSC interrupt
-                MOV     R0, #HcInterruptEnable
-                LDR     R1, =OHCI_MIE:OR:OHCI_RHSC
-                HCSTR   R1, R0
-
-		EXIT
+; call: finalise
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; in:   r0 = reason code
+;       r2 = device driver stream handle, or 0 for all streams
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: finalise
-;;
-;; in:   r0 = reason code
-;;       r2 = device driver stream handle, or 0 for all streams
-;;
-;; out:  -
-;;
-;; This routine is called when a stream is being closed by DeviceFS. When
-;; received then we should halt the relevant transmission type until the stream
-;; is re-opened.
+; out:  -
+;
+; This routine is called when a stream is being closed by DeviceFS. When
+; received then we should halt the relevant transmission type until the stream
+; is re-opened.
 
-finalise        Entry	"r0-r3"
-; [ debug
-;;		DREG	r2, "finalise : "
-; ]
-;		MOV	r1, #0
-;		MOV	r3, #-1			; for nulling stream handles
-;		LDR	r0, InputStream		; is input stream being closed
-;		TEQ	r0, r2
-;		TEQNE	r2, #0			; or all streams
-;		STREQ	r1, InputStream		; null the stream
-;		STREQ	r3, InputBufferPrivId
-;		STREQ	r1, InputBuffer
-;		LDR	r0, OutputStream	; is output stream being closed
-;		TEQ	r0, r2
-;		TEQNE	r2, #0			; or all streams
-;		STREQ	r1, OutputStream	; null the stream
-;		STREQ	r3, OutputBufferPrivId
-;		STREQ	r1, OutputBuffer
+finalise        Entry	"r0-r5, r11"
 
-; for now just disable RHSC
+		Debug	devicecall, "finalising stream: ", R2
+
+                LDR     r11, BaseAddress
+
+                TEQ     r2, #0
+                BEQ     %f10
+
+                ; If these are root hub streams, zero their handles
+                LDR     r0, RHInterrupt
+                TEQ     r0, r2
+                BNE     %f05
+
+                ; Turn off root hub interrupts, and zero RH int stream
                 MOV     R0, #HcInterruptDisable
                 MOV     R1, #OHCI_RHSC
                 HCSTR   R1, R0
 
                 MOV     r0, #0
-                STR     r0, RHInterruptBuffer
+                STR     r0, RHInterrupt
+05
+                ; If this is the RH control in, zero the stream
+                LDR     r0, RHControlIn
+                TEQ     r0, r2
+                MOVEQ   r0, #0
+                STREQ   r0, RHControlIn
+
+                ; If this is the RH control out, zero the stream
+                LDR     r0, RHControlOut
+                TEQ     r0, r2
+                MOVEQ   r0, #0
+                STREQ   r0, RHControlOut
+
+                ; Relink the chain
+                LDR     r0, ep_next
+                LDR     r1, ep_prev
+                Debug   devicecall, "next, prev: ", r0, r1
+                TEQ     r0, #0
+                STRNE   r1, [r0, #:INDEX:ep_prev]
+                TEQ     r1, #0
+                STRNE   r0, [r1, #:INDEX:ep_next]
+
+                ; If we were the head of a chain, reset it.
+                ; Here we loop through the 4 heads, looking for a match.
+                ADR     r0, EPHead
+                MOV     r1, #0
+07
+                LDR     r3, [r0, r1, LSL#2]
+                TEQ     r2, r3
+                LDREQ   r3, ep_next
+                STREQ   r3, [r0, r1, LSL#2]
+                DebugIf EQ, devicecall, "removing head no. with ", r1, r3
+                TEQNE   r1, #3
+                ADDNE   r1, r1, #1
+                BNE     %b07
+
+                ; Remove the structure
+                MOV     r0, #ModHandReason_Free
+                SWI     XOS_Module
+
                 EXIT
+
+                ; Here we're removing all streams
+10
+                ; Turn off root hub interrupts
+                MOV     R0, #HcInterruptDisable
+                MOV     R1, #OHCI_RHSC
+                HCSTR   R1, R0
+
+                ; Clear root hub endpoint streams
+                MOV     r0, #0
+                STR     r0, RHInterrupt
+                STR     r0, RHControlIn
+                STR     r0, RHControlOut
+
+                ; Free all stream structures
+                ASSERT  :INDEX:EPHead              = :INDEX:EPHeadControl
+                ASSERT  :INDEX:EPHeadIsochronous   = :INDEX:EPHeadControl + 4
+                ASSERT  :INDEX:EPHeadBulk          = :INDEX:EPHeadIsochronous + 4
+                ASSERT  :INDEX:EPHeadInterrupt     = :INDEX:EPHeadBulk + 4
+
+                MOV     r0, #ModHandReason_Free
+                ADR     r4, EPHead
+                MOV     r5, #0
+15
+                CMP     r5, #4
+                CLRV    HS
+                EXIT    HS
+                LDR     r2, [r4, r5, LSL#2]
+20
+                TEQ     r2, #0
+                ADDEQ   r5, r5, #1
+                BEQ     %b15
+                LDR     r3, ep_next
+                SWI     XOS_Module
+                MOV     r2, r3
+                B       %b20
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; call: wakeup_tx
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: wakeup_tx
-;;
-;; in:   r0 = reason code
-;;	r2 = device driver stream handle
-;;
-;; out:  r0  = 0 if driver wishes to remain dormant, else preserved
-;;
-;; This routine is called when data is ready to be transmitted. Data should
-;; start being passed to the device
+; in:   r0 = reason code
+;	r2 = device driver stream handle
 ;
-;; Must not corrupt Z
+; out:  r0  = 0 if driver wishes to remain dormant, else preserved
+;
+; This routine is called when data is ready to be transmitted. Data should
+; start being passed to the device
+
+; Must not corrupt Z
 
 wakeup_tx       Entry	"r3,r10"
-; [ debug
-;;		DLINE	"wakeup_tx"
-; ]
-;		LDR	r3, PortFlags
-;		BIC	r3, r3, #flag_TxDormant
-;		STR	r3, PortFlags
-;
-;		LDR	r10, BaseAddress
-;; disable tx interrupts
-;                LDRB    r3, UART_interrupt_enable   ; interrupt enable register
-;                BIC     r3, r3, #IER_transmit_empty
-;                STRB    r3, UART_interrupt_enable
-;; and now enable them
-;                ORR     r3, r3, #IER_transmit_empty ; enable tx empty ints
-;                STRB    r3, UART_interrupt_enable   ; store back in register
-;
+
+                ; mark the endpoint as active
+                LDRB    r0, ep_ptd_header1
+                ORR     r0, r0, #1:SHL:3
+                STRB    r0, ep_ptd_header1
+
+                ; set the ATL pending flag
+                LDR     r0, Flags
+                ORR     r0, r0, #flag_ATLBufferPending
+                STR     r0, Flags
+
  		EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; call: wakeup_rx
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: create_tx_buffer
-;;
-;; in:   r0  = reason code
-;;       r2  = device driver stream handle
-;;       r3  = suggested flags for buffer
-;;       r4  = suggested size of buffer
-;;       r5  = suggested handle for buffer
-;;       r6  = suggested threshold value
-;;
-;; out:  r3  = modified flags
-;;       r4  = modified buffer size
-;;       r5  = suggested buffer handle
-;;       r6  = if -1 on exit then no threshold, else set to specified value
-;;
-;; This routine is called before the buffer is actually created, it allows the
-;; device to change the values (ie. buffer size) and then return.  r5 should
-;; contain a unique buffer handle.
+; in:   r0 = reason code
+;	r2 = device driver stream handle
+;
+; out:  r0  = 0 if driver wishes to remain dormant, else preserved
+;
+; This routine is called when data is to be received. Data should
+; start read from the device
+
+; Must not corrupt Z
+
+wakeup_rx       Entry
+
+                LDRB    r0, ep_ptd_header6
+                LDRB    r1, RHAddress
+                TEQ     r0, r1
+                BNE     %f10
+
+                ; turn on the root hub interrupts
+                PHPSEI  lr
+                MOV     r0, #HcuPInterruptEnable
+                HCLDRH  r1, r0
+                ORR     r1, r1, #OPR_Reg
+                HCSTRH  r1, r0
+                MOV     r0, #HcInterruptEnable
+                LDR     r1, =OHCI_MIE :OR: OHCI_RHSC
+                HCSTR   r1, r0
+                PLP     lr
+
+10
+                ; mark the endpoint as active
+                LDRB    r0, ep_ptd_header1
+                ORR     r0, r0, #1:SHL:3
+                STRB    r0, ep_ptd_header1
+
+                ; set the ATL pending flag
+                LDR     r0, Flags
+                ORR     r0, r0, #flag_ATLBufferPending
+                STR     r0, Flags
+
+ 		EXIT
+
+                LTORG
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: sleep_rx
+;
+; in:   r0 = reason code
+;	r2 = device driver stream handle
+;
+; This routine is called when data has been received. Data should
+; stop being read from the device
+
+; Must not corrupt Z
+
+sleep_rx       Entry
+
+                LDRB    r0, ep_ptd_header6
+                LDRB    r1, RHAddress
+                TEQ     r0, r1
+                BNE     %f10
+
+                ; turn on the root hub interrupts
+                PHPSEI  lr
+                MOV     r0, #HcuPInterruptEnable
+                HCLDRH  r1, r0
+                BIC     r1, r1, #OPR_Reg
+                HCSTRH  r1, r0
+                PLP     lr
+
+10
+                ; mark the endpoint as active
+                MOV     r0, #1:SHL:3
+                STRB    r0, ep_ptd_header1
+
+ 		EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: create_tx_buffer
+;
+; in:   r0  = reason code
+;       r2  = device driver stream handle
+;       r3  = suggested flags for buffer
+;       r4  = suggested size of buffer
+;       r5  = suggested handle for buffer
+;       r6  = suggested threshold value
+;
+; out:  r3  = modified flags
+;       r4  = modified buffer size
+;       r5  = suggested buffer handle
+;       r6  = if -1 on exit then no threshold, else set to specified value
+;
+; This routine is called before the buffer is actually created, it allows the
+; device to change the values (ie. buffer size) and then return.  r5 should
+; contain a unique buffer handle.
 
 create_tx_buffer Entry "r0"
-; [ debug
-;;		DLINE	"create tx buffer"
-; ]
-;; look to see if we wish to change the default size
-;		LDR	r0, OutputBufferSize
-;		CMP	r0, #0
-;		MOVNE	r4, r0
-;		STREQ	r4, OutputBufferSize
-;
-;; and now the default threshold
-;		LDR	r0, OutputBufferThreshold
-;		CMP	r0, #0                       ; clears V
-;		MOVNE	r6, r0
-;		STREQ	r6, OutputBufferThreshold
-;
+                MOV     r6, #256
  		EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
+; call: create_rx_buffer
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; in:   r0  = reason code
+;       r2  = device driver stream handle
+;       r3  = suggested flags for buffer
+;       r4  = suggested size of buffer
+;       r5  = suggested handle for buffer
+;       r6  = suggested threshold value
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: create_rx_buffer
-;;
-;; in:   r0  = reason code
-;;       r2  = device driver stream handle
-;;       r3  = suggested flags for buffer
-;;       r4  = suggested size of buffer
-;;       r5  = suggested handle for buffer
-;;       r6  = suggested threshold value
-;;
-;; out:  r3  = modified flags
-;;       r4  = modified buffer size
-;;       r5  = suggested buffer handle
-;;       r6  = if -1 on exit then no threshold, else set to specified value
-;;
-;; This routine is called before the buffer is actually create, it allows the
-;; device to change the values (ie. buffer size) and then return.  r5 should
-;; contain a unique buffer handle.
-;;
+; out:  r3  = modified flags
+;       r4  = modified buffer size
+;       r5  = suggested buffer handle
+;       r6  = if -1 on exit then no threshold, else set to specified value
+;
+; This routine is called before the buffer is actually create, it allows the
+; device to change the values (ie. buffer size) and then return.  r5 should
+; contain a unique buffer handle.
+;
 create_rx_buffer Entry
-; [ debug
-;;		DLINE	"create rx buffer"
-; ]
-;; look to see if we wish to change the default size
-;		LDR	r0, InputBufferSize
-;		CMP	r0, #0
-;		MOVNE	r4, r0
-;		STREQ	r4, InputBufferSize
-;
-;; and now the default threshold
-;		LDR	r0, InputBufferThreshold
-;		CMP	r0, #0                       ; clears V
-;		MOVNE	r6, r0
-;		STREQ	r6, InputBufferThreshold
-;
  		EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; call: threshold_halt
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: threshold_halt
-;;
-;; in:   r0 = reason code
-;;       r2 = device driver stream handle
-;;
-;; out:  -
-;;
-;; This routine is called when the free space in the buffer has dropped below
-;; the specified threshold. Data receipt should be halted by asserting the
-;; RTS line and wait until resume point is called.
-;;
-;; We have registered for halt/resume information on both streams but only
-;; require information here for the input buffer so check stream handles.
+; in:   r0 = reason code
+;       r2 = device driver stream handle
+;
+; out:  -
+;
+; This routine is called when the free space in the buffer has dropped below
+; the specified threshold.
+;
+; We have registered for halt/resume information on both streams but only
+; require information here for the input buffer so check stream handles.
 
 threshold_halt  Entry "r0-r1"
-; [ debug
-;;		DLINE	"threshold halt"
-; [ border_handshake
-;		SetColour blue
-; ]
-; ]
-;; check stream handle
-;		LDR	r1, InputStream
-;		TEQ	r2, r1
-;		EXIT	NE
-;
-;; are we doing handshaking ?
-;		LDR	r1, PortFlags
-;		TST	r1, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
-;		EXIT	EQ
-;
-;		ORR	r1, r1, #flag_RxThresholded
-;		STR	r1, PortFlags
-;
-;; set control flags
-;		TST	r1, #flag_UseXon
-;		ORRNE	r1, r1, #flag_TxXoff		; send an xoff
-;		STRNE	r1, PortFlags
-;		BLNE	wakeup_tx                       ; preserves Z
-;		EXIT	NE
-;
-;		PHPSEI	lr, r0			; disable interrupts
-;		LDRB	r0, ControlLines
-;		TST	r1, #flag_UseRTS
-;		BICNE 	r0, r0, #ctrl_line_rts
-;		TST	r1, #flag_UseDTR
-;		BICNE	r0, r0, #ctrl_line_dtr
-;		STRB	r0, ControlLines
-;		PLP	lr			; enable interrupts
-;
-;		BL	hardware_ctrl_lines
-;
-;                CLRV
+                Debug   devicecall, "below threshold"
+
                 EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; call: threshold_resume
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: threshold_resume
-;;
-;; in:   r0 = reason code
-;;       r2 = device driver stream handle
-;;
-;; out:  -
-;;
-;; This routine is called when the free space in the buffer has risen above the
-;; specified threshold.
+; in:   r0 = reason code
+;       r2 = device driver stream handle
+;
+; out:  -
+;
+; This routine is called when the free space in the buffer has risen above the
+; specified threshold.
 
 threshold_resume Entry	"r0-r1"
-; [ debug
-;;		DLINE	"threshold resume"
-; [ border_handshake
-;		SetColour off
-; ]
-; ]
-;; check stream handle
-;		LDR	r1, InputStream
-;		TEQ	r2, r1
-;		EXIT	NE
-;
-;; are we doing handshaking ?
-;		LDR	r1, PortFlags
-;		TST	r1, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
-;		EXIT	EQ
-;
-;		BIC	r1, r1, #flag_RxThresholded
-;		STR	r1, PortFlags
-;
-;; set control flags
-;		TST	r1, #flag_UseXon
-;		ORRNE	r1, r1, #flag_TxXon	; send an xon
-;		STRNE	r1, PortFlags
-;		BLNE	wakeup_tx                       ; preserves Z
-;		EXIT	NE
-;
-;		PHPSEI	lr, r0			; disable interrupts
-;		LDRB	r0, ControlLines
-;		TST	r1, #flag_UseRTS
-;		ORRNE 	r0, r0, #ctrl_line_rts
-;		TST	r1, #flag_UseDTR
-;		ORRNE	r0, r0, #ctrl_line_dtr
-;		STRB	r0, ControlLines
-;		PLP	lr			; enable interrupts
-;
-;		BL	hardware_ctrl_lines
-;
-;                CLRV
-                EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: stream_created
-;;
-;; in:   r0 = reason code
-;;       r2 = device driver stream handle
-;;       r3 = buffer handle
-;;
-;; out:  -
-;;
-;; This routine is called after the stream has been created, it gives me a chance
-;; to setup the device correctly and start transmission etc, etc...
-;;
+                Debug   devicecall, "above threshold"
 
-stream_created  Entry	"r0-r4"
- [ debug
-		Debug	module, "stream created : ", R2
- ]
+                LDR     r0, Flags
+                ORR     r0, r0, #flag_ATLBufferPending
+                STR     r0, Flags
+
+                EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: stream_created
+;
+; in:   r0 = reason code
+;       r2 = device driver stream handle
+;       r3 = buffer handle
+;
+; out:  -
+;
+; This routine is called after the stream has been created, it gives me a chance
+; to setup the device correctly and start transmission etc, etc...
+;
+
+stream_created  Entry	"r0-r4, r11"
+		Debug	devicecall, "stream created : ", R2
+                LDR     r11, BaseAddress
+
+                STR     r2, ep_buffer
 		MOV	r4, r2			; save stream handle
-;; get buffer details
 		MOV	r0, r3			; need buffer handle
 		SWI	XBuffer_InternalInfo
                 STRVS  	r0, [sp]
 		EXIT	VS
 		STR	r1, BuffManService
 		STR	r2, BuffManWkSpace
-;
-;; which buffer are we dealing with
-;                LDR     r1, InputStream
-;                TEQ     r1, r4
-;
-;		STREQ	r0, InputBufferPrivId
-;                STREQ   r3, InputBuffer
-;		EXIT	EQ
-;
-;		STR	r0, OutputBufferPrivId
-;                STR	r3, OutputBuffer
-;; now sort out handshaking, need to re-assert lines
-;		LDR	r0, PortFlags
-;		LDR	r1, ControlLines
-;		TST	r0, #flag_UseRTS
-;		ORRNE	r1, r1, #ctrl_line_rts
-;		TST	r0, #flag_UseDTR
-;		ORRNE	r1, r1, #ctrl_line_dtr
-;		STR	r1, ControlLines
-;		BL	hardware_ctrl_lines
-;
-;                CLRV
-                STR     r0, [r4]
+                MOV     r2, r4
+                STR     r0, ep_buffer_priv
+
+                LDR     r0, RHInterrupt
+                TEQ     r0, r2
+                EXIT    NE
+
+                ; Turn on root hub interrupts
+                MOV     R0, #HcInterruptEnable
+                MOV     R1, #OHCI_RHSC
+                HCSTR   R1, R0
+
                 EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+ioctl_read  	* 1:SHL:30
+ioctl_write 	* 1:SHL:31
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; call: ioctl
 ;
-;ioctl_read  	* 1:SHL:30
-;ioctl_write 	* 1:SHL:31
+; in:   r0 = devicefs reason code
+;	r2 = device driver stream handle
+;       r3 -> ioctl control block
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;;
-;; call: ioctl
-;;
-;; in:   r0 = devicefs reason code
-;;	r2 = device driver stream handle
-;;       r3 -> ioctl control block
-;;
-;; where control block is
-;;	word one - bits 0-15  : reason code
-;; 		   bits 16-29 : group code
-;;		   bit  30    : read
-;;		   bit  31    : write
-;;	word two - data
-;;
-;; This is the ioctl entry point.
+; where control block is
+;	word one - bits 0-15  : reason code
+; 		   bits 16-29 : group code
+;		   bit  30    : read
+;		   bit  31    : write
+;	word two - data
+;
+; This is the ioctl entry point.
 
 ioctl		ROUT
 ;
@@ -595,17 +760,7 @@ ioctl		ROUT
 ;                ADDCC   pc, pc, r0, LSL #2 	; despatch
 ;		B	%20
 ;10
-;		MOV	pc, lr			; 0 nothing
-;                B       ioctl_baud		; 1 set baud rate
-;                B       ioctl_data		; 2 set data format
-;		B	ioctl_handshake		; 3 set handshaking
-;		B	ioctl_buffer_size   	; 4 set buffer size
-;		B	ioctl_buffer_thres	; 5 set buffer threshold
-;		B	ioctl_ctrl_lines	; 6 set control lines
-;		B	ioctl_fifo_trig		; 7 set fifo threshold
-;		B	ioctl_read_bauds	; 8 return number of bauds
-;		B	ioctl_read_baud		; 9 return baud rate
-;		B	ioctl_flush_buffer	; 10 flush buffer
+		MOV	pc, lr			; 0 nothing
 ;20
 ;                ADDR    r0, ErrorBlock_Serial_BadIOCtlReasonCode
 ;                B	make_error
@@ -613,327 +768,569 @@ ioctl		ROUT
 ;		MakeErrorBlock Serial_BadIOCtlReasonCode
 ;		MakeErrorBlock Serial_BadIOCtlParameter
 ;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;ioctl_baud	Entry 	"r0-r4"
+; call: usb_request
 ;
-;		LDR	r4, [r3, #0]		; load flags
-;		LDR	r0, [r3, #4]		; load data
+; in:   r0 = devicefs reason code
+;       r1 = driver handle, or pointer to path
+;	r2 = device driver stream handle
+;       r3 = request and value
+;       r4 = index and length
+;       r5 = pointer to data block
 ;
-;; are we writing the baud
-;		TST	r4, #ioctl_write
-;		BEQ	%10
-;		BL	hardware_set_baud
-;10
-;; do we wish to read current
-;		TST	r4, #ioctl_read
-;		LDRNE	r0, BaudRate
-;		STRNE	r0, [r3, #4]
-;
-;                CLRV
+usb_request
+                Entry   ,8
+                Debug   devicecall, "USB request, stream ", r2
+
+                ; Find endpoint
+                MOV     r1, r2
+                LDR     r2, EPHeadControl
+10
+                Debug   devicecall, "Looking at handle ", r2
+                TEQ     r2, #0
+                BNE     %f15
+                ADRL    r0, ErrorBlock_PHCI_NoSuchEndpoint
+                BL      make_error
                 EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_data	Entry	"r0-r4"
-;
-;		LDR	r4, [r3, #0]		; load flags
-;		LDR	r1, [r3, #4]		; load data
-;
-;; are we writing the data
-;		TST	r4, #ioctl_write
-;		BEQ	%10
-;
-;; handle data options
-;		AND	r0, r1, #&ff
-;		BL	hardware_set_data
-;
-;; handle stop options
-;		MOV	r0, r1, LSR #8
-;		AND	r0, r0, #&ff
-;		BL	hardware_stop_bit
-;
-;; handle parity options
-;		MOV	r0, r1, LSR #16
-;		AND	r0, r0, #&ff
-;		BL	hardware_parity
-;
-;10
-;; do we wish to read current
-;		TST	r4, #ioctl_read
-;		LDRNE	r0, DataFormat
-;		STRNE	r0, [r3, #4]
-;
-;                CLRV
-;                EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_handshake Entry "r0-r5"
-;
-;		LDR	r5, [r3, #0]		; load flags
-;		LDR	r1, [r3, #4]		; load data
-;
-;; are we writing the data
-;		TST	r5, #ioctl_write
-;		BEQ	%10
-;
-;		PHPSEI	lr, r4			; disable interrupts
-;		LDR	r4, PortFlags
-;		BIC	r4, r4, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
-;		CMP	r1, #1
-;		ORREQ	r4, r4, #flag_UseRTS
-;		CMP	r1, #2
-;		ORREQ	r4, r4, #flag_UseXon
-;		CMP	r1, #3
-;		ORREQ	r4, r4, #flag_UseDTR
-;		STR	r4, PortFlags
-;		PLP	lr			; enable interrupts
-;		CLRV
-;10
-;; do we wish to read current
-;		SUBS	r0, r0, r0              ; R0=0, clears V
-;		TST	r5, #ioctl_read
-;		EXIT	EQ
-;
-;		LDR	r4, PortFlags
-;		TST	r4, #flag_UseRTS
-;		MOVNE	r0, #1
-;		TST	r4, #flag_UseXon
-;		MOVNE	r0, #2
-;		TST	r4, #flag_UseDTR
-;		MOVNE	r0, #3
-;		STR	r0, [r3, #4]
-;
-;                EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_buffer_size Entry "r0-r4"
-;
-;		LDR	r4, [r3, #0]		; load flags
-;		LDR	r1, [r3, #4]		; load data
-;
-;		LDR	r0, InputStream
-;
-;; are we writing the data
-;		TST	r4, #ioctl_write
-;		BEQ	%10
-;
-;		TEQ	r0, r2
-;		STREQ	r1, InputBufferSize
-;		STRNE	r1, OutputBufferSize
-;10
-;; do we wish to read current
-;		TST	r4, #ioctl_read
-;		EXIT	EQ
-;
-;		TEQ	r0, r2
-;		LDREQ	r1, InputBufferSize
-;		LDRNE	r1, OutputBufferSize
-;		STR	r1, [r3, #4]		; write back to data block
-;
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_buffer_thres Entry "r0-r5"
-;
-;		LDR	r4, [r3, #0]		; load flags
-;		LDR	r1, [r3, #4]		; load data
-;
-;		LDR	r5, InputStream
-;
-;; are we writing the data
-;		TST	r4, #ioctl_write
-;		BEQ	%10
-;
-;		TEQ	r5, r2
-;		LDREQ	r0, InputBuffer
-;		LDRNE	r0, OutputBuffer
-;		SWI	XBuffer_Threshold	; set buffer threshold
-;		EXIT	VS			; return if it didn't work
-;
-;; store new value in workspace if call succeeded
-;		STREQ	r1, InputBufferThreshold
-;		STRNE	r1, OutputBufferThreshold
-;
-;10
-;; do we wish to read current
-;		TST	r4, #ioctl_read
-;		EXIT	EQ
-;
-;		TEQ	r5, r2
-;		LDREQ	r1, InputBufferThreshold
-;		LDRNE	r1, OutputBufferThreshold
-;		STR	r1, [r3, #4]		; write back to data block
-;
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_ctrl_lines Entry "r0-r4"
-;
-;		LDR	r4, [r3, #0]		; load flags
-;		LDR	r1, [r3, #4]		; load data
-;
-;		LDRB	r0, ControlLines
-;; are we writing the data
-;		TST	r4, #ioctl_write
-;		BEQ	%10
-;
-;		PHPSEI				; disable interrupts
-;		TST	r1, #1:SHL:0		; check dtr
-;		ORRNE	r0, r0, #ctrl_line_dtr
-;		BICEQ	r0, r0, #ctrl_line_dtr
-;		TST	r1, #1:SHL:1 		; check rts
-;		ORRNE	r0, r0, #ctrl_line_rts
-;		BICEQ	r0, r0, #ctrl_line_rts
-;		STRB	r0, ControlLines
-;		PLP				; enable interrupts
-;10
-;		BL	hardware_ctrl_lines
-;                CLRV
-;
-;; do we wish to read current
-;		TST	r4, #ioctl_read
-;		EXIT	EQ
-;
-;		LDRB	r0, ControlLines
-;		MOV	r1, #0
-;		TST	r0, #ctrl_line_dtr
-;		ORRNE	r1, r1, #1:SHL:0
-;		TST	r0, #ctrl_line_rts
-;		ORRNE	r1, r1, #1:SHL:1
-;		TST	r0, #ctrl_line_cts
-;		ORRNE	r1, r1, #1:SHL:16
-;		TST	r0, #ctrl_line_dsr
-;		ORRNE	r1, r1, #1:SHL:17
-;		TST	r0, #ctrl_line_ri
-;		ORRNE	r1, r1, #1:SHL:18
-;		TST	r0, #ctrl_line_dcd
-;		ORRNE	r1, r1, #1:SHL:19
-;
-;		LDR	r0, PortFlags
-;		TST	r0, #flag_FIFOsPresent
-;		ORRNE	r1, r1, #1:SHL:20
-;
-;		STR	r1, [r3, #4]		; write back to data block
-;
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_fifo_trig Entry "r0-r1"
-;
-;		LDR	r1, [r3, #0]		; load flags
-;
-;; are we writing the data
-;		TST	r1, #ioctl_write
-;		BEQ	%10
-;
-;		LDR	r0, [r3, #4]		; load data
-;		BL	hardware_set_fifo_trigger
-;		CLRV
-;10
-;; do we wish to read current
-;		TST	r1, #ioctl_read
-;		EXIT	EQ
-;
-;		LDRB	r0, FIFOTrigger
-;		STR	r0, [r3, #4]		; write back to data block
-;
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_read_bauds Entry "r0-r3"
-;
-;		ADRL	r1, baud_table
-;		ADRL	r2, baud_table_end
-;
-;		SUB	r0, r2, r1
-;		MOV	r0, r0, LSR #3
-;
-;		STR	r0, [r3, #4]		; store data
-;
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_read_baud	Entry "r0-r5"
-;
-;		LDR	r4, [r3, #4]		; load data
-;; calc number of bauds again
-; 		ADRL	r1, baud_table
-;		ADRL	r2, baud_table_end
-;		SUB	r5, r2, r1
-;		MOV	r5, r5, LSR #3
-;; check for invalid index values
-;		MOV	r0, #0
-;		CMP	r4, #0
-;		BLT	%10
-;		CMP	r4, r5
-;		BGE	%10
-;
-;; calc address of baud rate
-;		MOV	r4, r4, LSL #3
-;		ADD	r1, r1, r4
-;		LDR	r0, [r1]
-;10
-;		STR	r0, [r3, #4]		; store data
-;
-;                CLRV
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;ioctl_flush_buffer Entry "r0-r3"
-;
-;		LDR	r1, [r3, #0]		; load flags
-;
-;		LDR	r3, InputStream
-;
-;; are we writing?
-;		TST	r1, #ioctl_write
-;		BEQ	%F10
-;
-;		TEQ	r2, r3
-;		LDREQ	r1, InputBufferPrivId
-;		LDRNE	r1, OutputBufferPrivId
-;
-;; check for valid internal buffer id
-;		CMP	r1, #-1
-;		BEQ	%F10
-;
-;		MOV	r0, #BufferReason_PurgeBuffer
-;		CallBuffMan
-;
-;; reading returns undefined value in data field of ioctl block
-;10
-;                CLRV
-;		EXIT
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-;; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
+15
+                LDR     r0, ep_fileswitch
+                Debug   devicecall, "fileswitch handle ", r0
+                TEQ     r0, r1
+                BEQ     %f20
+                LDR     r2, ep_next
+                B       %b10
+20
+                Debug   devicecall, "Internal handle ", r2
+                MOV     r0, #0
+                STR     r0, ep_pollword
+
+                Debug   devicecall, "About to send request", r3, r4
+                ; Insert setup into buffer
+                STMIA   sp, {r3, r4}
+                Push    "r2, r3"
+                MOV     r0, #BufferReason_InsertBlock
+                LDR     r1, ep_buffer_priv
+                ADD     r2, sp, #8
+                MOV     r3, #8
+                CallBuffMan
+                Pull    "r2, r3"
+
+                ; If an out request, insert data into buffer
+                TST     r3, #&80
+                BEQ     %f30
+
+25
+                MOV     r0, #6
+                ADR     r1, ep_pollword
+                SWI     XOS_UpCall
+                EXIT    VS
+                LDR     r0, ep_pollword
+                TEQ     r0, #0
+                BEQ     %b25
+
+                ; XXX must handle error codes here
+                Debug   devicecall, "Control read sequence finished, return code ", r0
+
+                Debug   devicecall, "About to read data"
+                ; Remove data from buffer
+                MOV     r0, #BufferReason_RemoveBlock
+                LDR     r1, ep_buffer_priv
+                MOV     r2, r5
+                MOV     r4, r4, LSR#16
+                CallBuffMan
+                EXIT
+30
+                Debug   devicecall, "About to send data"
+                ; Insert data into buffer (if there is any)
+                MOVS    r4, r4, LSR#16
+                BEQ     %f35
+                Push    "r2"
+                MOV     r0, #BufferReason_InsertBlock
+                LDR     r1, ep_buffer_priv
+                MOV     r2, r5
+                CallBuffMan
+                Pull    "r2"
+35
+                LDR     r0, ep_pollword
+                TEQ     r0, #0
+                BNE     %f40
+                MOV     r0, #6
+                ADR     r1, ep_pollword
+                SWI     XOS_UpCall
+                EXIT    VS
+                ALIGN
+                B       %b35
+40
+                ; XXX must handle error codes here
+                Debug   devicecall, "Control write sequence finished, return code ", r0
+
+                EXIT
+
+		MakeErrorBlock PHCI_NoSuchEndpoint
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: build_atl_buffer
+;
+; in:   -
+; out:  r0 = number of bytes written to soft atl buffer
+;
+; This call constructs a payload in the soft atl buffer from the current endpoint state.
+
+build_atl_buffer
+
+                ; macro to store the ptd header
+                MACRO
+                STRPTDHeader
+                Debug   atlbuffer, "Recording header at", r6
+                MOV     r8, r6              ; mark current point as last packet for later
+                BIC     r3, r3, #1:SHL:27   ; clear last packet bit
+                MOV     r3, r3, LSR#10      ; clear actual bytes
+                MOV     r3, r3, LSL#10
+                STMIA   r6!, {r3-r4}        ; store header into buffer
+                MEND
+
+                Entry   "r1-r8"
+
+                ADR     r6, SoftATLBuffer
+                MOV     r8, #0              ; ptd pointer for setting last bit
+
+                Debug   atlbuffer, "Building ATL buffer at ", r6
+
+                ; Start with no PTDs
+                MOV     r0, #0
+                ADR     r7, EPATLHead
+                STR     r0, [r7]
+
+                ; do interrupt queue
+                LDR     r2, EPHeadInterrupt
+00
+                TEQ     r2, #0
+                BEQ     %f99
+
+                Debug   atlbuffer, "Examining interrupt endpoint", R2
+
+                ; Ignore root hub endpoints
+                LDRB    r0, ep_ptd_header6
+                LDRB    r1, RHAddress
+                TEQ     r0, r1
+                BEQ     %f50
+
+                ; Load the endpoint
+                ADR     r0, ep_ptd_header0
+                LDMIA   r0, {r3-r4}
+
+                ; if there are any active interrupt endpoints then we must flag as pending
+                LDR     r0, Flags
+                ORR     r0, r0, #flag_ATLBufferPending
+                STR     r0, Flags
+
+                ; Take account of interval handling
+                ; we must count even if there is no data ready (5.7.4)
+                LDR     r0, ep_interval_count
+                SUBS    r0, r0, #1
+                STRGE   r0, ep_interval_count
+                Debug   atlbuffer, "Interval now: ", r0
+                BGE     %f50
+                LDR     r0, ep_interval
+                STR     r0, ep_interval_count
+
+                Debug   interrupt, "Endpoint ready... ptd:", r3, r4
+                ; Ignore non-active endpoints
+                TST     r3, #1:SHL:11
+                BEQ     %f50
+
+                ; We transfer up to one maxpacket size
+                LDRMaxPacket    r5, r3
+
+                Push    "r2"
+                TST     r4, #1:SHL:11                   ; test direction bit
+                MOVNE   r0, #BufferReason_FreeSpace     ; If there's less free space
+                MOVEQ   r0, #BufferReason_UsedSpace     ; If there's less free space
+                LDR     r1, ep_buffer_priv              ; than maxpacket size
+                CallBuffMan
+
+                CMP     r2, r5                          ; then use free space
+                MOVLT   r5, r2
+                Pull    "r2"
+
+                TEQ     r5, #0
+                BEQ     %f50
+
+                ; Store the total bytes, and bump the pointer
+                STRTotalBytes   r5, r4
+                STRPTDHeader
+
+                TST     r4, #1:SHL:11                   ; test direction bit
+                ADDNE   r6, r6, r5
+                BNE     %f40
+
+                Push    "r2"
+                MOV     r0, #BufferReason_ExamineBlock
+                MOV     r2, r6
+                MOV     r3, r5
+                CallBuffMan
+                MOV     r6, r2
+                Pull    "r2"
+40
+                ; Link into PTD chain
+                STR     r2, [r7]
+                ADR     r7, ep_ptd_chain
+                MOV     r0, #0
+                STR     r0, [r7]
+50
+                LDR     r2, ep_next
+                B       %b00
+99
+                ; do control queue
+                LDR     r2, EPHeadControl
+100
+                TEQ     r2, #0
+                BEQ     %f199
+
+                Debug   atlbuffer, "Examining control endpoint", R2
+
+                ; Load the endpoint
+                ADR     r0, ep_ptd_header0
+                LDMIA   r0, {r3-r4}
+
+                ; Ignore non-active endpoints
+                TST     r3, #1:SHL:11
+                BEQ     %f150
+
+                ; Depending on what phase we're in, either send the setup, the data or the ack.
+                LDRB    r0, ep_state
+                Debug   atlbuffer, "Control endpoint state ", r0
+                ADD     pc, pc, r0, LSL#2
+                B       %f150               ; never get here
+                B       %f150               ; zero - shouldn't be in this state
+                B       %f120               ; 1 setup
+                B       %f130               ; 2 data
+
+110             ; 3 ack - direction is opposite to initial transfer, data toggle ins 1
+                Debug   atlbuffer, "Acknowledge"
+                STRTotalBytes   #0, r4
+                LDR     r0, ep_scratch
+                TST     r0, #&80
+                BIC     r4, r4, #3:SHL:10
+                ORREQ   r4, r4, #2:SHL:10
+                ORRNE   r4, r4, #1:SHL:10
+                ORR     r3, r3, #1:SHL:10
+                STRPTDHeader
+                B       %f140
+
+120             ; setup
+                Debug   atlbuffer, "Setup"
+                Push    "r2"
+                MOV     r0, #BufferReason_UsedSpace     ; If there's less free space
+                LDR     r1, ep_buffer_priv              ; than maxpacket size
+                CallBuffMan
+                MOV     r0, r2
+                Pull    "r2"
+                CMP     r0, #8
+                Debug   atlbuffer, "bytes in setup: ", r0
+                BLT     %f150
+
+                ; If it's for the root hub, then handle it immediately
+                LDRB    r0, ep_ptd_header6
+                Debug   atlbuffer, "Sending to address", r0
+                LDRB    r1, RHAddress
+                TEQ     r0, r1
+                BNE     %f125
+                Debug   atlbuffer, "Root hub request"
+                BL      root_hub_out
+                MOV     r0, #&0f
+                STRB    r0, ep_pollword
+
+                LDRB    r0, ep_ptd_header1
+                BIC     r0, r0, #1:SHL:3
+                STRB    r0, ep_ptd_header1
+
+;                MOV     r0, #1
+;                STR     r0, ep_state
+                B       %f150
+
+125
+                BIC     r4, r4, #3:SHL:10
+                STRTotalBytes   #8, r4
+                STRPTDHeader
+
+                Push    "r2"
+                MOV     r0, #BufferReason_ExamineBlock
+                LDR     r1, ep_buffer_priv
+                MOV     r2, r6
+                MOV     r3, #8
+                CallBuffMan
+                MOV     r6, r2
+                Pull    "r2"
+                Debug   atlbuffer, "buffer pointer now at: ", r6
+
+                SUBS    r6, r6, #8
+                LDMIA   r6!, {r3-r4}                     ; Store set up request
+                ADR     r0, ep_scratch
+                STMIA   r0, {r3-r4}
+                Debug   atlbuffer, "Storing request, from: ", r3, r4, r6
+                B       %f140
+
+130             ; data
+                Debug   atlbuffer, "Data"
+                LDR     r0, ep_scratch
+                TST     r0, #&80
+                BIC     r4, r4, #3:SHL:10
+                ORRNE   r4, r4, #2:SHL:10
+                ORREQ   r4, r4, #1:SHL:10
+                Debug   atlbuffer, "request byte, ptd top word: ", r0, r4
+
+                LDR     r5, ep_scratch2                 ; get length
+                MOVS    r5, r5, LSR#16
+                MOVEQ   r0, #3
+                STREQ   r0, ep_state
+                BEQ     %b110                           ; if zero length, just ackowledge
+
+                Push    "r2"
+                TST     r4, #1:SHL:11                   ; test direction bit
+                MOVNE   r0, #BufferReason_FreeSpace     ; If there's less space
+                MOVEQ   r0, #BufferReason_UsedSpace     ;
+                LDR     r1, ep_buffer_priv              ; than request size
+                CallBuffMan
+
+                CMP     r2, r5                          ; then use space
+                MOVLT   r5, r2
+                Pull    "r2"
+
+                ; Store the total bytes, and bump the pointer
+                Debug   atlbuffer, "no. of bytes to transfer: ", r5
+                STRTotalBytes   r5, r4
+                STRPTDHeader
+
+                TST     r4, #1:SHL:11                   ; test direction bit
+                ADDNE   r6, r6, r5
+                BNE     %f140
+
+                Push    "r2"
+                MOV     r0, #BufferReason_ExamineBlock
+                MOV     r2, r6
+                MOV     r3, r5
+                CallBuffMan
+                MOV     r6, r2
+                Pull    "r2"
+
+                B       %f140
+140
+                ; Link into PTD chain
+                STR     r2, [r7]
+                ADR     r7, ep_ptd_chain
+                MOV     r0, #0
+                STR     r0, [r7]
+150
+                LDR     r2, ep_next
+                B       %b100
+
+199
+                ; do bulk queue
+                LDR     r2, EPHeadBulk
+200
+                TEQ     r2, #0
+                BEQ     %f299
+
+                Debug   atlbuffer, "Examining bulk endpoint", R2
+
+                ; Load the endpoint
+                ADR     r0, ep_ptd_header0
+                LDMIA   r0, {r3-r4}
+
+                ; Ignore non-active endpoints
+                TST     r3, #1:SHL:11
+                BEQ     %f250
+
+                ; We transfer up to four times maxpacket size
+                LDRMaxPacket    r5, r3
+                MOV     r5, r5, LSL#2
+
+                Push    "r2"
+                TST     r4, #1:SHL:11                   ; test direction bit
+                MOVNE   r0, #BufferReason_FreeSpace     ; If there's less free space
+                MOVEQ   r0, #BufferReason_UsedSpace
+                LDR     r1, ep_buffer_priv              ; than maxpacket size
+                CallBuffMan
+
+                CMP     r2, r5                          ; then use free space
+                MOVLT   r5, r2
+                Pull    "r2"
+
+                TEQ     r5, #0
+                BEQ     %f250
+
+                Debug   atlbuffer, "Transfer size", r5
+
+                ; Store the total bytes, and bump the pointer
+                STRTotalBytes   r5, r4
+                STRPTDHeader
+
+                TST     r4, #1:SHL:11                   ; test direction bit
+ [ debug
+                BNE     %f1
+                Debug   atlbuffer, "OUT transfer"
+                B       %f2
+1
+                Debug   atlbuffer, "IN transfer"
+2
+ ]
+                ADDNE   r6, r6, r5
+                BNE     %f240
+
+                Push    "r2"
+                MOV     r0, #BufferReason_ExamineBlock
+                MOV     r2, r6
+                MOV     r3, r5
+                CallBuffMan
+                MOV     r6, r2
+                Pull    "r2"
+
+240
+                ; Link into PTD chain
+                STR     r2, [r7]
+                ADR     r7, ep_ptd_chain
+                MOV     r0, #0
+                STR     r0, [r7]
+250
+                LDR     r2, ep_next
+                B     %b200
+
+299
+                MOVS    r0, r8
+                EXIT    EQ
+
+                ; Set last bit
+                LDR     r0, [r8]
+                ORR     r0, r0, #1:SHL:27
+                STR     r0, [r8]
+
+                ; Compute size of transfer
+                ADR     r0, SoftATLBuffer
+                SUB     r0, r6, r0
+
+                Debug   atlbuffer, "number of bytes inserted into buffer: ", r0
+
+                EXIT
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: parse_atl_buffer
+;
+; in:   -
+; out:  -
+;
+; This call reads a completed atl buffer and updates the endpoint states
+parse_atl_buffer
+                Entry   "r0-r6"
+                ADR     r6, SoftATLBuffer
+                LDR     r2, EPATLHead
+                Debug   atlbuffer, "Parsing atl buffer, starting with endpoint ", r2
+10
+                TEQ     r2, #0
+                EXIT    EQ
+
+                Debug   atlbuffer, "Parsing endpoint ", r2
+
+                LDMIA   r6!, {r3, r4}
+                Debug   atlbuffer, "ptd is now: ", r3, r4
+                TST     r3, #&f000                      ; if we completed OK,
+                ORREQ   r3, r3, #1:SHL:11               ; then mark as still active
+                BNE     %f15                            ; if there was an error, cancel ourstanding control seq.
+
+                Debug   atlbuffer, "Completed OK"
+                LDRActualBytes  r1, r3
+                LDRTotalBytes   r0, r4
+                TEQ     r1, r0
+                BNE     %f20                             ; we didn't transfer all our load, so don't advance state
+                LDR     r0, ep_state
+                Debug   module, "Control state ", r0
+                TEQ     r0, #0
+                BICEQ   r3, r3, #1:SHL:11               ; mark as not active if we're not a control point
+                BEQ     %f20                            ; we're not a control endpoint
+                ADD     r0, r0, #1
+                TEQ     r0, #ep_state_ack + 1
+                STRNE   r0, ep_state
+                BNE     %f20                            ; we haven't finished a control seq yet
+15
+                MOV     r0, #1
+                STR     r0, ep_state
+
+                MOV     r0, r3, LSL#16
+                MOV     r0, r0, LSR#28
+                Debug   module, "Completed with code ", r0
+
+                LDR     r1, ep_interval
+                TEQ     r1, #0
+                BEQ     %f17                            ; don't worry about this if not interrupt (i.e. interval > 0)
+
+                Debug   interrupt, "Interrupt transfer finished with code ", r0
+ [ debug
+                Push    "r0"
+                LDRActualBytes  r0, r3
+                Debug   interrupt, "bytes read, ptd ", r0, r3, r4
+                Pull    "r0"
+ ]
+
+                ; due to a bug in the ISP1161, there is no way to distinguish between inerrupt and bulk
+                ; endpoints, so an interrupt request will be repeated all throughout the frame in which
+                ; is scheduled if the endpoint NAKs.  This causes some devices to break and return
+                ; broken responses specifically no response and PID check failure.  We take account of
+                ; this here and don't mark the endpoint as non-active
+                TEQ     r0, #0
+                BNE     %f16
+                TST     r3, #1:SHL:11
+                EOREQ   r3, r3, #1:SHL:10               ; toggle if not active
+                DebugIf EQ, module, "Toggling bit"
+                B       %f20
+
+16
+                TEQ     r0, #5                          ; these actually mean NAK
+                TEQNE   r0, #6
+                LDREQ   r3, ep_ptd_header0              ; reset ptd
+                BICEQ   r3, r3, #&ff
+                BEQ     %f20
+
+17
+                RSB     r0, r0, #&0f
+                STR     r0, ep_pollword
+
+                BIC     r3, r3, #1:SHL:11               ; Mark as non active
+20
+;                TST     r3, #1:SHL:11
+;                EOREQ   r3, r3, #1:SHL:10               ; toggle if not active
+                Debug   interrupt, "transfer finished , ptd, ", r3, r4
+                LDR     r1, ep_ptd_header0
+;                TST     r1, #1:SHL:11
+;                BICEQ   r3, r3, #1:SHL:11               ; mark as not active if marked as such in endpoint structure
+
+                ADR     r0, ep_ptd_header0
+                STMIA   r0, {r3, r4}
+
+                Push    "r2"
+                TST     r4, #1:SHL:11                   ; test direction bit
+                MOVNE   r0, #BufferReason_InsertBlock
+                MOVEQ   r0, #BufferReason_NextBlock
+                LDR     r1, ep_buffer_priv
+                MOV     r2, r6
+                LDRActualBytes  r3, r3
+                Debug   atlbuffer, "bytes read: ", r3
+                CallBuffMan
+                Pull    "r2"
+
+200
+                MOV     r5, r4, LSL#22                  ; bump r6
+                ADD     r6, r6, r5, LSR#22
+                LDR     r2, ep_ptd_chain
+                B       %b10
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 		END

@@ -1,4 +1,6 @@
 
+SVC_Mode        *       3
+
 usb_data
                 = &00, &08          ; blank except for active bit
                 = &08, &1c          ; max packet 16, last PTD, low speed, endpoint 1
@@ -22,9 +24,14 @@ usb_data_end
                 MEND
 
 interrupt_handler
-                EntryS  "R0,R4,R11"
+                EntryS  "R0-R2,R4,R11"
                 LDR     R11, BaseAddress
-
+ [ SafeSVC
+                MRS     r2, CPSR                ; get hold of the flags (or NOP)
+                ORR     r1, r2, #SVC_Mode       ; force SVC mode (preserve 32-bitness)
+                MSR     CPSR_c, r1              ; switch mode, preserve flags
+                MOV     r1, r14_svc
+ ]
                 ; Read and Acknowledge interrupts as soon as possible
                 MOV     R0, #HcuPInterrupt
                 HCLDRH  R4, R0
@@ -37,7 +44,10 @@ interrupt_handler
                 TSTIRQ  AllEOTInt
                 TSTIRQ  ATLInt
                 TSTIRQ  SOFITLInt
-
+ [ SafeSVC
+                MOV     r14_svc, r1
+                MSR     CPSR_c, r2
+ ]
                 EXITS
 
 
@@ -51,11 +61,6 @@ OPR_Reg_handler
                 MOV     R0, #HcInterruptStatus
                 HCLDR   R4, R0
                 HCSTR   R4, R0
-
-;                MOV     R0, #138
-;                LDR     R1, RHInterruptBuffer
-;                MOV     R2, R4
-;                SWI     XOS_Byte
 
                 ; Scheduling overrun
                 TST     R4, #OHCI_SO
@@ -84,7 +89,7 @@ OPR_Reg_handler
                 EXIT
 
 OHCI_RHSC_handler
-                Entry
+                Entry "R0-R3"
                 ; Build up the change bits
                 MOV     R2, #0
 
@@ -111,60 +116,94 @@ OHCI_RHSC_handler
 
                 ; Insert byte into buffer
                 MOV     R0, #BufferReason_InsertByte
-                LDR     R1, RHInterruptBuffer
+                LDR     R3, RHInterrupt
+                LDR     R1, [R3, #:INDEX:ep_buffer_priv]
+                Debug   module, "byte, buffer", R2, R1
                 CallBuffMan
                 EXIT
 
 AllEOTInt_handler
-ATLInt_handler
-SOFITLInt_handler
                 MOV     pc, lr
+ATLInt_handler
+                Entry   "r0-r2"
 
-
-
-
-
-
-
+                ; Don't proceed if in test mode
+                LDR     r0, Flags
+                TST     r0, #flag_Testing
+                EXIT    NE
 
 ; Read from the ATL buffer
                 MOV     R0, #HcTransferCounter
-                MOV     R1, #usb_data_end - usb_data
+                LDR     R1, ATLBufferSize
                 HCSTRH  R1, R0
+
+                ADR     R2, SoftATLBuffer
 
                 MOV     R0, #HcATLBufferPort
                 STR     R0, HCCommand
 10
                 LDR     R0, HCData
+                STRB    R0, [R2], #1
+                MOV     R0, R0, LSR#8
+                STRB    R0, [R2], #1
                 SUBS    R1, R1, #2
                 BHI     %b10
 
-; Write to the ATL buffer
-                MOV     R0, #HcTransferCounter
-                MOV     R1, #usb_data_end - usb_data
-                HCSTRH  R1, R0
+                LDR     r0, Flags
+                BIC     r0, r0, #flag_ATLBufferFilled
+                STR     r0, Flags
 
-                MOV     R0, #HcATLBufferPort:OR:&80
-                STR     R0, HCCommand
+                BL      parse_atl_buffer
+                BL      _write_atl_buffer
+                EXIT
 
-                ADR     R2, usb_data
+SOFITLInt_handler
+                Entry   "r0, r1"
+
+                ; Only fill a buffer if the pending flag is set and a buffer isn't already full
+                LDR     r0, Flags
+                AND     r1, r0, #flag_ATLBufferFilled:OR:flag_ATLBufferPending:OR:flag_Testing
+                TEQ     r1, #flag_ATLBufferPending
+                EXIT    NE
+
+                BIC     r0, r0, #flag_ATLBufferPending
+                STR     r0, Flags
+
+                BL      _write_atl_buffer
+
+                ; Test: disable interrupt now.
+;                MOV     r0, #HcuPInterruptEnable
+;                MOV     r1, #0
+;                HCSTRH  r1, r0
+                EXIT
+
+_write_atl_buffer
+                Entry   "r0-r2"
+                BL      build_atl_buffer
+                STR     r0, ATLBufferSize
+                TEQ     r0, #0
+                DebugIf EQ, module, "no more data to write"
+                EXIT    EQ
+
+;                Debug   module, "ATL buffer size ", r0
+
+                MOV     R1, #HcTransferCounter
+                HCSTRH  R0, R1
+
+                MOV     R1, #HcATLBufferPort:OR:&80
+                STR     R1, HCCommand
+
+                ADR     R2, SoftATLBuffer
 20
-                LDR     R0, [R2], #2
-                STR     R0, HCData
-                SUBS    R1, R1, #2
+                LDR     R1, [R2], #2
+                STR     R1, HCData
+                SUBS    R0, R0, #2
                 BHI     %b20
 
-                ; If there are any interrupts pending, disable them, as we've run out of CPU time
-;                MOV     R0, #HcuPInterrupt
-;                HCLDRH  R1, R0
-;                TST     R1, #1
-;                EXITS   EQ
+                LDR     r0, Flags
+                ORR     r0, r0, #flag_ATLBufferFilled
+                STR     r0, Flags
 
-;                MOV     R0, #HcuPInterruptEnable
-;                MOV     R1, #0
-;                HCSTRH  R1, R0
-
-;                EXITS
-
+                EXIT
 
                 END

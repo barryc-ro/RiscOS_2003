@@ -11,9 +11,18 @@ BuffManService          # 4     ; address of buffer manager routine
 MessagesWorkspace       # 16    ; needed for messages routines
 DeviceFSBlock		# 4	; address of devicefs registration block
 DeviceHandle		# 4	; handle returned from DeviceFS_Register
-RHInterruptBuffer       # 4     ; buffer for root hub events
-RHControlBufferIn       # 4     ; buffer for root hub control in
-RHControlBufferOut      # 4     ; buffer for root hub control out
+RHInterrupt             # 4     ; root hub interrupt stream
+RHControlIn             # 4     ; root hub control in  stream
+RHControlOut            # 4     ; root hub control out stream
+RHAddress               # 1     ; address of root hub
+RHConfig                # 1     ; root hub config value
+                        # 2     ; alignhash 4
+EPHead                  # 0
+EPHeadControl           # 4     ; head endpoint structure
+EPHeadIsochronous       # 4     ; head endpoint structure
+EPHeadBulk              # 4     ; head endpoint structure
+EPHeadInterrupt         # 4     ; head endpoint structure
+EPATLHead               # 4     ; head endpoint from last fill of ATL buffer
 ClkReadyCount           # 4     ; |
 HCSuspendedCount        # 4     ; |
 OPR_RegCount            # 4     ; |--- counts for each type of IRQ
@@ -27,6 +36,8 @@ ITL0Used                # 4     ; amount of ITL buffer 0 used
 ITL1Used                # 4     ; amount of ITL buffer 1 used
 TransferList            # 4     ; list of transfers being processed
 ;OHCIRegs                # OHCI_regs_size
+ATLBufferSize           # 4     ; amount of data written to ATL buffer
+SoftATLBuffer           # &1000 ; soft copy of ATL buffer
 workspace               * :INDEX: @
 
 ;
@@ -35,6 +46,9 @@ workspace               * :INDEX: @
 flag_OwnIRQ             * 1:SHL:2  ; set => IRQ owned for device
 flag_HaveMessages	* 1:SHL:3  ; set => opened messages file
 flag_Registered         * 1:SHL:4  ; set => registered device
+flag_ATLBufferFilled    * 1:SHL:5  ; set => there is data in the ATL buffer
+flag_ATLBufferPending   * 1:SHL:6  ; set => an endpoint requires the ATL buffer
+flag_Testing            * 1:SHL:7  ; set => in test mode - don't process ATL buffer in interrupts
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -64,8 +78,9 @@ port_workspace		* :INDEX: @
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; standard module declarations
-                AREA  |DualSerial$$Code|, CODE, READONLY, PIC
+                AREA  |PHCI$$Code|, CODE, READONLY, PIC
 
+                ENTRY   ; for debug aif
 Module_BaseAddr
 module          & 0
                 & init    -module               ; => initalise routine
@@ -76,16 +91,19 @@ module          & 0
                 & help  -module                 ; => help string
                 & command_table-module		; => command table
 
+                & &80000
+;                & swi_handler-module
+                & 0
+                & swi_table-module
  [ :LNOT: No32bitCode
-                & 0
-                & 0
-                & 0
                 & 0
                 & 0
                 & moduleflags - module          ; => module flags
  ]
 
+swi_table
 title           = "PHCIDriver", 0
+                = "Request", 0, 0
 
 help            = "PHCIDriver", 9, 9, "$Module_MajorVersion ($Module_Date)"
  [ Module_MinorVersion <> ""
@@ -96,16 +114,20 @@ help            = "PHCIDriver", 9, 9, "$Module_MajorVersion ($Module_Date)"
  ]
                 = 0
 
+                ALIGN
 command_table
+ [ test
                 Command PHCIRegs,       0, 0, 0
                 Command PHCIWrite,      2, 2, 0
                 Command PHCIRead,       1, 1, 0
-                Command PHCITest,       2, 2, 0
+                Command PHCITest,       2, 0, 0
                 Command PHCIReadATL,    1, 0, 0
                 Command PDCIWrite,      2, 2, 0
                 Command PDCIRead,       1, 1, 0
-                Command PHCIDevDesc,    1, 1, 0
+                Command PHCIDevDesc,    1, 0, 0
                 Command PHCIReset,      0, 0, 0
+                Command PHCITestBuild,  0, 0, 0
+ ]
                 DCB 0
 
 		ALIGN
@@ -231,10 +253,10 @@ final           Entry	"r0-r1,r11"
 servicetable    DCD     0
                 DCD     serviceentry -module
  [ standalonemessages
-                DCD     Service_ResourceFSStarting
+                DCD     Service_ResourceFSStarting      ; &60
  ]
-                DCD     Service_DeviceFSStarting
-                DCD     Service_DeviceFSDying
+                DCD     Service_DeviceFSStarting        ; &70
+                DCD     Service_DeviceFSDying           ; &71
                 DCD     0
 
                 DCD     servicetable -module
@@ -260,21 +282,22 @@ serviceentry    LDR     wp, [r12]
                 Pull    "r0-r3,pc"				; and exit
 30
  ]
+                TEQ     r1, #Service_DeviceFSDying
+                BNE     %f40
+                LDR     r0, Flags
+		BIC	r0, r0, #flag_Registered
+		STR	r0, Flags
+
+                MOV     pc, lr
+
+40
+                TEQ     r1, #Service_DeviceFSStarting
+                BNE     %f50
+                B       register_device
+50
+99
                 MOV  	pc, lr
 
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-; free workspace
-;
-; in  : r11 port workspace pointer
-;
-free_workspace	Entry	"r0-r2"
-		MOVS    r2, r11
-		MOVNE	r0, #ModHandReason_Free
-		SWINE	XOS_Module
-		EXIT
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -303,6 +326,7 @@ establish_device Entry "r0-r3"
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+ [ test
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; handle the command *PHCIRegs
@@ -365,6 +389,7 @@ hc_reg_end
 
 PHCIRegs_Help   = "*PHCIRegs reads the ISP1161s registers", 0
 PHCIRegs_Syntax = "Syntax: *PHCIRegs", 0
+                ALIGN
 PHCIRegs_Code Entry "r1-r5"
 
                 LDR     r12, [r12]
@@ -435,6 +460,7 @@ PHCIRegs_Code Entry "r1-r5"
 
 PHCIWrite_Help      = "Write to a register in the ISP1161 host", 13
 PHCIWrite_Syntax    = "Syntax: *PHCIWrite <register> <value>", 0
+                ALIGN
 PHCIWrite_Code Entry
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
@@ -469,6 +495,7 @@ PHCIWrite_Code Entry
 
 PHCIRead_Help      = "Read a register from the ISP1161 host", 13
 PHCIRead_Syntax    = "Syntax: *PHCIRead <register>", 0
+                ALIGN
 PHCIRead_Code Entry
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
@@ -498,6 +525,7 @@ PHCIRead_Code Entry
 
 PDCIWrite_Help      = "Write to a register in the ISP1161 device", 13
 PDCIWrite_Syntax    = "Syntax: *PDCIWrite <register> <value>", 0
+                ALIGN
 PDCIWrite_Code Entry
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
@@ -527,6 +555,7 @@ PDCIWrite_Code Entry
 
 PDCIRead_Help      = "Read a register in from the ISP1161 device", 13
 PDCIRead_Syntax    = "Syntax: *PDCIRead <register>", 0
+                ALIGN
 PDCIRead_Code Entry
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
@@ -550,11 +579,15 @@ PDCIRead_Code Entry
 ;
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-PHCITest_Help       = "Send some test data on the bus from memory", 13
-PHCITest_Syntax     = "Syntax: *PHCITest <memory> <size>", 0
+PHCITest_Help       = "Send some test data on the bus from memory, by default the internal buffer", 13
+PHCITest_Syntax     = "Syntax: *PHCITest [<memory> <size>]", 0
+                ALIGN
 PHCITest_Code   Entry
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
+
+                BL      claim_test_semaphore
+                EXIT    VS
 
                 ; Clear the EOT and ATL interrupt bit
                 MOV     r3, #HcuPInterrupt
@@ -566,10 +599,16 @@ PHCITest_Code   Entry
                 MOV     r4, #&1000
                 HCSTRH  r4, r3
 
+                ; If there are no parameters, then read the internal ones
+                TEQ     r1, #0
+                LDREQ   r2, ATLBufferSize
+                ADREQ   r3, SoftATLBuffer
+                BEQ     %f15
+
                 MOV     r1, r0                  ; Command tail
                 MOV     r0, #&10                ; Base
                 SWI     XOS_ReadUnsigned
-                EXIT    VS
+                BVS     %f99
                 MOV     r3, r2
 10
                 LDRB    r0, [r1, #1]!
@@ -578,12 +617,12 @@ PHCITest_Code   Entry
 
                 MOV     r0, #&10                ; Base
                 SWI     XOS_ReadUnsigned
-                EXIT    VS
+                BVS     %f99
 
                 ; Allocate RAM to the ATL buffer
 ;                MOV     r0, #HcATLBufferLength
 ;                HCSTRH  r2, r0
-
+15
                 ; Setup the transfer length
                 MOV     r0, #HcTransferCounter
                 HCSTRH  r2, r0
@@ -600,11 +639,36 @@ PHCITest_Code   Entry
                 SUBS    r2, r2, #2
                 BHI     %BT20
 
+                ; Are interrupts enabled?
+                MOV     r0, #HcuPInterruptEnable
+                HCLDRH  r1, r0
+                TEQ     r1, #0
+                BNE     %f25
+
+                ; If not then poll status bit after ackowledging any outstanding interrupts
+                MOV     r3, #HcuPInterrupt
+                MOV     r0, #&ff
+                HCSTRH  r0, r3
+                SWI     XOS_ReadMonotonicTime
+                ADD     r2, r0, #100
+                MOV     r1, #0                  ; taskwindow yield
+23
+                HCLDRH  r0, r3
+                TST     r0, #ATLInt
+                BNE     %f40
+                MOV     r1, #0
+                MOV     r0, #6
+                SWI     XOS_UpCall
+                SWI     XOS_ReadMonotonicTime
+                CMP     r0, r2
+                BLT     %b23
+                B       %f35
+25
                 ; Wait for the next interrupt
                 LDR     R3, ATLIntCount
                 SWI     XOS_ReadMonotonicTime
                 ADD     R2, R0, #100
-                ADR     R1, PHCITest_Code   ; somewhere non-zero
+                MOV     R1, #0                  ; taskwindow yield
 30
                 LDR     R4, ATLIntCount
                 TEQ     R3, R4
@@ -614,6 +678,7 @@ PHCITest_Code   Entry
                 SWI     XOS_ReadMonotonicTime
                 CMP     R0, R2
                 BLT     %b30
+35
                 Pull    "r2, r3"
                 SWI     OS_WriteS
                 =       "Timeout waiting for device reply",10,13,0
@@ -636,7 +701,8 @@ PHCITest_Code   Entry
                 STRB    r0, [r3], #1
                 SUBS    r2, r2, #2
                 BHI     %BT50
-
+99
+                BL      release_test_semaphore
                 EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -648,13 +714,31 @@ PHCITest_Code   Entry
 
 PHCIDevDesc_Help       = "Read the device descriptor of the connected device to the memory location specified", 13
 PHCIDevDesc_Syntax     = "Syntax: *PHCIDevDesc <memory>", 0
-PHCIDevDesc_Code   Entry
+                ALIGN
+PHCIDevDesc_Code   Entry "r0-r1", &14
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
+
+                ; Go into test mode
+                BL      claim_test_semaphore
+                EXIT    VS
+
+                ; Ramp up FSLargest packet so that we can read low speed devices !?!?!
+                MOV     r3, #HcFmInterval
+                HCLDR   r4, r3
+                MOV     r4, r4, LSL#16
+                MOV     r4, r4, LSR#16
+                ORR     r4, r4, #&20000000
+                HCSTR   r4, r3
 
                 ; Clear the EOT and ATL interrupt bit
                 MOV     r3, #HcuPInterrupt
                 MOV     r4, #AllEOTInt
+                HCSTRH  r4, r3
+
+                ; Turn power on
+                MOV     r3, #HcRhStatus
+                MOV     r4, #OHCI_LPSC
                 HCSTRH  r4, r3
 
                 ; Allocate all RAM to the ATL buffer
@@ -662,17 +746,25 @@ PHCIDevDesc_Code   Entry
                 MOV     r4, #&1000
                 HCSTRH  r4, r3
 
+                ; If there are no arguments, then print to the screen
+                TEQ     r1, #0
+                BNE     %f5
+                MOV     r8, sp
+                B       %f7
+5
                 MOV     r1, r0                  ; Command tail
                 MOV     r0, #&10                ; Base
                 SWI     XOS_ReadUnsigned
-                EXIT    VS
+                BVS     %f99
                 MOV     r8, r2                  ; save for later
+7
+                Debug   module, "Writing to address ", r8
 
                 ; Wait for the next interrupt
                 ADR     R1, SOFITLIntCount
                 MOV     r0, #10
                 BL      wait_for_interrupt
-                EXIT    VS
+                BVS     %f99
 
                 ; fill buffer
                 ADR     r0, GetDevDesc
@@ -683,8 +775,8 @@ PHCIDevDesc_Code   Entry
                 ADR     R1, ATLIntCount
                 MOV     r0, #10
                 BL      wait_for_interrupt
-                EXIT    VS
-
+                BVS     %f99
+10
                 ; fill buffer
                 ADR     r0, read18
                 MOV     r1, #26
@@ -694,9 +786,24 @@ PHCIDevDesc_Code   Entry
                 ADR     R1, ATLIntCount
                 MOV     r0, #10
                 BL      wait_for_interrupt
-                EXIT    VS
+                BVS     %f99
+
+                ; Read header
+                MOV     r0, #HcTransferCounter
+                MOV     r2, #2
+                HCSTRH  r2, r0
+
+                ; Start the transfer
+                PHPSEI  r6
+                MOV     r0, #HcATLBufferPort
+                STR     r0, HCCommand
+                LDR     r0, HCData
+                PLP     r6
+                TST     r0, #1:SHL:11
+                BNE     %b10
 
                 ; Read back the data
+                PHPSEI  r6
 
                 ; Setup the transfer length
                 MOV     r0, #HcTransferCounter
@@ -723,16 +830,110 @@ PHCIDevDesc_Code   Entry
                 STRB    r0, [r3], #1
                 SUBS    r2, r2, #2
                 BHI     %BT10
+                PLP     r6
 
                 ; Acknowledge
-                ADR     r0, acknowledge
+                ADRL    r0, acknowledge
                 MOV     r1, #8
                 BL      write_atl_buffer
 
                 ; Wait for interrupt
-                ADR     R1, ATLIntCount
+                ADRL    R1, ATLIntCount
                 MOV     r0, #10
                 BL      wait_for_interrupt
+
+99
+                BL      release_test_semaphore
+                DebugIf VS, module, "exit with error"
+
+                ; If there was no memory specified, write to screen
+                LDR     r1, [sp, #Proc_RegOffset + 4]
+                TEQ     r1, #0
+                EXIT    NE
+
+                SWI     XOS_WriteS
+                =       "Contents of device descriptor:",10,13,10,13
+
+                MOV     r4, sp
+
+                SWI     XOS_WriteS
+                =       "USB release     : ", 0
+                LDR     r0, [r4], #4
+                MOV     r0, r0, LSR#16
+                BL      show_hex4
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Device class    : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Device subclass : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Device protocol : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Max packet size : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Vendor          : ", 0
+                LDR     r0, [r4], #2
+                MOV     r0, r0, LSL#16
+                MOV     r0, r0, LSR#16
+                BL      show_hex4
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Product         : ", 0
+                LDR     r0, [r4], #2
+                MOV     r0, r0, LSL#16
+                MOV     r0, r0, LSR#16
+                BL      show_hex4
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Release         : ", 0
+                LDR     r0, [r4], #2
+                MOV     r0, r0, LSL#16
+                MOV     r0, r0, LSR#16
+                BL      show_hex4
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Manufacturer    : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Product         : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "Serial number   : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
+
+                SWI     XOS_WriteS
+                =       "No. of configs  : ", 0
+                LDRB    r0, [r4], #1
+                BL      show_hex2
+                SWI     OS_NewLine
 
                 EXIT
 
@@ -749,41 +950,70 @@ acknowledge = &00, &0C, &08, &0C, &00, &04, &00, &00
 
 PHCIReadATL_Help       = "Dump the contents of the ATL buffer", 13
 PHCIReadATL_Syntax     = "Syntax: *PHCIReadATL [<nbytes>]", 0
-PHCIReadATL_Code   Entry "r0-r5"
+                ALIGN
+PHCIReadATL_Code
+                Entry "r0-r6", 16 ; workspace for ConvertHex
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
 
-                PHPSEI  r5
+
+                Debug   module, "n arguments ", r1
+                Debug   module, "r0 => ", r0
+
+                TEQ     r1, #0
+                BEQ     %f10
 
                 ; Read command line
-                MOV     r1, #0
-                MOV     r2, #0
+                MOV     r1, sp
+                MOV     r2, #16
                 SWI     XOS_EvaluateExpression
+                DebugIf VS, module, "Error evaluating"
                 BVS     %f10
                 TEQ     r1, #0
+                Debug   module, "r1 = ", r1
                 BNE     %f10
 
                 MOV     r4, r2
                 B       %f15
 10
                 ; Read ATL buffer size
-                MOV     r3, #HcATLBufferLength
-                HCLDRH  r4, r3
+                LDR     r4, ATLBufferSize
 15
+                MOV     r0, r4
+                BL      show_integer
+                SWI     XOS_NewLine
+
+                PHPSEI  r6
+
                 ; Setup the transfer length
                 MOV     r0, #HcTransferCounter
                 HCSTRH  r4, r0
+                MOV     r5, r4
 
                 ; Start the transfer
                 MOV     r0, #HcATLBufferPort
                 STR     r0, HCCommand
 
+                ADR     R2, SoftATLBuffer
+17
+                LDR     R0, HCData
+                STRB    R0, [R2], #1
+                MOV     R0, R0, LSR#8
+                STRB    R0, [R2], #1
+                SUBS    R4, R4, #2
+                BHI     %b17
+
+                PLP     r6
+
                 ; Read all the data, writing it to screen
-                SUB     sp, sp, #8
+                MOV     r4, r5
+                ADR     r5, SoftATLBuffer
 20
-                LDR     r0, HCData
+                LDR     r0, [R5], #2
+                MOV     r0, r0, LSL#16
+                MOV     r0, r0, LSR#16
                 MOV     r1, r13
-                MOV     r2, #8
+                MOV     r2, #16
                 SWI     XOS_ConvertHex4
                 SWIVC   XOS_Write0
 
@@ -799,10 +1029,11 @@ PHCIReadATL_Code   Entry "r0-r5"
                 SWI     XOS_WriteC
                 B       %BT20
 30
-                ADD     sp, sp, #8
                 SWI     XOS_NewLine
 
-                PLP     r5
+                PLP     r6
+
+                BL      parse_atl_buffer
 
                 EXIT
 
@@ -819,6 +1050,7 @@ PHCIReadATL_Code   Entry "r0-r5"
 ;
 PHCIReset_Help      = "Reset the ISP1161 safely", 13
 PHCIReset_Syntax    = "Syntax: PHCIReset", 0
+                ALIGN
 PHCIReset_Code
                 Entry
                 LDR     r12, [r12]
@@ -863,6 +1095,105 @@ PHCIReset_Code
 30
                 EXIT
 
+                LTORG
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Handles the PHCITestBuild command
+;
+PHCITestBuild_Help      = "Test run of an ATL buffer fill", 13
+PHCITestBuild_Syntax    = "Syntax: PHCITestBuild", 0
+                ALIGN
+PHCITestBuild_Code
+                Entry
+                LDR     r12, [r12]
+                LDR     r11, BaseAddress
+
+                BL      build_atl_buffer
+                STR     r0, ATLBufferSize
+                TEQ     r0, #0
+                BNE     %f10
+                SWI     XOS_WriteS
+                =       "No data to write", 10, 13, 0
+                EXIT
+10
+                MOV     r4, r0
+                SWI     XOS_WriteS
+                =       "Bytes Read: ", 0
+                BL      show_integer
+                SWI     XOS_NewLine
+
+                ; Read all the data, writing it to screen
+                SUB     sp, sp, #8
+                ADR     r6, SoftATLBuffer
+20
+                LDR     r0, [r6], #2
+                MOV     r1, r13
+                MOV     r2, #8
+                SWI     XOS_ConvertHex4
+                SWIVC   XOS_Write0
+
+                ; Put a space between each read, and a newline every 8
+                SUBS    r4, r4, #2
+                BEQ     %FT30
+
+                TST     r4, #&1f
+                SWIEQ   XOS_NewLine
+                BEQ     %BT20
+
+                MOV     r0, #' '
+                SWI     XOS_WriteC
+                B       %BT20
+30
+                ADD     sp, sp, #8
+                SWI     XOS_NewLine
+
+                EXIT
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ ] ; end if debug commands
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Wait for an ATL interrupt
+;
+; in: -
+; out:
+;    V set if couldn't claim
+claim_test_semaphore
+                Entry   "r0,r1"
+                Debuga  module, "Claiming test semaphore... "
+                LDR     r0, Flags
+                TST     r0, #flag_Testing
+                BNE     %f10
+                ORR     r0, r0, #flag_Testing
+                STR     r0, Flags
+                Debug   module, "OK"
+                CLRV
+                EXIT
+10
+                Debug   module, "Already claimed"
+                ADR     R0, ErrorBlock_PHCI_TestSem
+                BL      make_error
+                EXIT
+
+                MakeErrorBlock  PHCI_TestSem
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Wait for an ATL interrupt
+;
+; in:  -
+; out:
+;    V set if already cleared
+
+release_test_semaphore
+                Entry   "r0"
+                LDR     r0, Flags
+                BIC     r0, r0, #flag_Testing
+                STR     r0, Flags
+                Debug   module, "semaphore released"
+                EXIT
+
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -888,15 +1219,27 @@ wait_for_interrupt
                 EXIT    NE
 ;                MOV     R0, #6
 ;                SWI     XOS_UpCall
+                SWI     XOS_ReadEscapeState
+                BCS     %f20
                 SWI     XOS_ReadMonotonicTime
                 CMP     R0, R2
                 BLT     %b10
 
+                Debug   module, "IRQ timeout"
                 ADR     R0, ErrorBlock_PHCI_Timeout
                 BL      make_error
                 EXIT
+20
+                MOV     R0, #126
+                SWI     XOS_Byte
+                Debug   module, "IRQ Escape"
+                ADR     R0, ErrorBlock_PHCI_Escape
+                BL      make_error
+                EXIT
+
 
                 MakeErrorBlock  PHCI_Timeout
+                MakeErrorBlock  PHCI_Escape
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -908,10 +1251,12 @@ wait_for_interrupt
 ;    r1 - number of bytes
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 write_atl_buffer
-                Entry   "r0-r2"
+                Entry   "r0-r3"
                 ; Setup the transfer length
                 MOV     r2, #HcTransferCounter
                 HCSTRH  r1, r2
+
+                PHPSEI  r3
 
                 ; Start the transfer
                 MOV     r2, #HcATLBufferPort:OR:&80
@@ -921,6 +1266,9 @@ write_atl_buffer
                 STR     r2, HCData
                 SUBS    r1, r1, #2
                 BHI     %b10
+
+                PLP     r3
+
                 EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1054,7 +1402,8 @@ make_error_exit
 
  [ standalonemessages
 resource_file_block
-	ResourceFile $MergedMsgs, Resources.Serial.Messages
+	ResourceFile $MergedMsgs, Resources.PHCI.Messages
+;        ResourceFile Test.HardwareTest, !Boot.!Run
 	DCD     0
  ]
 

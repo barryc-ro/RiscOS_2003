@@ -1,0 +1,346 @@
+
+; root hub descriptors:
+
+device_descriptor
+                DCB     18      ; descriptor size
+                DCB     1       ; device type
+                DCW     &110    ; USB rev
+                DCB     &9      ; Device class
+                DCB     0       ; Device subclass
+                DCB     0       ; protocol
+                DCB     64      ; packet size
+                DCW     1228    ; vendor
+                DCW     0       ; product
+device_id       DCW     0       ; bcdDevice
+                DCB     1       ; manufacturer string
+                DCB     2       ; product string
+                DCB     0       ; serial number string
+                DCB     1       ; num configs
+device_descriptor_end
+
+config_descriptor
+                DCB     9       ; length
+                DCB     2       ; type
+                DCW     25      ; total length
+                DCB     1       ; num interfaces
+                DCB     1       ; config value
+                DCB     0       ; config string
+                DCB     &40     ; attributes
+                DCB     0       ; max power
+
+interface_descriptor
+                DCB     9       ; length
+                DCB     4       ; type
+                DCB     0       ; iface number
+                DCB     0       ; alternate setting
+                DCB     1       ; num endpoints
+                DCB     9       ; iface class
+                DCB     9       ; iface sub class
+                DCB     0       ; iface protocol
+                DCB     0       ; iface string
+
+endpoint_descriptor
+                DCB     7       ; length
+                DCB     5       ; type
+                DCB     &81     ; number
+                DCB     &3      ; attributes
+                DCW     8       ; max packet
+                DCB     255     ; interval
+config_descriptor_end
+
+hub_descriptor
+                DCB     9       ; length
+                DCB     &29     ; type
+                DCB     0       ; n ports
+                DCB     0
+                DCB     0
+                DCB     0
+                DCB     0
+                DCB     0
+                DCB     0
+hub_descriptor_end
+
+langids         = 4, 3, 0, 0
+philips         = 16, 3,'P',0,'h',0,'i',0,'l',0,'i',0,'p',0,'s',0
+isp1161         = 16, 3,'I',0,'S',0,'P',0,'1',0,'1',0,'6',0,'1',0
+                ALIGN
+
+strings         DCD langids
+                DCD philips
+                DCD isp1161
+
+; USB Request
+                            ^ 0
+usbrequest_requestType      # 1
+usbrequest_request          # 1
+usbrequest_value            # 2
+usbrequest_index            # 2
+usbrequest_length           # 2
+usbrequest_size             * :INDEX:@
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: root_hub_out
+;
+; E: r2 = endpoint for root hub control
+; some data has been received on the root hub - process this.
+;
+
+; make sure our workspace is word aligned
+                            GBLA    root_hub_out_workspace
+root_hub_out_workspace      SETA    device_descriptor_end - device_descriptor
+ [ root_hub_out_workspace :AND: 3 <> 0
+root_hub_out_workspace      SETA    root_hub_out_workspace + (3 :AND: (4 - root_hub_out_workspace))
+ ]
+
+root_hub_out    Entry "R0-R5",root_hub_out_workspace
+                MOV     R0, #BufferReason_RemoveBlock
+                LDR     R1, ep_buffer_priv
+                MOV     R2, sp
+                MOV     R3, #usbrequest_size
+                CallBuffMan
+
+                LDMIA   sp, {R4, R5}
+
+		Debug	roothub, "root hub request : ", R4, R5
+
+                ; ignore anything other than standard and class requests
+                TST     R4, #1:SHL:6
+                EXIT    NE
+
+                LDRB    r0, [sp, #usbrequest_request]
+
+                TST     R4, #1:SHL:5
+                BNE     hub_requests
+                Debug   roothub, "standard request : ", r0
+
+                CMP     r0, #(%20-%10)/4	; validate reason code
+                ADDCC   pc, pc, r0, LSL #2 	; despatch
+		B	reserved
+10
+                B       get_status
+                B       clear_feature
+                B       reserved
+                B       set_feature
+                B       reserved
+                B       set_address
+                B       get_descriptor
+                B       set_descriptor
+                B       get_configuration
+                B       set_configuration
+                B       get_interface
+                B       set_interface
+                B       synch_frame
+20
+
+hub_requests
+                Debug   roothub, "hub request ", r0
+                CMP     r0, #(%40-%30)/4	; validate reason code
+                ADDCC   pc, pc, r0, LSL #2 	; despatch
+		B	reserved
+30
+                B       hub_get_status
+                B       hub_clear_feature
+                B       reserved
+                B       hub_set_feature
+                B       reserved
+                B       reserved
+                B       hub_get_descriptor
+                B       hub_set_descriptor
+                B       clear_tt_buffer
+                B       reset_tt
+                B       get_tt_state
+                B       stop_tt
+40
+
+                ; the following don't do anything
+hub_set_descriptor
+clear_tt_buffer
+reset_tt
+get_tt_state
+stop_tt
+synch_frame
+set_descriptor
+set_interface
+clear_feature
+set_feature
+reserved
+                EXIT
+get_status
+                Debug   roothub, "get status"
+                ; for a device request, return with one bit set, to indicate we're self-powered
+                MOV     r0, #0
+                TST     r4, #&1f
+                MOVNE   r0, #1
+                STR     r0, [sp]
+                MOV     r2, sp
+                B       send_request
+set_address
+                Debug   roothub, "set address"
+                MOV     r0, r4, LSR#16
+                STR     r0, RHAddress
+                EXIT
+get_descriptor
+                Debug   roothub, "get descriptor"
+                MOV     r0, r4, LSR#24
+                CMP     r0, #0
+                EXIT    LE
+                CMP     r0, #3
+                EXIT    GT
+                TEQ     r0, #1      ; Device descriptor
+                BNE     %f43
+
+                ; Copy the device descriptor so that we can insert the chip ID
+                ADRL    r2, device_descriptor
+                ADRL    r3, device_descriptor_end
+                MOV     r1, sp
+42
+                LDR     r0, [r2], #4
+                STR     r0, [r1], #4
+                CMP     r2, r3
+                BLT     %b42
+                MOV     r0, #HcChipID
+                HCLDRH  r1, r0
+                STRB    r1, [sp, #device_id - device_descriptor]
+                MOV     r1, r1, LSR#8
+                STRB    r1, [sp, #device_id - device_descriptor + 1]
+                MOV     r2, sp
+                B       send_request
+43
+                BEQ     send_request
+                TEQ     r0, #2      ; Config descriptor
+                ADREQL  r2, config_descriptor
+                BEQ     send_request
+                TEQ     r0, #3      ; String descriptor
+                EXIT    NE
+                MOV     r1, r4, LSR#16
+                AND     r1, r1, #&ff
+                CMP     r1, #2
+                EXIT    GT
+                ADR     r2, strings
+                LDR     r2, [r2, r1]
+                B       send_request
+
+get_configuration
+                LDRB    r0, RHConfig
+                Debug   roothub, "get configuration", r0
+                STRB    r0, [sp]
+                MOV     r2, sp
+                B       send_request
+set_configuration
+                MOV     r0, r4, LSR#16
+                Debug   roothub, "set configuration", r0
+                STRB    r0, RHConfig
+                EXIT
+get_interface
+                Debug   roothub, "get interface"
+                MOV     r0, #0
+                STRB    r0, [sp]
+                MOV     r2, sp
+                B       send_request
+
+hub_get_status
+                Debug   roothub, "get status"
+                MOV     R0, #HcRhStatus
+                TST     R4, #3
+                MOV     R1, R5, LSL#16
+                MOV     R1, R1, LSR#16
+                ADDNE   R0, R0, R1
+                HCLDR   R1, R0
+                STR     R1, [sp]
+                MOV     R2, sp
+                B       send_request
+
+hub_clear_feature
+                Debug   roothub, "clear feature"
+                MOV     R0, #HcRhStatus
+
+                ; If this is a port request, mask off the port number
+                TST     R4, #3
+                MOVNE   R1, R5, LSL#24
+                MOVNE   R1, R1, LSR#24
+                ADDNE   R0, R0, R1
+
+                ; mask off the feature number
+                ; all clear features map directly onto register bits.
+                MOV     R1, R4, LSR#16
+
+                ; and translate it if it's for a port
+                BEQ     %f50
+                TEQ     R1, #1          ; clear enable is 0
+                MOVEQ   R1, #0
+                TEQ     R1, #2          ; clear suspend is 3
+                TEQNE   R1, #8          ; clear power is 9
+                ADDEQ   R1, R1, #1
+50
+                ; set the bit
+                MOV     R2, #1
+                MOV     R1, R2, LSL R1
+                HCSTR   R1, R0
+                EXIT
+
+hub_set_feature
+                MOV     R0, #HcRhStatus
+
+                ; If this is a port request (in fact it must be), mask off the port number
+                TST     R4, #3
+                MOVNE   R1, R5, LSL#24
+                MOVNES  R1, R1, LSR#24
+                BEQ     %f60
+                ADDNE   R0, R0, R1
+
+                ; mask off the feature number
+                MOV     R1, R4, LSR#16
+
+                ; set the bit (they all map onto OHCI root hub bits exactly)
+                MOV     R2, #1
+                MOV     R1, R2, LSL R1
+                Debug   roothub, "hub set feature: bit field, reg", R1, R0
+                HCSTR   R1, R0
+                EXIT
+60
+                ; illegal port number
+                EXIT
+
+hub_get_descriptor
+                Debug   roothub, "get hub descriptor"
+                MOV     r3, sp
+                MOV     r1, #9
+                STRB    r1, [r3], #1
+                MOV     r1, #&29
+                STRB    r1, [r3], #1
+                MOV     r0, #HcRhDescriptorA
+                HCLDR   r1, r0
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                MOV     r0, #HcRhDescriptorB
+                HCLDR   r1, r0
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                STRB    r1, [r3], #1
+                MOV     r1, r1, LSR#8
+                MOV     r2, sp
+send_request
+                MOV     R0, #BufferReason_InsertBlock
+                MOV     r4, r2
+                LDR     r2, [sp, #Proc_RegOffset + 2*4]
+                LDR     r1, ep_buffer_priv
+                MOV     r2, r4
+                MOV     r3, r5, LSR#16
+                Debug   roothub, "send request ", r1, r2, r3
+                CallBuffMan
+                EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+                END
