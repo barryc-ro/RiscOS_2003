@@ -8,11 +8,24 @@
 #include <socklib.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <swis.h>
+
+#include "Global/RISCOS.h"
+#include "Global/Upcall.h"
 
 #include "TFTPhdr.h"
 #include "tftp.h"
+
+static void convert_netascii_in_memory(char *p);
+
+/*
+ * Because we could get threaded out in a task window, we count how many
+ * sessions are going. Could be nasty if someone killed us...
+ */
+static int sessions;
 
 /* Generic Dynamic Area pumper */
 typedef struct area
@@ -49,6 +62,31 @@ static _kernel_oserror *pumptoda(const void *data, u_long offset, size_t len, vo
     return NULL;
 }
 
+static _kernel_oserror *createda(struct area *da)
+{
+    _kernel_oserror *e;
+
+    e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3),
+                              0, -1, 4, -1, 0x80,
+                              32*1024*1024, NULL, NULL,
+                              "TFTP buffer",
+                              &da->num, &da->base);
+    if (e) return e;
+
+    e = _swix(OS_ReadDynamicArea, _IN(0)|_OUT(1), da->num, &da->size);
+    if (e)
+        goto error;
+
+    da->used = 0;
+
+    return NULL;
+
+  error:
+    _swix(OS_DynamicArea, _INR(0,1), 1, da->num);
+
+    return e;
+}
+
 /* Module loader */
 
 static _kernel_oserror *fetchmodule(const char *filename, struct in_addr server)
@@ -57,24 +95,18 @@ static _kernel_oserror *fetchmodule(const char *filename, struct in_addr server)
     _kernel_oserror *e;
     u_long *module;
 
-    e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3),
-                              0, -1, 4, -1, 0x80,
-                              32*1024*1024, NULL, NULL,
-                              "TFTP buffer",
-                              &da.num, &da.base);
+    e = createda(&da);
     if (e) return e;
-
-    e = _swix(OS_ReadDynamicArea, _IN(0)|_OUT(1), da.num, &da.size);
-    if (e)
-        goto error;
-
-    da.used = 0;
 
     /* Hackery to fool pumping routing to keep first word clear */
     da.base = (char *) da.base + 4;
     da.size -= 4;
 
+#ifdef NETASCII
+    e = tftpreadfile(filename, server, false, pumptoda, &da);
+#else
     e = tftpreadfile(filename, server, pumptoda, &da);
+#endif
     if (e)
         goto error;
 
@@ -97,6 +129,95 @@ static _kernel_oserror *fetchmodule(const char *filename, struct in_addr server)
 
   error:
     _swix(OS_DynamicArea, _INR(0,1), 1, da.num);
+
+    return e;
+}
+
+/* Obey file loader */
+
+static int current_da_num = -1;
+static bool tidied;
+
+int upcall_handler(_kernel_swi_regs *r, void *pw)
+{
+    pw = pw;
+
+    if (r->r[0] == UpCall_NewApplication)
+    {
+        /* Note - a later claimant may object, so we might be exiting
+         * normally after all! Set the tidied flag to indicate that
+         * we've been run
+         */
+        tidied = true;
+
+        /* Won't be returning through fetchobey, so do its clean-up */
+
+        if (current_da_num != -1)
+        {
+            _swix(OS_DynamicArea, _INR(0,1), 1, current_da_num);
+            current_da_num = -1;
+        }
+
+        /* Yes, it's fine for a vector handler to release itself */
+        _swix(OS_Release, _INR(0,2), UpCallV, upcall_entry, pw);
+
+        /* Won't be returning through tftp_command, so do its clean-up */
+        if (sessions > 0)
+            sessions--;
+
+        _swix(Hourglass_Off, 0);
+    }
+
+    return 1; /* Don't claim */
+}
+
+static _kernel_oserror *fetchobey(const char *filename, const char *opts,
+                                  struct in_addr server, void *pw)
+{
+    struct area da;
+    _kernel_oserror *e;
+    char buffer[64];
+
+    e = createda(&da);
+    if (e) return e;
+
+    /* Read in netascii mode, if available */
+#ifdef NETASCII
+    e = tftpreadfile(filename, server, true, pumptoda, &da);
+#else
+    e = tftpreadfile(filename, server, pumptoda, &da);
+#endif
+    if (e)
+        goto error;
+
+    /* Add a terminating 0 to the end of the file */
+    e = pumptoda("", da.used, 1, &da);
+    if (e)
+        goto error;
+
+#ifdef NETASCII
+    convert_netascii_in_memory((char *) da.base);
+#endif
+
+    current_da_num = da.num;
+
+    /* The Obey file may not return. Have to deal gracefully with this condition. */
+    e = _swix(OS_Claim, _INR(0,2), UpCallV, upcall_entry, pw);
+    if (e) goto error;
+
+    tidied = false;
+
+    sprintf(buffer, "%%Obey %s-m &%08X", opts, (unsigned int) da.base);
+    e = _swix(OS_CLI, _IN(0), buffer);
+
+    if (!tidied)
+    {
+        current_da_num = -1;
+        _swix(OS_Release, _INR(0,2), UpCallV, upcall_entry, pw);
+
+      error:
+        _swix(OS_DynamicArea, _INR(0,1), 1, da.num);
+    }
 
     return e;
 }
@@ -141,7 +262,82 @@ static _kernel_oserror *pumptofile(const void *data, u_long offset, size_t len, 
     return &_inet_error;
 }
 
-static _kernel_oserror *fetchfile(const char *filename, struct in_addr server, const char *local)
+#ifdef NETASCII
+static _kernel_oserror *convert_netascii(int f)
+{
+    _kernel_oserror *e;
+    char buffer[1024];
+    int pi, po;
+    int n;
+
+    pi = po = 0;
+
+    /* Read 1024 bytes at a time, with one byte overlap.
+     * Reduce all '\r\n' pairs to '\n'
+     */
+    do
+    {
+        char *p1, *p2;
+        char *end;
+
+        e = _swix(OS_GBPB, _INR(0,4)|_OUT(3), 3, f, buffer, sizeof buffer, pi, &n);
+        if (e) return e;
+
+        end = buffer + (sizeof buffer - n - 1);
+
+        for (p1 = p2 = buffer; p1 < end; p1++, p2++)
+        {
+            if (*p1 == '\r' && *(p1+1) == '\n')
+                p1++;
+            if (p1 != p2)
+                *p2 = *p1;
+        }
+
+        if ((pi != po || p1 != p2) && p2 > buffer)
+        {
+            e = _swix(OS_GBPB, _INR(0,4), 1, f, buffer, p2 - buffer, po);
+            if (e) return e;
+        }
+        pi += p1 - buffer;
+        po += p2 - buffer;
+    } while (!n);
+
+    /* Truncate the file */
+    if (pi != po)
+        e = _swix(OS_Args, _INR(0,2), 3, f, po);
+
+    return e;
+}
+
+/* Converts the null-terminated string p from netascii to RISC OS format. Returns pointer
+ * to new terminator.
+ */
+static void convert_netascii_in_memory(char *p)
+{
+    char *d = p;
+
+    for (;;)
+    {
+        if (*p == '\r' && *(p+1) == '\n')
+            p++; /* Skip over the \r */
+
+        if (p != d)
+            *d = *p;
+
+        if (*d == '\0')
+            break;
+
+        p++;
+        d++;
+    }
+}
+#endif
+
+static _kernel_oserror *fetchfile(const char *filename, struct in_addr server, const char *local
+#ifdef NETASCII
+                                  , bool netascii
+#endif
+                                 )
 {
     fileinfo fi;
     _kernel_oserror *e;
@@ -168,10 +364,42 @@ static _kernel_oserror *fetchfile(const char *filename, struct in_addr server, c
     /* Pump the file */
     fi.pos = 0;
     if (!e)
+#ifdef NETASCII
+        e = tftpreadfile(filename, server, netascii, pumptofile, &fi);
+#else
         e = tftpreadfile(filename, server, pumptofile, &fi);
+#endif
+
+#ifdef NETASCII
+    if (!e && netascii)
+        e = convert_netascii(fi.file);
+#endif
 
     /* Close the file */
     _swix(OS_Find, _INR(0,1), 0, fi.file);
+
+    if (!e)
+    {
+        size_t nlen = strlen(filename);
+        unsigned int type;
+
+        if (nlen >= 4 &&
+            filename[nlen-4] == ',' &&
+            isxdigit(filename[nlen-3]) &&
+            isxdigit(filename[nlen-2]) &&
+            isxdigit(filename[nlen-1]))
+        {
+            type = (unsigned int) strtoul(filename + nlen - 3, NULL, 16);
+        }
+#ifdef NETASCII
+        else if (netascii)
+            type = 0xFFF;
+#endif
+        else
+            type = 0xFFD;
+
+        _swix(OS_File, _INR(0,2), 18, canonical ? canonical : local, type);
+    }
 
     /* If an error occured, other than Escape, delete the file */
     if (e && !(e->errnum == 17 && fi.pos != 0))
@@ -200,12 +428,6 @@ static _kernel_oserror *name_to_addr(const char *server, struct in_addr *addr)
     return NULL;
 }
 
-/*
- * Because we could get threaded out in a task window, we count how many
- * sessions are going. Could be nasty if someone killed us...
- */
-static int sessions;
-
 _kernel_oserror *tftp_command(const char *arg, int argc, int cmd_no, void *pw)
 {
     char *buffer[64];
@@ -213,14 +435,27 @@ _kernel_oserror *tftp_command(const char *arg, int argc, int cmd_no, void *pw)
     bool eflag = false;
     struct in_addr addr;
     _kernel_oserror *e;
+    const char *fmt;
 
     argc = argc;
     pw = pw;
 
-    e=_swix(OS_ReadArgs, _INR(0,3),
-                cmd_no == CMD_TFTPRead ? "e/s,/a,/a,/a" : "e/s,/a,/a",
-                arg, buffer, sizeof buffer);
+    switch (cmd_no)
+    {
+        default:
+#ifdef NETASCII
+        case CMD_TFTPRead:       fmt = "e/s,/a,/a,/a,netascii=a/s,octet=b/s"; break;
+#else
+        case CMD_TFTPRead:       fmt = "e/s,/a,/a,/a"; break;
+#endif
+        case CMD_TFTPLoadModule: fmt = "e/s,/a,/a"; break;
+        case CMD_TFTPObey:       fmt = "e/s,/a,/a,v/s"; break;
+    }
+
+    e=_swix(OS_ReadArgs, _INR(0,3), fmt, arg, buffer, sizeof buffer);
     if (e) return e;
+
+    _swix(Hourglass_On, 0);
 
     if (*argv++)
         eflag = true;
@@ -234,14 +469,22 @@ _kernel_oserror *tftp_command(const char *arg, int argc, int cmd_no, void *pw)
         switch (cmd_no)
         {
             case CMD_TFTPRead:
+#ifdef NETASCII
+                e = fetchfile(argv[1], addr, argv[2], (bool) argv[3]);
+#else
                 e = fetchfile(argv[1], addr, argv[2]);
+#endif
                 break;
             case CMD_TFTPLoadModule:
                 e = fetchmodule(argv[1], addr);
                 break;
+            case CMD_TFTPObey:
+                e = fetchobey(argv[1], argv[2] ? "-v" : "", addr, pw);
+                break;
         }
 
-        sessions--;
+        if (!tidied)
+            sessions--;
     }
 
     if (e && eflag)
@@ -249,6 +492,11 @@ _kernel_oserror *tftp_command(const char *arg, int argc, int cmd_no, void *pw)
         _kernel_setenv("Inet$Error", e->errmess);
         e = NULL;
     }
+
+    if (!tidied)
+        _swix(Hourglass_Off, 0);
+
+    tidied = false;
 
     return e;
 }
