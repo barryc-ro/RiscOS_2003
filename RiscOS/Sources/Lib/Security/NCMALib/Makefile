@@ -88,6 +88,7 @@ export_libs: ${TARGET} ${TARGETZ}
         ${MKDIR} ${EXPORT_DIR}.o
         ${CP} ${TARGET} ${EXPORT_DIR}.o.${TARGET} ${CPFLAGS}
         ${CP} ${TARGETZ} ${EXPORT_DIR}.o.${TARGETZ} ${CPFLAGS}
+        ${CP} VersionNum ${EXPORT_DIR}.LibVersion ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
 
