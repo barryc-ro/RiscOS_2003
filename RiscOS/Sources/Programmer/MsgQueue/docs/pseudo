@@ -1,0 +1,525 @@
+/************************************************************************************/
+/*                                                                                  */
+/*  File: pseudo.c                                                                  */
+/*  Description: pseudo code design for msgqueue.c                                  */
+/*                                                                                  */
+/*  Copyright © 1999 Element 14, The Acorn Group plc, Cambridge, England            */
+/*  Documents:  MessageQueue Software Functional Specification, 1216,612/FS         */
+/*              MessageQueue Detailed Software Design, 1216,612/DS                  */
+/*                                                                                  */
+/************************************************************************************/
+
+#define SIZEOF_HDR 24
+
+typedef struct
+{
+  unsigned int sizeof_message;
+  unsigned int sender_id;
+  unsigned int reserved;
+  unsigned int flags;
+  unsigned int message_id;
+  signed int timestamp;
+  char *message_data;
+} Message;
+
+struct MessageQueue
+{
+  ApplicationId application_id;
+  unsigned int pollword;
+  unsigned int queue_size;
+  unsigned int q_empty;
+  unsigned int last_recorded_timestamp;
+  unsigned int maxsize_single_msg;
+  void *head;
+  void *tail;
+  int *startof_dispatch;
+  int *startof_freespace;
+  unsigned int *buff;
+};
+
+typedef struct
+{
+  unsigned int qslots[32];
+  struct QueueBlock *next;
+} BlockOfQueues;
+
+static BlockOfQueues *head = NULL;
+
+/*
+ * The register and deregister SWIs share the same mutual exclusion flag, because we
+ * don't want one caller registering at the same time as another caller deregistering.
+ */
+static int mutex = 0;
+
+/************************************************************************************/
+/* Function:  Non re-entrant messagequeue_register()                                */
+/* Behaviour: Creates a new message queue for use by the calling app'n wishing to   */
+/*            receive messages.                                                     */
+/* Requires:  Register arguments:                                                   */
+/*            R0: Flags. If bit 0 is set, claim memory dynamically if possible.     */
+/*            Bits 1 to 31 are reserved and should be zero.                         */
+/*            R1: Application identifier.                                           */
+/*            R2: Total buffer space to claim for message queue.                    */
+/*            R3: Maximum size for a single message (or 0 if no limit).             */
+/* Returns:   error_NOT_ENOUGH_MEMORY, or NULL.  NULL can mean that the function    */
+/*            completed successfully, or, the caller is not adhering to the rules   */
+/*            of re-entrancy.  (This SWI is non re-entrant).  Call by reference     */
+/*            returns exit registers as follows:                                    */
+/*            R0: Flags. If bit 0 is set, dynamic memory request was honoured.      */
+/*            Bits 1 to 31 are preserved.                                           */
+/*            R1: Message queue handle.                                             */
+/*            R2: Address of pollword (0 indicates no messages in the queue, otw    */
+/*            contains the size of the next message to be dispatched).              */
+/************************************************************************************/
+
+_kernel_oserror *messagequeue_register(messagequeue_register_args *args,void *pw)
+{
+  BlockOfQueues *current = NULL, *p = NULL, *prev = NULL;
+  MessageQueue *handle;
+  unsigned int *p2 = NULL;
+  int *prev = NULL;
+  int blocknum = 0;
+
+    Disable interrupts;
+    if (mutex)
+    {
+        Re-enable interrupts;
+        There is already a caller executing this SWI.  It is not re-entrant, so
+        return an error, except, because this is an interrupt, rather than return
+        an error just exit silently.  (Verified with Alan - not a good idea to
+        return errors from within interrupts).
+    }
+    mutex = 1;
+    Restore interrupts;
+
+    if (head == NULL)
+    {
+         p = allocate a new queue block;
+         for (i = 0; i < 32; p->qslots[i].buff = NULL, i++);
+         p->next = NULL;
+         head = current = p;
+         i = 0;
+    }
+    else
+    {
+         current = head;
+
+         i = 0;
+         while ((current->qslots[i] != NULL) && (p == NULL))
+         {
+                      for (i = 0; i < 32; i++)
+                      {
+                             if (current->qslots[i].buff == NULL)
+                                  goto spare_slot_found;
+                      }
+
+                      Look in the next block.  If there are no more blocks to look in,
+                      we need to create a new block of queue handles.
+
+                      if (current->next == NULL)
+                      {
+                           Create a new block of queue handles.
+                           p = allocate a new block;
+                           for (i = 0; i < 32; p->qslots[i].buff = NULL, i++);
+                           p->next = NULL;
+                           prev = current;
+                           current = p;
+                      }
+                      else
+                      {
+                            current = current->next;
+                      }
+                      i = 0;
+                      blocknum++;
+          }
+    }
+
+    spare_slot_found:  /* Now slot in a new message queue. */
+
+    if (p is NULL)
+        p = current;
+
+    if (requested dynamic allocation)
+    {
+        p2 = allocate dynamic area for message queue;
+        If successful, p2 points at the base of the new message queue
+        and bit 0 of R0 is set to indicate that the request was honoured, otherwise,
+        bit 0 of R0 must be cleared.
+    }
+
+    if (p2 still NULL)
+    {
+        p2 = allocate memory for message queue using the RMA;
+        If successful, p2 points at the base of the new message queue;
+    }
+
+    if (p2 still NULL)
+    {
+        if (prev != NULL)
+            free(current);
+
+        mutex = 0;
+        return error insufficient memory to set up message queue;
+    }
+
+    /* Initialise the new message queue. */
+
+    p->qslots[i].application_id = application id specified in R1.
+    p->qslots[i].pollword = 0;
+    p->qslots[i].queue_size = size of queue (in bytes);
+    p->qslots[i].q_empty = TRUE;
+    p->qslots[i].last_recorded_timestamp = 1;
+    p->qslots[i].head = p2 (head of message queue buffer);
+    p->qslots[i].tail = head of message queue buffer + number of bytes specified in R2 (size of buffer).
+    p->qslots[i].startof_despatch = NULL; (no messages to dispatch - queue's empty)
+    p->qslots[i].startof_freespace = head of queue buffer;
+    args.R1 = (blocknum * 32) + i;
+    args.R2 = address of pollword;
+
+    if (prev != NULL)
+        prev->next = p;
+
+    Now make the queue visible to the rest of the world, by linking it to the appropriate
+    block of message queues.
+    current->qslots[i].buff = p2;
+
+    We're finished.  Clear the mutual exclusion flag to let the next caller in when
+    it next calls.
+    mutex = 0;
+}
+
+/************************************************************************************/
+/* Function:  Non re-entrant messagequeue_deregister()                              */
+/* Behaviour: Deletes the specified message queue.  Any messages pending delivery   */
+/*            are discarded.                                                        */
+/* Requires:  Register arguments:                                                   */
+/*            R0: Flags (bits 0 to 31 reserved, should be zero).                    */
+/*            R1: Message queue handle.                                             */
+/* Returns:   error_UNKNOWN_QUEUE, or NULL.  NULL can mean that the function        */
+/*            completed successfully, or, the caller is not adhering to the rules   */
+/*            of re-entrancy.  (This SWI is non re-entrant).                        */
+/*            Call by reference returns exit registers as follows:                  */
+/*            R0: Flags.                                                            */
+/*            R1: Number of messages discarded.                                     */
+/************************************************************************************/
+THIS SWI MUST NOT BE CALLED FROM WITHIN AN INTERRUPT.
+_kernel_oserror *messagequeue_deregister(messagequeue_deregister_args *args,void *pw)
+{
+  BlockOfQueues *current;
+  unsigned int *p;
+
+    Disable interrupts;
+    if (mutex)
+    {
+       Re-enable interrupts;
+       There is already a caller executing this SWI.  It is not re-entrant, so
+       return an error.
+    }
+    mutex = 1;
+    Re-enable interrupts;
+
+    n = args handle;
+    Use findq() as described (1216,612/DS - end of the section on structure and data types)
+    The current message queue can now be found at current->qslots[n].
+    If current->qslots[n].buff == NULL
+       return (Queue is already deregistered, or doesn't exist);
+
+    p = current->qslots[n].buff;
+    current->qslots[n].buff = NULL;
+
+    From here on, we're safe if we get interrupted by a send or receive, since they won't find 
+    the queue.  (Don't want send / receive to be working with partially deallocated memory or 
+    altering the number of messages in the queue while we're counting them).
+
+    args.R1 = count number of messages in the queue;
+    
+    free / deallocate qslots[n].buff;
+    
+    Clear our mutual exclusion flag.
+    mutex = 0;
+}
+
+/************************************************************************************/
+/* Function:  Re-entrant messagequeue_send()                                        */
+/* Behaviour: Sender wants to deliver a message into the specified queue.           */
+/* Requires:  Register arguments:                                                   */
+/*            R0: Flags (bits 0 to 31 reserved, should be zero).                    */
+/*            R1: Message queue handle.                                             */
+/*            R2: Points to the message.                                            */
+/* Returns:   NULL for success, otherwise, error_BAD_MESSAGE_SIZE, error_UNKNOWN_   */
+/*            QUEUE, error_MESSAGE_TOO_LARGE, or error_QUEUE_FULL.                  */
+/************************************************************************************/
+_kernel_oserror *messagequeue_send(messagequeue_send_args *args)
+{
+  BlockOfQueues *current;
+  MessageQueue *q;
+  unsigned int *old_startof_freespace;
+  unsigned int total_freespace = 0;
+  int timestamp;
+  int msgsize;
+  int freespace_at_tail = 0;
+  int freespace_at_head = 0;
+  int n; (queue handle as described in detailed design spec)
+
+    Read message size from message pointed to by R2.
+    If size is not a multiple of 4, and is less than 24 bytes, return bad message
+    size (1216,612/FS).
+    
+    n = args handle (R1);
+    Use findq() as described (1216,612/DS - end of the section on structure and data types)
+    The current message queue can now be found at current->qslots[n].
+    If current->qslots[n].buff == NULL return unknown queue;
+    
+    q = &(current->qslots[n]);  
+    
+    if size of message > max message size specified on registration,
+       return error message too large;
+
+    timestamp = get OS_Monotonic time;
+    if (timestamp is zero)
+    {
+        OS_Monotonic time has just been reset.  Zero is a special case for us, so reset
+        timestamp to some other 'pretend' time which is close to but not equal to zero
+        (e.g. 1 in pseudo terms).  It's highly unlikely we'll ever end up in this section
+        of code.  A possible side effect if we did get here is that to the user, it
+        might appear that they'd received a message or two out of order when really
+        it's just the timestamp that's slightly out.
+    }
+
+    Start of critial section.  Do reading and updating of startof_freespace and startof_
+    despatch ptrs as close together as possible, to reduce the size of the critical section.
+    
+    freespace_available(current->qslots[n],&total_freespace,&freespace_at_head,&freespace_at_tail,
+      size of message);
+    
+    If message too large to fit in total_freespace, return message too large error.
+    (Distinguish between error_message_too_large and error_queue_full).
+   
+    Reserve space for the new message but save copying until we've exited the critical region.
+    Space reservation as described in section 5.2 of the detailed design spec (1216,612/DS).
+
+    Initialise timestamp portion of our reserved space to some invalid value.  Don't forget
+    to allow for a message which might wrap from tail to head, whereby the start of the message
+    is at the tail end of the queue, but the timestamp is in the wrapped section at the head.
+
+    if (timestamp we saved earlier < last recorded timestamp) timestamp = last_recorded_timestamp;
+    else last_recorded_timestamp = timestamp we saved earlier;
+
+    End of critical section.
+
+    Copy message into old_startof_freespace.  (Remember to allow for wrap around.  We already 
+    know freespace_at_tail and freespace_at_head). 
+
+    We're ok if an interrupt happens here.  SWI_receive won't despatch until it sees a valid 
+    timestamp in the message at the startof_despatch point. 
+
+    Insert timestamp (as opposed to 'last_recorded_timestamp');
+
+    Don't use the pollword, because it can temporarily be zero in the middle of a recieve (to 
+    prevent the owner of the queue receiving messages out of order during one particular 
+    interrupt scenario. Use q_empty flag instead.
+    
+    Enter critical.
+    if (q_empty is TRUE) pollword = size of this message and q_empty = FALSE;
+    End critical.
+    
+}
+
+/************************************************************************************/
+/* Function:  Re-entrant messagequeue_receive()                                     */
+/* Behaviour: Dispatch a message from the specified queue.                          */
+/* Requires:  Register arguments:                                                   */
+/*            R0: Flags.  Copy as much of the message as possible, into the callers */
+/*            buffer.  Then, if the bit 0 is set, discard the message from the queue*/
+/*            as normal.  If bit 0 is not set, keep the message.  This gives the    */
+/*            caller a chance to retry with a larger buffer.                        */
+/*            Bits 1 to 31 are reserved (zero).                                     */
+/*            R1: Message queue handle.                                             */
+/*            R2: Ptr to buffer to receive message.                                 */
+/*            R3: Size of buffer.                                                   */
+/* Returns:   NULL for success, otherwise, error_UNKNOWN_QUEUE or error_QUEUE_EMPTY.*/
+/*            Call by reference returns exit registers as follows:                  */
+/*            R0: Flags.                                                            */
+/*            R3: Decremented by size of message dispatched.                        */
+/************************************************************************************/
+_kernel_oserror *messagequeue_receive(messagequeue_receive_args *args)
+{
+  int size of message;
+  int buffer_too_small = 0;
+  int messagespace_at_tail = 0;
+  int messagespace_at_head = 0;
+  int sizeof callers buffer;
+  MessageQueue *q;
+  BlockOfQueues *current;
+  
+    Use findq() as described (1216,612/DS - end of the section on structure and data types)
+    The current message queue can now be found at current->qslots[n].
+    If current->qslots[n].buff == NULL return unknown queue;
+
+    q = &(current->qslots[n]);
+
+    pollword == 0 implies we're already in the middle of despatching a message to this caller. 
+    If we allow the interrupt, the caller will receive messages out of order, so don't allow it.
+    if ((startof_despatch == NULL) || (pollword == 0))
+         return no messages available;     
+
+    pollword = 0;
+
+    We can do all this outside the critical region because we're protected from a 2nd receive,
+    and a send interrupt won't interfere with our space because we haven't released it yet. 
+    if (startof_despatch + size of message > tail)
+    {
+        Message wraps.
+        messagespace_at_tail = tail - startof_despatch;
+        messagespace_at_head = size of message - messagespace_at_tail;
+    }
+    args.R3 = size of callers buffer - size of message;
+
+    size of callers buffer = args.size of callers buffer;
+
+    if (size of message <= size of callers buffer) and (messagespace_at_head != 0)
+    {
+        copy startof_despatch + messagespace_at_tail into callers buffer;
+        if (messagespace_at_head > 0)
+            copy head + messagespace_at_head into callers buffer (at offset message_space_at_tail);
+    }
+    else if (size of message <= size of callers buffer) and (messagespace_at_head is 0)
+    {
+        copy startof_dispatch + size of message into callers buffer;
+    }
+    else
+    {
+        Callers buffer isn't large enough to receive the full message.
+        buffer_too_small = 1;
+        if ((messagespace_at_tail == 0) && (messagespace_at_head == 0))
+        {
+             Message doesn't wrap.
+             copy startof_despatch + size of callers buffer, into callers buffer;
+       }
+       else
+       {
+             Message wraps.
+             if (messagespace_at_tail <= size of callers buffer)
+             {
+                  copy startof_despatch + messagespace_at_tail into callers buffer;
+                  sizeof_callers_buffer -= messagespace_at_tail;
+                  if (messagespace_at_head <= size of callers buffer)
+                      copy head + messagespace_at_head into callers buffer + messagespace_at_tail;
+                  else
+                      copy head + size of callers buffer into callers buffer + messagespace_at_tail;
+             }
+             else
+             {
+                  copy startof_despatch + size of callers buffer into callers buffer;
+             }
+       }
+    }
+
+    Only keep the message if buffer was too small and bit 0 of R1 is set, in which case there's 
+    nothing to do.  Otherwise, as follows:
+    
+    if (!((buffer_too_small) && (bit 0 of R1 not set)))
+    {
+         Critical start.
+         if (startof_despatch + size of message < tail)
+         {
+              startof_despatch += size of msg;
+         }
+         else if (startof_despatch + size of msg == tail)
+         {
+                startof_despatch = head;
+         }
+         else
+         {
+                 Message wraps.
+                 startof_despatch = head + messagespace_at_head;
+         }
+         Critical end.
+    }
+
+    Critical start.
+    if (startof_despatch == startof_freespace)
+    {
+        Queue is completely empty. 
+        startof_despatch = NULL;
+        set q_empty flag TRUE;
+        (Pollword is already zero).
+    }
+    else
+    {
+         q_empty flag = FALSE;
+         pollword = *startof_despatch; (size of next message)
+    }
+    End critical.
+}
+
+/************************************************************************************/
+/* Function:  Re-entrant messagequeue_status()                                      */
+/* Behaviour: Describes the status of the specified message queue.                  */
+/* Requires:  Register arguments as follows.                                        */
+/*            R0: flags.  (Reserved, should be zero).                               */
+/*            R1: message queue handle.                                             */
+/* Returns:   NULL for success, otherwise, error_UNKNOWN_QUEUE.  Call by reference  */
+/*            returns exit registers as follows.                                    */
+/*            R0: flags.                                                            */
+/*            R1: Next message queue handle (-1 if no more).                        */
+/*            R2: Application identifier.                                           */
+/*            R3: Total buffer space claimed for message queue.                     */
+/*            R4: Maximum size for a single message (or zero if no limit).          */
+/*            R5: Number of messages currently in the queue.                        */
+/*            R6: Space remaining in queue buffer.                                  */
+/*            R7: Size of largest message in queue.                                 */
+/************************************************************************************/
+_kernel_oserror *messagequeue_status(messagequeue_status_args *args)
+{
+  BlockOfQueues *current;
+  MessageQueue q;
+  int usr_handle,internal_index;
+  int next_usr_handle = -1;
+  int freespace_at_tail = 0;
+  int freespace_at_head = 0;
+  
+    usr_handle = args.R1;
+    
+    internal_index = usr_handle;
+    current = findq(&internal_index);  Convert user handle to internal index using
+                                       findq as described earlier.
+                                       
+    q = current->qslots[internal_index];
+    
+    Report the next message queue handle.  Easy.  Just look through current->qslots[i]
+    until current->qslots[i].buffer != NULL.  (Increment 'i' to move on to the next
+    queue, bearing in mind a possible jump to the next block of message queues, if one
+    exists).
+    
+    Fill in fields as required.  Largest message can be got from count_msgs().  Space
+    remaining can be obtained from freespace_avail().  Other information is held in 
+    current->qslots[internal_index].application_id, 
+    current->qslots[internal_index].queue_size,
+    and so on.
+     
+}
+
+/************************************************************************************/
+/* Function: freespace_avail()                                                      */
+/* Requires: 'q', which is the current message queue. 'total_freespace', 'headspace'*/
+/*           and 'tailspace' do not need to be set on entry, and 'msgsize', which is*/
+/*           the size of the message the caller wishes to insert into the queue. If */
+/*           the caller only wishes to know the total amount of free space available*/
+/*           set msgsize to 0 on entry.                                             */
+/* Returns:  error_MESSAGE_TOO_LARGE if 'msgsize' is greater than the total amt of  */
+/*           available free space, otherwise NULL to indicate no errors.  Call by   */
+/*           reference returns the total free space available in the queue, and, if */
+/*           free space wraps around, returns amt of free space available at tail   */
+/*           and head ends as tailspace and headspace respectively.                 */
+/************************************************************************************/
+_kernel_oserror * freespace_avail (MessageQueue q,unsigned int *total_freespace,
+  unsigned int *headspace, unsigned int *tailspace, unsigned int msgsize)
+{
+
+    See section 5.4, detailed design (1216,612/DS). 
+    Return Error_MessageQueue_MessageTooLarge if size of message > total free space
+    available.
+    
+}
+

@@ -66,9 +66,9 @@ ASFLAGS		= ${DEPEND} ${THROWBACK}
 CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
-ROM_OBJS	= or.msgqueue or.module or.utils o.msgqhdr
-RAM_OBJS	= o.msgqueue  o.module  o.utils  o.msgqhdr ${RESF}
-DBG_OBJS	= od.msgqueue od.module od.utils o.msgqhdr ${RESF}
+ROM_OBJS	= or.msgqueue or.module or.utils o.msgqhdr o.calls
+RAM_OBJS	= o.msgqueue  o.module  o.utils  o.msgqhdr o.calls ${RESF}
+DBG_OBJS	= od.msgqueue od.module od.utils o.msgqhdr o.calls ${RESF}
 
 RESF		= o.msgs
 
