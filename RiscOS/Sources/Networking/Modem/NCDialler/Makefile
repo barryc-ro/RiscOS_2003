@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -DDONT_BUILD_RESOURCES -DSTRING_SCRIPT ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -DDONT_BUILD_RESOURCES ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 Datatoaofflags = -d "" -l _len -dp -s -p
@@ -60,7 +60,7 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} $< -o $@ h.cmhg_modem
+.cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 .d.o:;      datatoaof -f $< -o $@ $(Datatoaofflags)
 
@@ -126,7 +126,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 o.module:	c.module
 o.module:	h.cmhg_modem
 o.module:	C:h.kernel
-o.module:	C:h.kernel
 o.module:	h.smartcard
 o.module:	h.defs
 o.module:	C:h.kernel
@@ -134,10 +133,6 @@ o.module:	C:h.swis
 o.module:	h.wimp
 o.module:	h.defs
 o.module:	TCPIPLibs:sys.h.types
-o.module:	TCPIPLibs:sys.h.cdefs
-o.module:	TCPIPLibs:machine.h.endian
-o.module:	TCPIPLibs:machine.h.ansi
-o.module:	TCPIPLibs:machine.h.types
 o.module:	TCPIPLibs:netinet.h.in
 o.filegen:	c.filegen
 o.filegen:	h.defs
@@ -146,19 +141,5 @@ o.filegen:	h.smartcard
 o.filegen:	h.defs
 o.filegen:	C:h.swis
 o.filegen:	TCPIPLibs:sys.h.types
-o.filegen:	TCPIPLibs:sys.h.cdefs
-o.filegen:	TCPIPLibs:machine.h.endian
-o.filegen:	TCPIPLibs:machine.h.ansi
-o.filegen:	TCPIPLibs:machine.h.types
-o.filegen:	TCPIPLibs:netinet.h.in
 o.filegen:	TCPIPLibs:arpa.h.inet
-o.filegen:	TCPIPLibs:sys.h.cdefs
-o.swiven: s.swiven
-o.swiven: h.regdefs
-o.swiven: h.swinos
-o.swiven: h.macros
-o.serial:	c.serial
-o.serial:	C:h.kernel
-o.serial:	C:h.swis
-o.serial:	h.serial
-o.serial:	h.irqs
+o.filegen:	TCPIPLibs:netinet.h.in

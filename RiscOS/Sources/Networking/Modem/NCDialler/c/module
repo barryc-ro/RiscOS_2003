@@ -22,15 +22,19 @@
 #define TRUE (!FALSE)
 #endif
 
+extern int NCDial_callback_entry  (_kernel_swi_regs *r, void *pw);
+extern int NCDial_callafter_entry (_kernel_swi_regs *r, void *pw);
+extern int NCDial_upcall_entry    (_kernel_swi_regs *r, void *pw);
+
 #ifndef DONT_BUILD_RESOURCES
 extern void *resources_base(void);
 #endif
 
 extern void osmodfree(char *);
 extern char *osmodget(int);
-extern void callback(void (*irq_entry)(), void *);
-extern void callafter(int, void (*irq_entry)(), void *);
-extern void removeticker(void (*irq_entry)(), void *);
+extern void callback(int (*irq_entry)(), void *);
+extern void callafter(int, int (*irq_entry)(), void *);
+extern void removeticker(int (*irq_entry)(), void *);
 extern int  monotonic_time(void);
 extern void oscli(char *);
 
@@ -38,14 +42,12 @@ extern void oscli(char *);
 #define os_removecursors()  _swix(OS_RemoveCursors, 0)
 #define os_restorecursors() _swix(OS_RestoreCursors, 0)
 
-#define unsilent(u) if (!silent && strlen(Rip(u)) > 0) _swix(NCDialUI_Debug, _INR(0, 1), 0, u);
-
 #define Service_ResourceFSStarting 0x60
 #define Service_ShutDown           0x7E
 #define Service_ShutdownComplete   0x80
 #define Service_DiallerStatus      0xB4
 #define Service_NCRegistryStatus   0xBA
-
+ 
 #define int16 short
 #define int32 long
 
@@ -85,7 +87,6 @@ struct in_addr innfs;
 
 extern char *dialscr[][2];
 
-extern int no_more_nodes; // ajs added
 static char *Rip(char *text)
 {
   char *c;
@@ -139,108 +140,79 @@ static void close_streams(void)
 }
 #endif
 
-static char *convertdigit(char *tag, int len, char *phone, BOOL pulse)
-{
-  char *chars = "0123456789*#,";
-  int failed, nibble, packed, shift = 0;
-
-  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), tag, &packed, 0, &failed);
-  if (failed >= 0 && packed)
-  {
-    while (shift < (4 * (len - 1)))
-    {
-      nibble = (packed >> (shift ^ 4)) & 0xF;
-
-      if (nibble == 0)
-        break;
-      if (pulse && chars[nibble -1] == '*')
-      {
-        *(phone++) = '1';
-        *(phone++) = '1';
-      }
-      else
-      {
-        *(phone++) = chars[nibble -1];
-      }
-      shift += 4;
-    }
-  }
-  return(phone);
-}
-
 static char *cmos_number(void)
 {
-  static char phone[80];
-  char *ptr = NULL;
-  int pulse, callwaiting, failed, ignore, outside, wait;
+  static char phone[20];
+  int byte, digit, ptr = 2;
 
   strcpy(phone, "AT");
-  ptr = phone + strlen(phone);
+  _swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0x9E, &byte);
   /* Blind dialling switch */
-  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialIgnore",
-        &ignore, 0, &failed);
-  if (failed >= 0 && ignore)
+  if (byte & (1 << 6))
   {
-    *(ptr++) = 'X';
-    *(ptr++) = '3';
+    phone[ptr++] = 'X';
+    phone[ptr++] = '3';
   }
   /* Dialling type */
-  *(ptr++) = 'D';
-  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialType",
-        &pulse, 0, &failed);
-  if (failed >= 0 && pulse)
-    *(ptr++) = 'P';
+  phone[ptr++] = 'D';
+  if (byte & (1 << 5))
+    phone[ptr++] = 'P';
   else
-    *(ptr++) = 'T';
-
+    phone[ptr++] = 'T';
   /* Outside line */
-  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemPrefixStatus",
-        &outside, 0, &failed);
-
-  if (failed >= 0 && outside)
+  if (byte & 0x0F)
   {
-    int len;
-    _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemPrefix", 0, 0, &len);
-    if (len > 0)
-    {
-      ptr = convertdigit("ModemPrefix", len*2, ptr, pulse);
+    if ((byte & 0x0F) < 11)
+      phone[ptr++] = (byte & 0x0F) - 1 + 0x30;
+    else if ((byte & 0x0F) == 11)
+      phone[ptr++] = '*';
+    else if ((byte & 0x0F) == 12)
+      phone[ptr++] = '#';
 
-      _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialTone",
-            &wait, 0, &failed);
-      if (failed >= 0 && wait)
-        *(ptr++) = 'W';
-      else
-        *(ptr++) = ',';
-    }
+    if (byte & (1 << 4))
+      phone[ptr++] = 'W';
+    else
+      phone[ptr++] = ',';
   }
-
   /* Call waiting defeat stuff */
-  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemCallWaitingStatus",
-        &callwaiting, 0, &failed);
-  if (failed >= 0 && callwaiting)
+  if (_swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0x9B, &byte) == NULL)
   {
-    int len;
-    _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemCallWaiting", 0, 0, &len);
-    if (len > 0)
+    digit = ((byte & 0xF0) >> 4);
+    if (digit)
     {
-      ptr = convertdigit("ModemCallWaiting", len*2, ptr, pulse);
-
-      *(ptr++) = ',';
+      phone[ptr++] = digit - 1 + 0x30;
+      digit = (byte & 0x0F);
+      if (digit)
+      {
+        phone[ptr++] = digit - 1 + 0x30;
+        if (_swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0x9C, &byte) == NULL)
+        {
+          digit = ((byte & 0xF0) >> 4);
+          if (digit)
+          {
+            phone[ptr++] = digit - 1 + 0x30;
+            digit = (byte & 0x0F);
+            if (digit)
+            {
+              phone[ptr++] = digit - 1 + 0x30;
+            }
+          }
+        }
+      }
     }
   }
-  *(ptr++) = '\0';
+  phone[ptr++] = '\0';
 
   return(phone);
 }
 
 void LED_State(BOOL state)
 {
-  _swix(LED_Control, _INR(0, 2), 0, ~(1), state ? 1 : 0);
+  _swix(LED_Control, _INR(0, 2), 1, ~(1), state ? 1 : 0);
 }
 
 void DiallerService(int reason)
 {
-  if(!silent) fprintf(stderr, "issued Service_DialerStatus 0x%x\n", reason);
   if (reason == NCDialler_IPDown)
     LED_State(FALSE);
   if (reason == NCDialler_IPUp)
@@ -249,14 +221,10 @@ void DiallerService(int reason)
   _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, reason);
   if ((reason & 0xF0) == 0x80)
   {
-      if(no_more_nodes) { /* ajs added - this function has side effects on the callback handler & the i/o stream! */
-        doingit = FALSE;
-#ifdef VIA_DEVICEFS
-        if(!silent) fprintf(stderr, "no more nodes - closing stream\n");
-        close_streams();
-#endif
-      } /* ajs - ensure it doesn't do any of that unless we really mean it */
-
+    doingit = FALSE;
+#ifdef VIA_DEVICEFS    
+    close_streams();
+#endif    
     _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, NCDialler_IPDown);
   }
 }
@@ -267,82 +235,58 @@ int fetch(void)
   return(serial_read_byte(instream));
 #else
   int ch, fl;
-  _kernel_oserror *e;
-
-  e = _swix(UART_SerialOp, _IN(0) | _OUT(1) | _OUT(_FLAGS), 4, &ch, &fl);
-  if (e || (fl & _C))
+  
+  _swix(UART_SerialOp, _IN(0) | _OUT(1) | _OUT(_FLAGS), 4, &ch, &fl);
+  if (fl & _C)
     return(-1);
   return(ch);
 #endif
 }
 
-char twirler[] = "|/-\\";
-
 BOOL Driver_Get(char *expect, int stream)
 {
-  int c = 0;
-  static int rxchars = 0, twirl = 0;
+  int c;
+  static int rxchars = 0;
 
   if (!silent)
-    fprintf(stderr, "%c\r", twirler[twirl++ % 4]);
-  while (c >= 0)
+    fprintf(stderr, "*");
+  while (c = fetch(), c >= 0 && !restart)
   {
-    while (c = fetch(), c >= 0 && c != '\n' && c != '\r' && !restart)
-    {
-      if (!silent)
-        fprintf(stderr, "%c", c);
+    if (!silent)
+      fprintf(stderr, "%c", c);
 
-      incoming[rxchars++] = c;
-      incoming[rxchars]   = '\0';
-    }
+    incoming[rxchars++] = c;
+    incoming[rxchars]   = '\0';
 
     if (expect)
     {
       if (stristr(incoming, expect) != NULL)
       {
-        unsilent(incoming);
         rxchars = 0;
-        incoming[rxchars] = '\0';
         return(TRUE);
+      }
+      if (c == '\r' || c == '\n')
+      {
+        rxchars = 0;
       }
     }
     if (strstr(incoming, "BUSY") != NULL)
     {
-      if(no_more_nodes) DiallerService(NCDialler_Busy);
+      DiallerService(NCDialler_Busy);
       restart = TRUE;
-      unsilent(incoming);
       rxchars = 0;
-      incoming[rxchars]   = '\0';
-    }
-    else if (strstr(incoming, "ERROR") != NULL)
-    {
-      if(no_more_nodes) DiallerService(NCDialler_Busy);
-      restart = TRUE;
-      unsilent(incoming);
-      rxchars = 0;
-      incoming[rxchars]   = '\0';
     }
     else if (strstr(incoming, "NO CARRIER") != NULL)
     {
-      if(no_more_nodes) DiallerService(NCDialler_NoCarrier);
+      DiallerService(NCDialler_NoCarrier);
       restart = TRUE;
-      unsilent(incoming);
       rxchars = 0;
-      incoming[rxchars]   = '\0';
     }
     else if (strstr(incoming, "NO DIALTONE") != NULL)
     {
-      if(no_more_nodes) DiallerService(NCDialler_NoDial);
+      DiallerService(NCDialler_NoDial);
       restart = TRUE;
-      unsilent(incoming);
       rxchars = 0;
-      incoming[rxchars]   = '\0';
-    }
-    if (c == '\r' || c == '\n')
-    {
-      unsilent(incoming);
-      rxchars = 0;
-      incoming[rxchars] = '\0';
     }
   }
   return(strlen(expect) == 0);
@@ -361,7 +305,7 @@ void pause(int cs)
 void delay(int sleep)
 {
   int now = monotonic_time();
-
+ 
   while ((monotonic_time() - now) < sleep)
   {
     Driver_Get("", instream);
@@ -371,14 +315,8 @@ void delay(int sleep)
 static void Driver_Send(char *string, int handle)
 {
   if (!silent)
-  {
-    char buffer[80];
-
-    sprintf(buffer, "%s (%d)", string, handle);
-    fprintf(stderr, "%s\n", buffer);
-    _swix(NCDialUI_Debug, _INR(0, 1), 0, buffer);
-  }
-
+    fprintf(stderr, "%s (%d)\n", string, handle);
+ 
   while (*string)
   {
     if (!silent)
@@ -410,15 +348,15 @@ void Twiddle(void)
     param.write = 0;
     param.read  = 1;
     ctrl.data   = serial_ioctl(outstream, &param);
-
+  
     /* assert dtr */
     ctrl.bits.dtr = 1;
     param.write   = 1;
     param.data    = ctrl.data;
     serial_ioctl(outstream, &param);
-
+  
     delay(50);
-
+  
     /* clear dtr */
     ctrl.bits.dtr = 0;
     param.write   = 1;
@@ -430,23 +368,13 @@ void Twiddle(void)
     close_streams();
   }
 #else
-  int param;
-
   oscli("PPPDisconnect");
   delay(100);
   _swix(UART_SerialOp, _INR(0, 2), 0, 0, ~(1 << 3));
   delay(100);
   _swix(UART_SerialOp, _INR(0, 2), 0, 1 << 3, ~(1 << 3));
   Driver_Send("ATZ\r", outstream);
-
-  do
-  {
-    delay(10);
-    if(_swix(UART_SerialOp, _INR(0, 2) | _OUT(1), 0, 0, -1, &param))
-      break;
-  } while ((param & (1 << 18)) == 0); /* DCD - Offline */
 #endif
-
   doingit = FALSE;
 }
 
@@ -471,60 +399,43 @@ void DumpIt(BOOL filestoo)
 
 int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
 {
-#ifdef STRING_SCRIPT
-  static char *script = NULL;
-#else
   static FILE *fin = NULL;
-#endif
   static int sentat;
 
   if (pw != pwp)
     return(1);
-
+    
   switch(dialplease)
   {
   case CALLBACK_DODIAL:
     {
       int c;
-
+      
       dialplease = CALLBACK_NOOP;
 
       if (!silent)
       {
         vdu4();
         fprintf(stderr, "Creating files\n");
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, "Creating files");
       }
       if (CreateFiles(&card) == FALSE)
       {
         doingit = FALSE;
-        if(!silent) fprintf(stderr, "\n\nCreateFiles failed!\n");
         DiallerService(NCDialler_Error);
         break;
       }
-
+    
       if (!silent)
-      {
-        vdu4();
         fprintf(stderr, "Opening streams\n");
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, "Opening streams");
-      }
-#ifdef VIA_DEVICEFS
+#ifdef VIA_DEVICEFS        
       close_streams();
 
       instream  = serial_open_stream(serial_config, SERIAL_INPUT);
       outstream = serial_open_stream(serial_config, SERIAL_OUTPUT);
       if (!silent)
-      {
-        char buffer[80];
-
-        sprintf(buffer, "Streams - In %d  Out %d\n", instream, outstream);
-        fprintf(stderr, "%s\n", buffer);
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, buffer);
-      }
+        fprintf(stderr, "Streams - In %d  Out %d\n", instream, outstream);
       if (instream == 0 || outstream == 0)
       {
-        if(!silent) fprintf(stderr, "\n\nNasty stream situation: in: 0x%x  out: 0x%x\n", instream, outstream);
         close_streams();
         doingit = FALSE;
         DiallerService(NCDialler_Error);
@@ -535,165 +446,78 @@ int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
       _swix(UART_SerialOp, _INR(0, 1), 6, 18);
       _swix(UART_SerialOp, _INR(0, 2), 0, (1 << 1) | (1 << 8), 0);
       _swix(UART_SerialOp, _INR(0, 1), 1, 0);
-#endif
+#endif      
       do
       {
         c = fetch();
       } while (c >= 0);
-
-      if (!silent)
-      {
-        fprintf(stderr, "Opening script\n");
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, "Opening script");
-      }
-#ifdef STRING_SCRIPT
-      if (card.script == NULL)
-#else
+    
       if (fin)
         fclose(fin);
-      if (fin = fopen("<Wimp$ScrapDir>.NCDialler.Files.Script", "r"), fin == NULL)
-#endif
+      if (!silent)
+        fprintf(stderr, "Opening script\n");
+      if (fin = fopen("<Wimp$ScrapDir>.Watchdog.Files.Script", "r"), fin == NULL)
       {
-#ifdef VIA_DEVICEFS
+#ifdef VIA_DEVICEFS        
         close_streams();
-#endif
+#endif      
         doingit = FALSE;
-        if(!silent) fprintf(stderr, "\n\nCouldn't find a script!\n");
         DiallerService(NCDialler_Error);
         break;
       }
       DiallerService(NCDialler_Dialling);
-
+     
       if (!silent)
         fprintf(stderr, "Moving to start of script\n");
-#ifdef STRING_SCRIPT
-      script = card.script;
-#else
       fseek(fin, 0, SEEK_SET);
-#endif
     }
 /*     break; */                /* Need to fall through to SCRIPT */
 
   case CALLBACK_SCRIPT:
-#ifdef STRING_SCRIPT
-    if (*script && strchr(script, '\n'))
-    {
-      char *ptr = expect;
-
-      sentat = monotonic_time();
-      while (*script != '\n')
-      {
-        *(ptr++) = *(script++);
-      }
-      *ptr = '\0';
-      script++;
-
-      ptr = send;
-      while (*script != '\n')
-      {
-        *(ptr++) = *(script++);
-      }
-      *ptr = '\0';
-      script++;
-
-      if (!silent)
-      {
-        char buffer[80], *temp;
-
-        sprintf(buffer, "Expect: %s\nSend  : %s\n", expect, send);
-        fprintf(stderr, "%s\n", buffer);
-        temp = strstr(buffer, "Send");
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, Rip(buffer));
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, Rip(temp));
-      }
-      dialplease = CALLBACK_NOOP;
-    }
-    else
-    {
-#ifdef VIA_DEVICEFS
-      close_streams();
-#endif
-      DiallerService(NCDialler_Connecting);
-
-      dialplease = CALLBACK_NOSERVER;
-      callafter(3000, NCDial_callafter_entry, pwp);
-      restart = TRUE;
-      oscli("PPPConnect");
-      break;
-    }
-#else
     if (fgets(expect, 80, fin))
     {
       sentat = monotonic_time();
-
+      
       Rip(expect);
       fgets(send, 80, fin);
       Rip(send);
 
       if (!silent)
-      {
-        char buffer[80];
-
-        sprintf(buffer, "Expect: %s\nSend  : %s\n", expect, send);
-        fprintf(stderr, "%s\n", buffer);
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, buffer);
-      }
+        fprintf(stderr, "Expect: %s\nSend  : %s\n", expect, send);
       dialplease = CALLBACK_NOOP;
     }
     else
     {
       fclose(fin);
       fin = NULL;
-#ifdef VIA_DEVICEFS
+#ifdef VIA_DEVICEFS        
         close_streams();
-#endif
+#endif      
       DiallerService(NCDialler_Connecting);
-
+   
       dialplease = CALLBACK_NOSERVER;
       callafter(3000, NCDial_callafter_entry, pwp);
       restart = TRUE;
       oscli("PPPConnect");
       break;
     }
-#endif
 /*     break; */         /* Need to fall through to EXPECT */
 
   case CALLBACK_EXPECT:
     {
-      if ((monotonic_time() - sentat) > 9000)
+      if ((monotonic_time() - sentat) > 6000)
       {
-
         restart = TRUE;
-        if(no_more_nodes) {
-            if(!silent) fprintf(stderr, "No more modes - flagging timeout\n");
-            DiallerService(NCDialler_Timeout);
-        }
+        DiallerService(NCDialler_Timeout);
       }
-
       if (Driver_Get(expect, instream) && !restart)
       {
         if (strlen(send) > 0)
         {
           if (strcmp(send, "ATDT") == 0)
           {
-            char *next_pstn_num;
-
-            if((next_pstn_num = next_dialup_node())==NULL) { /* ajs - in case list handler barfs */
-                if(!silent) fprintf(stderr, "\n\nBarfed fetching dial-up node\n");
-                DiallerService(NCDialler_Error);
-                break;
-            }
-
             Driver_Send(cmos_number(), outstream);
-            Driver_Send(next_pstn_num, outstream); /* ajs - get current node */
-          }
-          else if (strcmp(send, "send_user") == 0)
-          {
-            Driver_Send(card.loginid, outstream);
-          }
-          else if (strcmp(send, "send_pass") == 0)
-          {
-            Driver_Send(card.loginsecret, outstream);
+            Driver_Send(card.pstnnum, outstream);
           }
           else
           {
@@ -707,25 +531,10 @@ int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
       }
       if (restart)
       {
-#ifdef STRING_SCRIPT
-#else
         fclose(fin);
         fin = NULL;
-#endif
-/* ajs added - I'm hoping this is where we end up if the modem returned an error string in DriverGet
-       	       Or it could be one of those bogus timeouts from earlier on */
-        if(!no_more_nodes) { /* there's more in the list */
-          DiallerService(NCDialler_ReDialling); /* hopefully, display the OSD without the usual DiallerService side effects */
-	  script = card.script;
-	  restart = FALSE;
-	  if(!silent) fprintf(stderr, "redialling...\n");
-	  dialplease = CALLBACK_SCRIPT;
-	  callafter(100, NCDial_callafter_entry, pwp); /* hopefully, this kicks it all off again */
-	}
-/* end ajs added */
         break;
       }
-      /* this gets called if s/e strings didn't match, no modem error, and no timeout */
       dialplease = CALLBACK_EXPECT;
       callafter(10, NCDial_callafter_entry, pwp);
     }
@@ -741,6 +550,7 @@ int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
   case CALLBACK_SAYUP:
     dialplease = CALLBACK_NOOP;
     DiallerService(NCDialler_IPUp); /* Up */
+    screen_redraw(-1);
     break;
 
   case CALLBACK_CONNECT:
@@ -750,14 +560,9 @@ int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
       removeticker(NCDial_callafter_entry, pw);
 
       if (!silent)
-      {
         fprintf(stderr, " Up\n");
-        _swix(NCDialUI_Debug, _INR(0, 1), 0, " Up");
-      }
 
       dialplease = CALLBACK_SAYUP;
-      /* delay reduced to 1 sec from 5 secs... */
-      /* delay put back to 5 secs cos 1 sec breaks stuff... */
       callafter(500, NCDial_callafter_entry, pwp);
     }
     break;
@@ -792,7 +597,7 @@ char *UnEscape(char *i)
 
   len = strlen(i);
   plus_to_space(i, len);
-
+ 
   while (len)
   {
     if (*i++ == '%')
@@ -828,18 +633,17 @@ void Commence(void)
     }
 
     if (outstream == 0 || (param.data & (1 << 19)) == 0) /* DCD - Offline */
-#else
+#else  
     int param;
 
     if (_swix(UART_SerialOp, _INR(0, 2) | _OUT(1), 0, 0, -1, &param))
     {
-      if(!silent) fprintf(stderr, "\n\nSome sort of UART_SerialOp error\n");
       DiallerService(NCDialler_Error);
       return;
     }
 
     if ((param & (1 << 18)) != 0) /* DCD - Offline */
-#endif
+#endif    
     {
       dialplease = CALLBACK_DODIAL;
       restart = FALSE;
@@ -863,10 +667,7 @@ _kernel_oserror *NCDial_swis(int swi_no, _kernel_swi_regs *r, void *pw)
   {
   case (NCDial_Dial - NCDial_00):
     if (!silent)
-    {
       fprintf(stderr, "Swi NCDial_Dial called\n");
-      _swix(NCDialUI_Debug, _INR(0, 1), 0, "Swi NCDial_Dial called");
-    }
     Commence();
     break;
 
@@ -888,10 +689,7 @@ _kernel_oserror *NCDialler_cmd (char *arg_string, int argc, int cmd_no, void *pw
   {
   case CMD_NCDial_Dial:
     if (!silent)
-    {
       fprintf(stderr, "*NCDial_Dial called\n");
-      _swix(NCDialUI_Debug, _INR(0, 1), 0, "*NCDial_Dial called");
-    }
     Commence();
     break;
 
@@ -953,10 +751,11 @@ _kernel_oserror *NCDialler_modfinal (int fatal, int podule, void *pw)
   return(NULL);
 }
 
-void NCDial_service(int service, _kernel_swi_regs *r, void *pw)
+_kernel_oserror *NCDial_service(int service, _kernel_swi_regs *r, void *pw)
 {
   switch (service)
   {
+
 #ifndef DONT_BUILD_RESOURCES
   case Service_ResourceFSStarting:
     ((P_FSStartingFN)(r->r[2]))(resources_base());
@@ -964,28 +763,19 @@ void NCDial_service(int service, _kernel_swi_regs *r, void *pw)
 #endif
 
   case Service_ShutDown:
-#if FALSE
     if (doingit)
     {
       r->r[1] = 0;
     }
-#endif
     break;
 
   case Service_ShutdownComplete:
     DumpIt(FALSE);
     break;
   }
-}
 
-#define SERIALDEV_VAR "SerialDev$Path"
-#define SERIALDEV_TXT "Resources:$.Resources.NCDial."
-#define INET_VAR      "Inet$Path"
-#define INET_TXT      "Resources:$.Resources.NCDial."
-#define DYNAMIC_VAR   "FileDyn$Path"
-#define DYNAMIC_TXT   "<Wimp$ScrapDir>.NCDialler."
-#define INETDBASE_VAR "InetDBase$Path"
-#define INETDBASE_TXT "Inet:Files.,FileDyn:Files."
+  return(NULL);
+}
 
 _kernel_oserror *NCDialler_modinit (char *cmd_tail, int podule_base, void *pw)
 {
@@ -997,15 +787,6 @@ _kernel_oserror *NCDialler_modinit (char *cmd_tail, int podule_base, void *pw)
   incoming = osmodget(256);
   buffer   = osmodget(BUFSIZ);
   memset(&card, '\0', sizeof(carddata));
-  _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), SERIALDEV_VAR,
-                    SERIALDEV_TXT, strlen(SERIALDEV_TXT), 0);
-  _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), INET_VAR,
-                    INET_TXT, strlen(INET_TXT), 0);
-  _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), DYNAMIC_VAR,
-                    DYNAMIC_TXT, strlen(DYNAMIC_TXT), 2);
-  _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), INETDBASE_VAR,
-                    INETDBASE_TXT, strlen(INETDBASE_TXT), 2);
 
-  Twiddle();
   return(NULL);
 }
