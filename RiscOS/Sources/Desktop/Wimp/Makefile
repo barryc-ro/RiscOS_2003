@@ -24,6 +24,7 @@ HEADER1   = ${TARGET}
 HEADER2   = WimpSpace
 RESOURCES = manual
 
+SA_FLAGS  =
 ASFLAGS   = -cpu 3 -NoWarn -PreDefine "Options SETS \"${OPTIONS}\""
 
 include StdTools
