@@ -27,7 +27,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -faho ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -62,16 +62,16 @@ SOURCE     =
 EXPORTS    = 
 
 OBJS=	o.bytesex o.chunkfls o.disass o.dtos o.err o.fname \
-	o.ieeeflt o.prgname o.re o.wholefls 
+	o.host o.hash o.ieeeflt o.prgname o.re o.wholefls 
 
 OBJSD=	od.bytesex od.chunkfls od.disass od.dtos od.err od.fname \
-	od.ieeeflt od.prgname od.re od.wholefls 
+	od.host od.hash od.ieeeflt od.prgname od.re od.wholefls 
 
 OBJSZ=	oz.bytesex oz.chunkfls oz.disass oz.dtos oz.err oz.fname \
-	oz.ieeeflt oz.prgname oz.re oz.wholefls 
+	oz.host oz.hash oz.ieeeflt oz.prgname oz.re oz.wholefls 
 
 HDRS=	h.aif h.aof h.aout h.asdfmt h.asdllfmt h.bytesex h.chunkfls h.chunkfmt \
-	h.disass h.err h.fname h.ieeeflt h.libflfmt h.ovrflfmt \
+	h.disass h.err h.fname h.hash h.host h.ieeeflt h.libflfmt h.ovrflfmt \
 	h.prgname h.re h.wholefls
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
@@ -124,6 +124,8 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.disass ${CLXLIBDIR}.h.disass ${CPFLAGS}
 	${CP} h.err ${CLXLIBDIR}.h.err ${CPFLAGS}
 	${CP} h.fname ${CLXLIBDIR}.h.fname ${CPFLAGS}
+	${CP} h.hash ${CLXLIBDIR}.h.hash ${CPFLAGS}
+	${CP} h.host ${CLXLIBDIR}.h.host ${CPFLAGS}
 	${CP} h.ieeeflt ${CLXLIBDIR}.h.ieeeflt ${CPFLAGS}
 	${CP} h.libflfmt ${CLXLIBDIR}.h.libflfmt ${CPFLAGS}
 	${CP} h.ovrflfmt ${CLXLIBDIR}.h.ovrflfmt ${CPFLAGS}
@@ -162,75 +164,3 @@ ${TARGETD}: ${OBJSD} local_dirs
 	${LB} ${LBFLAGS} -o ${COMPONENTD} ${OBJSD}
 
 # Dynamic dependencies:
-o.bytesex:	c.bytesex
-o.bytesex:	h.bytesex
-o.bytesex:	c.bytesex
-o.bytesex:	h.bytesex
-o.chunkfls:	c.chunkfls
-o.chunkfls:	h.chunkfls
-o.chunkfls:	h.chunkfmt
-o.chunkfls:	h.bytesex
-o.disass:	c.disass
-o.disass:	h.disass
-o.dtos:	c.dtos
-o.dtos:	h.ieeeflt
-o.err:	c.err
-o.err:	h.err
-o.fname:	c.fname
-o.fname:	h.fname
-o.ieeeflt:	c.ieeeflt
-o.ieeeflt:	h.ieeeflt
-o.prgname:	c.prgname
-o.prgname:	h.prgname
-o.re:	c.re
-o.re:	h.re
-o.wholefls:	c.wholefls
-o.wholefls:	h.wholefls
-od.bytesex:	c.bytesex
-od.bytesex:	h.bytesex
-od.bytesex:	c.bytesex
-od.bytesex:	h.bytesex
-od.chunkfls:	c.chunkfls
-od.chunkfls:	h.chunkfls
-od.chunkfls:	h.chunkfmt
-od.chunkfls:	h.bytesex
-od.disass:	c.disass
-od.disass:	h.disass
-od.dtos:	c.dtos
-od.dtos:	h.ieeeflt
-od.err:	c.err
-od.err:	h.err
-od.fname:	c.fname
-od.fname:	h.fname
-od.ieeeflt:	c.ieeeflt
-od.ieeeflt:	h.ieeeflt
-od.prgname:	c.prgname
-od.prgname:	h.prgname
-od.re:	c.re
-od.re:	h.re
-od.wholefls:	c.wholefls
-od.wholefls:	h.wholefls
-oz.bytesex:	c.bytesex
-oz.bytesex:	h.bytesex
-oz.bytesex:	c.bytesex
-oz.bytesex:	h.bytesex
-oz.chunkfls:	c.chunkfls
-oz.chunkfls:	h.chunkfls
-oz.chunkfls:	h.chunkfmt
-oz.chunkfls:	h.bytesex
-oz.disass:	c.disass
-oz.disass:	h.disass
-oz.dtos:	c.dtos
-oz.dtos:	h.ieeeflt
-oz.err:	c.err
-oz.err:	h.err
-oz.fname:	c.fname
-oz.fname:	h.fname
-oz.ieeeflt:	c.ieeeflt
-oz.ieeeflt:	h.ieeeflt
-oz.prgname:	c.prgname
-oz.prgname:	h.prgname
-oz.re:	c.re
-oz.re:	h.re
-oz.wholefls:	c.wholefls
-oz.wholefls:	h.wholefls
