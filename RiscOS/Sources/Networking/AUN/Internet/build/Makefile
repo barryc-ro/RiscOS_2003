@@ -40,10 +40,10 @@ WIPE    = -wipe
 
 AFLAGS   = -depend !Depend -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
 CFLAGS   = -depend !Depend -zps1 -zM -ffa -Wacnps ${INCLUDES} ${DFLAGS} ${OPTS} ${THROWBACK}
-DFLAGS   = -DKERNEL -DINET -DGATEWAY -DCOMPAT_43 -DCOMPAT_OLDSOCK -DACKNOWLEDGE_ESCAPE \
-           -DDIRECTED_BROADCAST -DMULTICAST #-DMROUTING -DIPFIREWALL \
-           -DIPFIREWALL_VERBOSE -DFLASHY_SCROLLLOCK -DTCPTDEBUG -DTCPDEBUG \
-           #-DDIAGNOSTIC -DDEBUG_MTUDISC
+DFLAGS   = -DKERNEL -DINET -DGATEWAY -DCOMPAT_43 -DCOMPAT_OLDSOCK \
+ -DDIRECTED_BROADCAST -DMULTICAST -DDELAY_EVENTS #-DMROUTING -DIPFIREWALL \
+ -DIPFIREWALL_VERBOSE -DFLASHY_SCROLLLOCK -DTCPTDEBUG -DTCPDEBUG \
+ #-DDIAGNOSTIC -DDEBUG_MTUDISC
 INCLUDES = -ITCPIPLibs:,C:
 CPFLAGS  = ~cfr~v
 LDFLAGS  = -linkversion 514
@@ -127,7 +127,7 @@ all: ${TARGET}
 	@echo ${COMPONENT}: Module built (Relocatable)
 
 ${TARGET}: ${OBJS} ${CLIB}
-        ${LD} ${LDFLAGS} -rmf -o $@ ${OBJS} ${CLIB}
+        ${LD} ${LDFLAGS} -rmf -o $@ ${OBJS} ${CLIB} -s Syms
         ${MODSQZ} $@
         Access $@ WR/r
 
@@ -144,6 +144,7 @@ resources:
 clean:
         ${RM} ${ROM_MODULE}
         ${RM} ${TARGET}
+        ${RM} Syms
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${WIPE} o.* ${WFLAGS}
