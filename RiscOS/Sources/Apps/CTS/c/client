@@ -1,0 +1,633 @@
+/* > client.c
+ *
+ */
+
+/* ----------------------------------------------------------------------
+ * INCLUDES
+ * ----------------------------------------------------------------------
+ */
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "swis.h"
+
+#include "wimplib.h"
+#include "window.h"
+#include "event.h"
+
+#include "plugclient.h"
+#include "version.h"
+#include "utils.h"
+#include "clients.h"
+#include "plugin.h"
+
+#include "ctstypes.h"
+#include "ctsintern.h"
+#include "ctsbrowser.h"
+
+/* ----------------------------------------------------------------------
+ * CONSTANTS
+ * ----------------------------------------------------------------------
+ */
+static const char param_remotelog[] = "REMOTELOG";
+
+/* ----------------------------------------------------------------------
+ * TYPE DEFINITIONS
+ * ----------------------------------------------------------------------
+ */
+
+/* client specific stuff */
+
+struct client_str
+{
+    pluginclient_ptr		plugin;
+
+    char			*file_name;
+    int				task_handle;
+    char			*href;
+    void			*data;
+    int				data_size;
+};
+
+/* ----------------------------------------------------------------------
+ * GLOBALS
+ * ----------------------------------------------------------------------
+ */
+
+static int client_cts_file_types[] =
+{
+    0x003,
+    -1				/* terminator */
+};
+
+/* Also see pluginclient_cts definition at end of file */
+
+/* ----------------------------------------------------------------------
+ * FUNCTION PROTOTYPES
+ * ----------------------------------------------------------------------
+ */
+
+/* ----------------------------------------------------------------------
+ * WIMP MESSAGE HANDLERS
+ * ----------------------------------------------------------------------
+ */
+
+
+/* ----------------------------------------------------------------------
+ * UTILITY FUNCTIONS
+ * ----------------------------------------------------------------------
+ */
+cts_browser_parameter *cts_browser_parameter_lookup(
+	cts_browser_message *m,
+	const char *name)
+{
+        cts_browser_parameter *p;
+
+        for (p = m->param_list; p; p = p->next) {
+                if (strcasecomp(p->name, name) == 0) {
+                        break;
+                }
+        }
+
+        return p;
+}
+
+cts_command_parameter *cts_command_parameter_lookup(
+	cts_server_message *m,
+	const char *name)
+{
+        cts_command_parameter *const p = &m->params[0];
+        size_t index;
+
+        for (index = 0; index < m->param_count; ++index) {
+                if (strcasecomp(p[index].name, name) == 0) {
+                        return p + index;
+                }
+        }
+
+        return NULL;
+}
+
+cts_command_parameter *cts_command_parameter_lookup_by_tag(
+	cts_server_message *m,
+	cts_tags ct)
+{
+        size_t index;
+
+        for (index = 0; index < m->param_count; ++index) {
+	        cts_command_parameter *const p = &m->params[index];
+                if (p->tag != NULL && p->tag->tag == ct) {
+                        return p;
+                }
+        }
+
+        return NULL;
+}
+
+cts_commands cts_command_decode_command(cts_server_message *m)
+{
+        cts_command_parameter *p = cts_command_parameter_lookup_by_tag(m, tag_CMD);
+
+        if (p != NULL) {
+                size_t i;
+                for (i=0; i < cmd__MAX; ++i) {
+                        if (strcasecomp(p->value, ctscmd_strings[i]) == 0) {
+                                return (cts_commands) i;
+                        }
+                }
+        }
+
+        return cmd__UNKNOWN;
+}
+
+/* ---------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
+
+static void process_tag_params(pluginclient_ptr plugin, client_ptr crp)
+{
+  pluginclient_param *param;
+  /* process tag parameters */
+
+  param = pluginclient_param_lookup(plugin, param_remotelog, -1, FALSE);
+
+  if (param && param->value)  /* present, and has value */
+    crp->href = strdup(param->value);
+  else
+    crp->href = NULL;
+
+  dprintf(("client_2", "process_tag_params(): REMOTELOG: %s\n",
+	 crp->href?crp->href:"<<NULL>>"));
+
+  if (crp->href) {
+    log_init(crp->href);
+  }
+
+} /* process_tag_params */
+
+
+/* ----------------------------------------------------------------------
+ * INSTANCE INITIALISATION FUNCTIONS
+ * ----------------------------------------------------------------------
+ */
+
+static void client_cts_init(int argc, char *argv[])
+{
+	(void) argc;
+	(void) argv;
+	/* No work to do yet */
+}
+
+
+static int client_cts_open(pluginclient_ptr plugin, client_ptr *client_data,
+			      int *opening_flags)
+{
+    client_ptr crp = calloc(sizeof(*crp), 1);
+
+    dprintf(("client_1", "client_cts_open()\n"));
+    if (crp)
+    {
+	_kernel_swi_regs r;
+
+	/* store the instance value */
+	crp->plugin = plugin;
+
+	/* get our task handle */
+	toolbox_get_sys_info(Toolbox_GetSysInfo_TaskHandle, &r);
+	crp->task_handle = r.r[0];
+
+	/* check the parameters from the file */
+	process_tag_params(plugin, crp);
+
+	*opening_flags = plugin_opening_FETCH_DATA;
+    }
+
+    *client_data = crp;
+
+    dprintf(("client_1", "client_cts_open returns\n"));
+    return crp != NULL;
+} /* client_cts_open */
+
+
+static void client_cts_close(client_ptr crp)
+{
+    dprintf(("client_1", "client_cts_close(): instance %p\n", crp));
+
+    if (crp->data)
+      free(crp->data);
+
+    if (crp->file_name)
+      free(crp->file_name);
+
+    if (crp->href)
+      free(crp->href);
+
+    free(crp);
+} /* client_cts_close */
+
+
+/* ----------------------------------------------------------------------
+ * CTS SPECIFIC FUNCTIONS
+ * ----------------------------------------------------------------------
+ */
+cts_browser_parameter *cts_browser_parameter_initialise(
+	const char *name, size_t name_len,
+	const char *value, size_t value_len)
+{
+	cts_browser_parameter *p = malloc(sizeof(*p) + ((name_len + value_len + 6) & ~3));
+	if (p == NULL) {
+		dprintf(("client_1", "cts_browser_parameter_initialise: out of memory\n"));
+		return p;
+	}
+
+	p->next = NULL;
+	p->name = (cts_string *) (p+1);
+	p->value = p->name + name_len + 1;
+
+	name_len[strncpy(p->name, name, name_len)] = '\0';
+	value_len[strncpy(p->value, value, value_len)] = '\0';
+
+	return p;
+}
+
+cts_browser_parameter *cts_browser_parameter_destroy(cts_browser_parameter *p)
+{
+	cts_browser_parameter *const next = p->next;
+
+	free(p);
+
+	return next;
+}
+
+cts_browser_message *cts_browser_message_initialise(size_t cmd_len)
+{
+	cts_browser_message *m = malloc(sizeof(*m) + ((cmd_len + 4) & ~3));
+	if (m == NULL) {
+		dprintf(("client_1", "cts_browser_message_initialise: out of memory\n"));
+		return m;
+	}
+
+	m->param_count = 0;
+	m->param_list = NULL;
+	m->command = (cts_string *) (m+1);
+
+	return m;
+}
+
+void cts_browser_message_destroy(cts_browser_message *m)
+{
+	while (m->param_list != NULL) {
+		m->param_list = cts_browser_parameter_destroy(m->param_list);
+	}
+	free(m);
+	return;
+}
+
+cts_server_message *cts_server_message_initialise(void)
+{
+        cts_server_message *m = malloc(sizeof(*m));
+
+        if (m == NULL) {
+		dprintf(("client_1", "cts_server_message_initialise: out of memory\n"));
+		return m;
+        }
+
+        m->command = cmd__UNKNOWN;
+        m->param_count = 0;
+
+        return m;
+}
+
+void cts_server_message_destroy(cts_server_message *m)
+{
+        free(m);
+}
+
+static void remove_hex_encoding(char *d, char *c)
+{
+	if (*c == '%') {
+		if (isxdigit(c[1]) && isxdigit(c[2])) {
+			char buf[4];
+			buf[0] = c[1];
+			buf[1] = c[2];
+			buf[2] = '\0';
+			*d = (char) strtol(buf, NULL, 16);
+			remove_hex_encoding(d+1,c+3);
+			return;
+		}
+	}
+
+	if (*c == '+') {
+	        *d = ' ';
+	        remove_hex_encoding(d+1, c+1);
+	        return;
+	}
+
+	if (d != c) {
+		*d = *c;
+	}
+
+	if (*c != '\0') {
+		remove_hex_encoding(d+1, c+1);
+	}
+}
+
+static const cts_tag_characteristics *cts_parse_command_tag(const char *name)
+{
+        cts_tags ct;
+
+        for (ct = tag__ZERO; ct != tag__MAX; ct = (cts_tags) (ct+1)) {
+		if (strcasecomp(ctstag_strings[ct], name) == 0) {
+		        return &tag_characteristics[ct];
+		}
+
+        }
+
+        return NULL;
+}
+
+/* ----------------------------------------------------------------------
+ * MISC INSTANCE EVENT HANDLERS
+ * ----------------------------------------------------------------------
+ */
+
+/* ----------------------------------------------------------------------
+ * INSTANCE EVENT HANDLERS FOR INCOMING MESSAGES
+ * ----------------------------------------------------------------------
+ */
+static void cts_parse_server_message(
+	pluginclient_ptr plugin,
+	client_ptr crp)
+{
+        cts_server_message *m;
+        char *walker, *eowalk;
+
+	dprintf(("client_1", "Parsing a received server message\n"));
+
+	(void) plugin;
+	(void) crp;
+
+	m = cts_server_message_initialise();
+	if (m == NULL) {
+	        return;
+	}
+
+	walker = memcpy(m->message, crp->data, crp->data_size);
+ 	walker[crp->data_size] = '\0';
+ 	eowalk = walker + crp->data_size;
+	free(crp->data);
+	crp->data = NULL;
+
+	while (walker < eowalk && m->param_count < limit_MAX_PARAMS) {
+		cts_command_parameter *p;
+		char *name, *value;
+		size_t name_len, value_len;
+
+		name = walker;
+		name_len = strcspn(walker, "&=");
+		walker += name_len;
+		name_len = walker - name;
+		if (*walker == '=') {
+		        *walker++ = '\0';
+			value = walker;
+			value_len = strcspn(walker, "&");
+			walker += value_len;
+			*walker++ = '\0';
+			if (value_len == 0) {
+				value = "";
+				value_len = 1;
+			}
+		}
+		else {
+			value = "";
+			value_len = 1;
+			*walker++ = '\0';
+		}
+
+		p = &m->params[m->param_count++];
+		p->name = name;
+		p->value = value;
+		p->tag = cts_parse_command_tag(p->name);
+
+		if (p->tag) {
+		        if (value_len < p->tag->minimum_value_length) {
+		                dprintf(("", "WARNING: Value %d too short on tag %d (%s) (%d,%d)\n",
+		                	value_len,
+		                	p->tag->tag,
+		                	ctstag_strings[p->tag->tag],
+		                	p->tag->minimum_value_length,
+		                	p->tag->maximum_value_length));
+		        }
+		        if (value_len > p->tag->maximum_value_length) {
+		                dprintf(("", "WARNING: Value %d too large on tag %d (%s) (%d,%d)\n",
+		                	value_len,
+		                	p->tag->tag,
+		                	ctstag_strings[p->tag->tag],
+		                	p->tag->minimum_value_length,
+		                	p->tag->maximum_value_length));
+		        }
+		}
+	}
+
+	if (cts_statetable_dispatch_server_message(m) == bdr_FREE) {
+		cts_server_message_destroy(m);
+	}
+}
+
+static void cts_parse_browser_message(
+	pluginclient_ptr plugin,
+	client_ptr crp,
+	const char *url)
+{
+	cts_browser_message *m;
+	const char *walker;
+	size_t command_length;
+
+	(void) crp;
+
+	/* Locate the query part or the zero-byte if no query part */
+	command_length = strcspn(url, "?");
+
+	m = cts_browser_message_initialise(command_length);
+	if (m == NULL) {
+		return;
+	}
+
+	/* Copy the command and add a zero-terminator.  Neat, eh? :-) */
+	command_length[strncpy(m->command, url, command_length)] = '\0';
+
+	walker = url + command_length;
+
+	while (*walker++ != '\0') {
+		cts_browser_parameter *p;
+		const char *name, *value;
+		size_t name_len, value_len;
+
+		name = walker;
+		name_len = strcspn(walker, "&=");
+		walker += name_len;
+		name_len = walker - name;
+		if (*walker == '=') {
+			value = ++walker;
+			value_len = strcspn(walker, "&");
+			walker += value_len;
+			if (value_len == 0) {
+				value = "";
+				value_len = 1;
+			}
+		}
+		else {
+			value = "";
+			value_len = 1;
+		}
+
+		p = cts_browser_parameter_initialise(name, name_len, value, value_len);
+		if (p == NULL) {
+			cts_browser_message_destroy(m);
+			return;
+		}
+
+		/* de hex-escape the strings now */
+		remove_hex_encoding(p->name, p->name);
+		remove_hex_encoding(p->value, p->value);
+
+		p->next = m->param_list;
+		m->param_list = p;
+		++m->param_count;
+	}
+
+	if (cts_statetable_dispatch_browser_message(m) == bdr_FREE) {
+	        /* This code is here purely for testing, currently */
+	        cts_browser_parameter *p = cts_browser_parameter_lookup(m, "test.streamurl");
+	        if (p) {
+		        pluginclient_browser_access_url(plugin, p->value, NULL);
+	        }
+		cts_browser_message_destroy(m);
+	}
+
+	(void) plugin;
+	return;
+}
+
+static int client_cts_submit(pluginclient_ptr plugin, client_ptr crp,
+				  const char *url)
+{
+	static const char url_prefix[] = "cts:";
+	const size_t prefix_skip = sizeof(url_prefix)-1;
+
+	dprintf(("client_1", "client_cts_submit: browser button activated\n"));
+
+	if (strncmp(url, url_prefix, prefix_skip) != 0) {
+		return 0;
+	}
+	else {
+		cts_parse_browser_message(plugin, crp, url + prefix_skip);
+		return 1;
+	}
+}
+
+
+/* ----------------------------------------------------------------------
+ * STREAM FUNCTIONS
+ * ----------------------------------------------------------------------
+ */
+
+/*
+ * The parent is opening a new stream to send to the client.
+ *   Update the stream type.
+ *   fill in stream->instance.plugin if we are likely to have more than one stream on the go
+ *   at once.
+ */
+
+static void client_cts_stream_new(client_ptr crp, const char *mime_type,
+				     plugin_stream *stream, int seekable,
+				     int *stream_type)
+{
+    dprintf(("client_1", "client_cts_stream_new(): instance %p\n", crp));
+    (void) crp;
+    (void) mime_type;
+    (void) stream;
+    (void) seekable;
+    (void) stream_type;
+
+    /* Just tell them we only want the whole file */
+    *stream_type = plugin_stream_TYPE_ASFILEONLY;
+}
+
+/*
+ * The stream requested has finished downloading and is now available
+ */
+
+static int client_cts_stream_as_file(pluginclient_ptr plugin, client_ptr crp,
+                                        plugin_stream *stream, const char *cache_file)
+{
+        _kernel_oserror *err;
+
+	(void) stream;
+
+	crp->data_size = get_file_length(cache_file);
+	if (crp->data_size == 0 || crp->data_size >= limit_MAX_MESSAGE_LENGTH) {
+	        /* erk */
+	        dprintf(("", "streamed data file reported as %d bytes long!\n", crp->data_size));
+	        return 1;
+	}
+
+
+	if (crp->data)
+	        free(crp->data);
+
+	crp->data = malloc(crp->data_size+1);
+	if (crp->data == NULL) {
+	        dprintf(("", "Unable to allocate memory for server message!\n"));
+	        return 1;
+	}
+
+	err = load_file_at(cache_file, crp->data);
+	if (err != NULL) {
+	        dprintf(("", "ERROR loading stream file: %s\n", err->errmess));
+	        return 1;
+	}
+
+	cts_parse_server_message(plugin, crp);
+
+	return 1;
+}
+
+/* ---------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
+
+/* externally available definition describing functions available */
+
+pluginclient pluginclient_cts =
+{
+  &client_cts_init,
+  NULL, //  &client_cts_shutdown,
+  &client_cts_open,
+  &client_cts_close,
+  NULL, //  &client_cts_set_window
+  NULL, //  &client_cts_key,
+  NULL, //  &client_cts_click,
+  NULL, //  &client_cts_help,
+  NULL, //  &client_cts_action,
+  NULL, //  &client_cts_idle,
+  NULL, //  &client_cts_focus,
+  NULL, //  &client_cts_blur,
+  NULL, //  &client_cts_redraw_setup,
+  NULL, //  &client_cts_redraw,
+  NULL, //  &client_cts_play_file,
+  &client_cts_stream_new,
+  &client_cts_stream_as_file,
+  NULL, //  &client_cts_stream_destroy,
+  &client_cts_submit,
+  &client_cts_file_types[0]
+};
+
+/* ---------------------------------------------------------------------- */
+
+/* eof client.c */
