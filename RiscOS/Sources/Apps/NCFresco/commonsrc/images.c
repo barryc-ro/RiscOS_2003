@@ -3123,7 +3123,8 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 #if NEW_WEBIMAGE == 2
 			else if (plotters[i->plotter].render)
 			{
-			    plotters[i->plotter].render(i, p, q, i->width, i->height, scale_image, 0, NULL, 0, 0);
+			    /* SJM: use i_w, i_h as scale_image is actually ignored by jpeg_render */
+			    plotters[i->plotter].render(i, p, q, i_w, i_h, scale_image, 0, NULL, 0, 0);
 			}
 #endif
 		    }

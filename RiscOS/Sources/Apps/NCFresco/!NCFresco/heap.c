@@ -73,7 +73,7 @@ void heapda_init(const char *programname)
     
     atexit(cleanup);
 
-    STBDBG(("heapda_init: da size %d heap base %p size %d\n", da_size, heap__base, heap__size));
+    STBDBGN(("heapda_init: da size %d heap base %p size %d\n", da_size, heap__base, heap__size));
 }
 
 void *heapda_realloc(void *oldptr, unsigned int size_request)
@@ -83,7 +83,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     void *newptr;
     int old_heap_size = heap__size, old_da_size = da_size;
 
-    STBDBG(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap__size, da_size));
+    STBDBGN(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap__size, da_size));
     
     /* if shrink to zero then just remove it */
     if (size_request == 0)
@@ -122,7 +122,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 	DynamicArea_Realloc(heap__da, &adjust);
 	da_size += adjust;
 
-/* 	STBDBG(("heapda_realloc: da %d heap %d\n", da_size, heap__size)); */
+/* 	STBDBGN(("heapda_realloc: da %d heap %d\n", da_size, heap__size)); */
 
 	/* if we can't extend DA then return NULL */
 	if (adjust == 0)
@@ -135,7 +135,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 	    DynamicArea_Realloc(heap__da, &adjust);
 	    da_size -= adjust;
 	    
-	    STBDBG(("heapda_realloc: failed (heap %d da %d)\n", heap__size, da_size));
+	    STBDBGN(("heapda_realloc: failed (heap %d da %d)\n", heap__size, da_size));
 
 	    return NULL;
 	}
@@ -157,7 +157,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     }
 #endif
 
-    STBDBG(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap__size, da_size));
+    STBDBGN(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap__size, da_size));
 
 #if DEBUG
     if (heap__max < heap__size)
@@ -181,7 +181,7 @@ void heapda_free(void *heapptr)
     int moved;
     _kernel_swi_regs r;
     
-    STBDBG(("heapda_free: free %p (%d) (heap %d da %d)\n", heapptr, ((int *)heapptr)[-1], heap__size, da_size));
+    STBDBGN(("heapda_free: free %p (%d) (heap %d da %d)\n", heapptr, ((int *)heapptr)[-1], heap__size, da_size));
 
     if (heapptr == NULL)
 	return;
@@ -218,7 +218,7 @@ void heapda_free(void *heapptr)
 	STBDBGN(("heapda_free: da_size %d (adjust %d)\n", da_size, adjust));
     }
 
-    STBDBG(("heapda_free: (heap %d da %d)\n", heap__size, da_size));
+    STBDBGN(("heapda_free: (heap %d da %d)\n", heap__size, da_size));
 
 #ifdef MemCheck_MEMCHECK
     MemCheck_UnRegisterMiscBlock(heapptr);

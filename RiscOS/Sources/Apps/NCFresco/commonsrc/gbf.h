@@ -22,7 +22,9 @@
 #define GBF_NETSCAPE_OVERLAPS		0x00000100 /* DAF: At your own peril! */
 #define GBF_HARD_TABLES			0x00000200
 #define GBF_EARLYIMGFETCH		0x00000400
-#define GBF_LOW_MEMORY			0x00000800
+#define GBF_LOW_MEMORY			0x00000800 /* have started discarding images/using emergency cache */
+#define GBF_ANTI_TWITTER		0x00001000 /* using s/w anti-twitter */
+#define GBF_VERY_LOW_MEMORY		0x00002000 /* have almost exhausted emergency cache */
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);

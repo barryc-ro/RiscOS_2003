@@ -360,9 +360,12 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
 /* <! */
 extern void state_comment_maybe (SGMLCTX *context, char input)
 {
-	if ( is_whitespace (input) )
+#ifndef STBWEB
+    if ( is_whitespace (input) )
 	{ ; }
-	else if ( input =='>' )
+	else
+#endif
+	    if ( input =='>' )
 	{ do_got_element (context); }
 	else if ( input =='-' )
 	{ context->state = state_comment_pre_initial; }

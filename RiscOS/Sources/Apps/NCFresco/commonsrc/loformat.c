@@ -1909,7 +1909,7 @@ static void formatting_loop(RID_FMT_STATE *fmt)
 {
     formatting_start(fmt);
 
-    while (fmt->next_item != NULL)
+    while (fmt->next_item != NULL/*  && !gbf_active(GBF_VERY_LOW_MEMORY)  */)
     {
 	/*dump_item(fmt->next_item, fmt->rh->texts.data);*/
 

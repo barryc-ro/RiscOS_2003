@@ -624,6 +624,7 @@ typedef unsigned int rid_table_flags;
 #define rid_tf_HAVE_HEIGHT	0x00020000 /* TABLE HEIGHT= is present */
 #define rid_tf_NON_PCT_GREW_HORIZ	0x00040000 /* Col without %age implied growth */
 #define rid_tf_NON_PCT_GREW_VERT	0x00080000 /* Col without %age implied growth */
+#define rid_tf_SI1_PCT		0x00100000 /* Messy constraint hack */
 
 /*****************************************************************************
 

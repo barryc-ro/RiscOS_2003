@@ -10,7 +10,7 @@
 #include "gbf.h"
 #include "htmlparser.h"
 
-int gbf_flags =	( GBF_TABLES_UNEXPECTED * 0 ) +
+int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1 ) +
 		( GBF_FVPR * 1 ) +
 		( GBF_GUESS_ELEMENTS * 0 ) +
 		( GBF_GUESS_ATTRIBUTES * 1 ) +

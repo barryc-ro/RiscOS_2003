@@ -1806,7 +1806,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    {
 	    BENDBG(( "Query string is:\n'%s'\n", dest2));
 		/* Never get a form query from the cache */
-		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, 1));
+		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, fe_open_url_NO_CACHE));
 
 		mm_free(dest2);
 	    }
@@ -1909,7 +1909,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    dest = url_join(BASE(doc), form->action);
 
 	    /* Never get a form query from the cache */
-	    ep = frontend_complain(frontend_open_url(dest, doc->parent, target, fname, 1));
+	    ep = frontend_complain(frontend_open_url(dest, doc->parent, target, fname, fe_open_url_NO_CACHE));
 	    mm_free(dest);
 	}
 	break;
@@ -3184,7 +3184,7 @@ static void be_set_dimensions(be_doc doc)
 
     BENDBG(( "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
 
-#if !defined(STBWEB) && !defined(BUILDERS)
+#if /* !defined(STBWEB) &&  */!defined(BUILDERS)
     /* pdh: Fresco wants this, don't know whether NCFresco does */
     frontend_view_margins( doc->parent, &doc->margin );
 #endif
@@ -3205,6 +3205,7 @@ static void be_set_dimensions(be_doc doc)
 #endif
 	ASSERT(doc->rh->stream.fwidth > 0);
 
+	doc->scale_value = 100;
         antweb_document_format(doc, doc->rh->stream.fwidth);
 
 /* 	objects_check_movement(doc); moved to inside antweb_document_format() */
@@ -3259,6 +3260,7 @@ os_error *backend_reset_width(be_doc doc, int width)
             doc->rh->stream.fwidth = fvd.user_width;
 	    ASSERT(doc->rh->stream.fwidth > 0);
 
+	    doc->scale_value = 100;
             antweb_document_format(doc, doc->rh->stream.fwidth);
 
             be_set_dimensions(doc);
@@ -4139,6 +4141,147 @@ static void be_doc_fetch_bg(antweb_doc *doc)
     mm_free(url);
 }
 
+/* This chunk used to be inside antweb_doc_progress. It passes data
+ * to the parser, either by reading it from the file or fby closing
+ * the parser down, and then decides what reformatting to do.  */
+
+static void progress_parse_and_format(antweb_doc *doc, int fh, int lastptr, int so_far)
+{
+    rid_text_item *oti;
+    rid_form_item *ofi;
+    rid_select_item *osi;
+    rid_option_item *ooi;
+
+    oti = doc->rh->stream.text_last;
+    ofi = doc->rh->form_last;
+    osi = ofi ? ofi->last_select : NULL;
+    ooi = osi ? osi->last_option : NULL;
+
+    PPDBG(("progress_parse_and_format: doc%p fh %d lastptr %d so_far %d\n", doc, fh, lastptr, so_far));
+    PPDBG(("progress_parse_and_format: old text %p form %p select %o object %p\n", oti, ofi, osi, ooi));
+
+    if (fh)
+    {
+	be_pparse_doc(doc, fh, lastptr, so_far);
+
+	PPDBG(("pparse from progress done\n"));
+    }
+    else
+    {
+        doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
+	doc->ph = NULL;
+
+	PPDBG(("parser closedown done\n"));
+    }
+
+    /* If the last item is a table, we must still be within the */
+    /* table, so redisplaying it probably isn't a bad thing to do */
+    /* Once the table is completed, another pad tag will be added */
+    /* and we can skip over it as normal */
+
+    if (oti != doc->rh->stream.text_last ||			/* if we have a new top-level text item, OR */
+	(oti != NULL &&						/*   we have some text, AND */
+	 (oti->tag == rid_tag_TABLE ||				/*     it's a table, OR ONE OF */
+	  ofi != doc->rh->form_last ||				/*     we are in a different form */
+	  osi != (ofi ? ofi->last_select : NULL) ||		/*     we are in a different select item */
+	  ooi != (osi ? osi->last_option : NULL) ) ) )		/*     we are in a different object */
+    {
+	PPDBG(( "Text list seems to have changed.\n"));
+
+	if ((doc->flags & doc_flag_DISPLAYING) == 0)
+	{
+	    BOOL waiting_for_bg = FALSE;
+
+	    /* if we have an image possibly fetching see if it is here */
+	    if (doc->rh->tile.im)
+	    {
+		image_flags flags = 0;
+		image_info(doc->rh->tile.im, NULL, NULL, NULL, &flags, NULL, NULL);
+		if (flags & image_flag_FETCHED)
+		{
+		    BENDBG(( "background is here already\n"));
+		}
+		else if (clock() < doc->start_time + config_display_time_background)
+		{
+		    waiting_for_bg = TRUE;
+		    BENDBG(( "waiting for background\n"));
+		}
+		else
+		{
+		    BENDBG(( "background wait timeout\n"));
+		}
+	    }
+
+	    if (!waiting_for_bg)
+		antweb_init_page(doc);
+	}
+	else
+	{
+	    BENDBG(( "Tail changed, checking for select items\n"));
+	    BENDBG(( "ofi=%p, osi=%p, ooi=%p\n", ofi, osi, ooi));
+
+	    /* We had an option in the last visable select and
+	       either the last form no longer has a select or
+	       the last select of the last form is not the same */
+	    if ((ooi || (osi && osi->last_option)) &&
+		((!doc->rh->form_last->last_select) ||
+		 (ooi != doc->rh->form_last->last_select->last_option) ) )
+	    {
+		PPDBG(( "Select found, reformatting the lot, doc=%p rh=%p\n", doc, doc->rh ));
+
+		/* dispose of the item and resize it */
+		if (osi && osi->base.display && object_table[osi->base.display->tag].dispose)
+		{
+		    (object_table[osi->base.display->tag].dispose)(osi->base.display, doc->rh, doc);
+		    (object_table[osi->base.display->tag].size)(osi->base.display, doc->rh, doc);
+		}
+
+		/* Let's make sure we get it right */
+		antweb_document_format(doc, doc->rh->stream.fwidth);
+
+		/* Force a major redraw if the item is in or above the visable */
+#if 0
+		if (oti == NULL)
+		    oti = doc->rh->stream.text_list;
+
+		if (oti)
+		{
+		    hiline = ((oti->line->top > osi->base.display->line->top) ?
+			      oti->line :
+			      osi->base.display->line );
+		    frontend_view_bounds(doc->parent, &bb);
+
+		    if (hiline->top > bb.y0)
+		    {
+			bb.y1 = hiline->top;
+			be_view_redraw(doc, &bb);
+		    }
+		}
+#else
+		frontend_view_redraw(doc->parent, NULL);
+#endif
+		PPDBG(( "Tail reformat (with select items) done\n"));
+	    }
+	    /* if we haven't started yet then we need to do a full format rather than a tail format */
+	    else if (doc->rh->stream.text_list == NULL || doc->rh->stream.text_list->line == NULL)
+	    {
+		antweb_document_format(doc, doc->rh->stream.fwidth);
+		frontend_view_redraw(doc->parent, NULL);
+	    }
+	    else
+	    {
+		PPDBG(( "Reformatting the tail\n"));
+		TASSERT( doc->rh );
+		be_document_reformat_tail(doc, oti, doc->rh->stream.fwidth);
+		PPDBG(( "Tail reformat done\n"));
+	    }
+	}
+
+	if (doc->flags & doc_flag_DISPLAYING)
+	    be_set_dimensions(doc);
+    }
+}
+
 
 /* This will tend to redraw tables as they are arriving. */
 /* It should be okay once the </TABLE> has been processed. */
@@ -4217,125 +4360,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 	}
 
 	if (doc->ph)
-	{
-	    rid_text_item *oti;
-	    rid_form_item *ofi;
-	    rid_select_item *osi;
-	    rid_option_item *ooi;
-
-	    oti = doc->rh->stream.text_last;
-	    ofi = doc->rh->form_last;
-	    osi = ofi ? ofi->last_select : NULL;
-	    ooi = osi ? osi->last_option : NULL;
-
-	    PPDBG(("Calling pparse from progress\n"));
-	    be_pparse_doc(doc, fh, lastptr, so_far);
-
-	    PPDBG(("pparse from progress done\n"));
-
-            /* If the last item is a table, we must still be within the */
-            /* table, so redisplaying it probably isn't a bad thing to do */
-            /* Once the table is completed, another pad tag will be added */
-            /* and we can skip over it as normal */
-
-	    if (oti != doc->rh->stream.text_last ||			/* if we have a new top-level text item, OR */
-		(oti != NULL &&						/*   we have some text, AND */
-		 (oti->tag == rid_tag_TABLE ||				/*     it's a table, OR ONE OF */
-		  ofi != doc->rh->form_last ||				/*     we are in a different form */
-		  osi != (ofi ? ofi->last_select : NULL) ||		/*     we are in a different select item */
-		  ooi != (osi ? osi->last_option : NULL) ) ) )		/*     we are in a different object */
-	    {
-		PPDBG(( "Text list seems to have changed.\n"));
-
-		if ((doc->flags & doc_flag_DISPLAYING) == 0)
-		{
-		    BOOL waiting_for_bg = FALSE;
-
-#if 1
-		    /* if we have an image possibly fetching see if it is here */
-		    if (doc->rh->tile.im)
-		    {
-			image_flags flags = 0;
-			image_info(doc->rh->tile.im, NULL, NULL, NULL, &flags, NULL, NULL);
-			if (flags & image_flag_FETCHED)
-			{
-			    BENDBG(( "background is here already\n"));
-			}
-			else if (clock() < doc->start_time + config_display_time_background)
-			{
-			    waiting_for_bg = TRUE;
-			    BENDBG(( "waiting for background\n"));
-			}
-			else
-			{
-			    BENDBG(( "background wait timeout\n"));
-			}
-		    }
-#endif
-
-		    if (!waiting_for_bg)
-			antweb_init_page(doc);
-		}
-		else
-		{
-		    BENDBG(( "Tail changed, checking for select items\n"));
-		    BENDBG(( "ofi=%p, osi=%p, ooi=%p\n", ofi, osi, ooi));
-
-		    /* We had an option in the last visable select and
-		       either the last form no longer has a select or
-		       the last select of the last form is not the same */
-		    if ((ooi || (osi && osi->last_option)) &&
-			((!doc->rh->form_last->last_select) ||
-			 (ooi != doc->rh->form_last->last_select->last_option) ) )
-		    {
-			PPDBG(( "Select found, reformatting the lot, doc=%p rh=%p\n", doc, doc->rh ));
-
-			/* dispose of the item and resize it */
-			if (osi && osi->base.display && object_table[osi->base.display->tag].dispose)
-			{
-				(object_table[osi->base.display->tag].dispose)(osi->base.display, doc->rh, doc);
-				(object_table[osi->base.display->tag].size)(osi->base.display, doc->rh, doc);
-	                }
-
-			/* Let's make sure we get it right */
-			antweb_document_format(doc, doc->rh->stream.fwidth);
-
-			/* Force a major redraw if the item is in or above the visable */
-#if 0
-			if (oti == NULL)
-			    oti = doc->rh->stream.text_list;
-
-			if (oti)
-			{
-			    hiline = ((oti->line->top > osi->base.display->line->top) ?
-				      oti->line :
-				      osi->base.display->line );
-			    frontend_view_bounds(doc->parent, &bb);
-
-			    if (hiline->top > bb.y0)
-			    {
-				bb.y1 = hiline->top;
-				be_view_redraw(doc, &bb);
-			    }
-			}
-#else
-			frontend_view_redraw(doc->parent, NULL);
-#endif
-			PPDBG(( "Tail reformat (with select items) done\n"));
-		    }
-		    else
-		    {
-			PPDBG(( "Reformatting the tail\n"));
-			TASSERT( doc->rh );
-			be_document_reformat_tail(doc, oti, doc->rh->stream.fwidth);
-			PPDBG(( "Tail reformat done\n"));
-		    }
-		}
-
-		if (doc->flags & doc_flag_DISPLAYING)
-		    be_set_dimensions(doc);
-	    }
-	}
+	    progress_parse_and_format(doc, fh, lastptr, so_far);
     }
 
 #ifndef BUILDERS
@@ -4463,9 +4488,14 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	const char *refresh;
 
         PPDBG(("Closing parser down\n"));
-        doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
-        doc->ph = NULL;
 
+#if 1
+	progress_parse_and_format(doc, 0, 0, 0);
+#else
+	doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile); 
+	doc->ph = NULL; 
+#endif
+	
 	if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
 	{
 	    BENDBG(( "Calling fetch_bg from doc_complete\n" ));
@@ -5063,6 +5093,8 @@ void backend_doc_reformat(be_doc doc)
 {
     if (doc)
     {
+	doc->scale_value = 100;
+
 	antweb_trigger_fetching(doc);
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 

@@ -118,7 +118,7 @@ void ncreg_decode(void)
     _swix(NCRegistry_Write, _INR(0,2) | _OUT(0), "NCD_INFO", buf, 40*1024, &error);
 
     if (error == -2)
-        frontend_open_url(buf, main_view, NULL, NULL, 0);
+        frontend_open_url(buf, main_view, NULL, NULL, fe_open_url_NO_REFERER);
 
     mm_free(buf);
 }

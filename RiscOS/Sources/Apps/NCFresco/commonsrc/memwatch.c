@@ -165,6 +165,8 @@ extern int mm_can_we_recover(int abort)
 {
     int r = 0;
 
+    gbf_flags |= GBF_LOW_MEMORY;
+    
     if (image_memory_panic())
 	r = 1;			/* recovered through discarding images */
 
@@ -196,7 +198,11 @@ extern int mm_can_we_recover(int abort)
 	if (size)
 	{
 	    if (flex_extend(&emergency_memory, size - EMERGENCY_MEMORY_UNIT))
+	    {
 		r = 2;
+		if (size <= EMERGENCY_MEMORY_UNIT)
+		    gbf_flags |= GBF_VERY_LOW_MEMORY;
+	    }
 	    else
 	    {
 		DBG(("mm_can_we_recover: emergency shrink failed!!!\n"));
@@ -217,8 +223,6 @@ extern int mm_can_we_recover(int abort)
  	return 0;
     }
 
-    gbf_flags |= GBF_LOW_MEMORY;
-    
 				/* if recovered some memory then give message */
     strcpy(panicerr.errmess, msgs_lookup("memlow"));
     panicerr.errnum = 0;

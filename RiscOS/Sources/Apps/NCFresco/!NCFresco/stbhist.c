@@ -491,7 +491,7 @@ os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, 
 
 os_error *fe_history_show(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=historycombined", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncint:openpanel?name=historycombined", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE);
 }
 
 /* ---------------------------------------------------------------------------------------------*/
@@ -677,19 +677,6 @@ os_error *fe_history_move(fe_view v, int direction)
 
     if (!dest)
 	return makeerror(ERR_NO_HISTORY);
-
-    switch (direction)
-    {
-    case history_FIRST:
-    case history_PREV:
-	sound_event(snd_HISTORY_BACK);
-	break;
-
-    case history_NEXT:
-    case history_LAST:
-	sound_event(snd_HISTORY_FORWARD);
-	break;
-    }
 
     index = 0;
 

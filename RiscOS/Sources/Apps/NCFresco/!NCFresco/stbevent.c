@@ -138,18 +138,22 @@ static void history_event_handler(int event, fe_view v)
             break;
 
         case fevent_HISTORY_BACK:
+	    sound_event(snd_HISTORY_BACK);
             frontend_complain(fe_history_move(v, history_PREV));
             break;
 
         case fevent_HISTORY_BACK_ALL:
+	    sound_event(snd_HISTORY_BACK);
             frontend_complain(fe_history_move(v, history_FIRST));
             break;
 
         case fevent_HISTORY_FORWARD:
+	    sound_event(snd_HISTORY_FORWARD);
             frontend_complain(fe_history_move(v, history_NEXT));
             break;
 
         case fevent_HISTORY_FORWARD_ALL:
+	    sound_event(snd_HISTORY_FORWARD);
             frontend_complain(fe_history_move(v, history_LAST));
             break;
 
@@ -210,6 +214,8 @@ static void misc_event_handler(int event, fe_view v)
         case fevent_HOME:
 	    if (!fe_locate_view("__url") && !on_screen_kbd)
 		frontend_complain(fe_home(v));
+	    else
+		sound_event(snd_WARN_BAD_KEY);
             break;
 
         case fevent_PRINT:
@@ -273,7 +279,7 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_SEND_URL:
-	frontend_complain(frontend_open_url("ncint:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncint:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_REFERER));
 	break;
 
     case fevent_PRINT_LETTER:
@@ -299,14 +305,17 @@ static void misc_event_handler(int event, fe_view v)
 
     case fevent_SOUND_TOGGLE:
 	fe_bgsound_set(-1);
+	sound_event(config_sound_background ? snd_SOUND_ON : snd_SOUND_OFF);
 	break;
 
     case fevent_SOUND_OFF:
 	fe_bgsound_set(0);
+	sound_event(snd_SOUND_OFF);
 	break;
 
     case fevent_SOUND_ON:
 	fe_bgsound_set(1);
+	sound_event(snd_SOUND_ON);
 	break;
 
     case fevent_BEEPS_TOGGLE:
@@ -519,6 +528,7 @@ static void toolbar_event_handler(int event, fe_view v)
 {
     if (event == fevent_TOOLBAR_EXIT)
     {
+	sound_event(snd_GENERIC_BACK);
 	frontend_complain(fe_status_unstack(v));
     }
     else if (fe_popup_open() || on_screen_kbd )
@@ -531,6 +541,8 @@ static void toolbar_event_handler(int event, fe_view v)
 
 	if (event == fevent_TOOLBAR_DETAILS)
 	    fe_open_version(v);
+	else
+	    sound_event(soundfx_ACTION_OK);
     }
 }
 
@@ -568,7 +580,7 @@ static void url_event_handler(int event, fe_view v)
 
     s = getenv(buf);
     if (s && s[0])
-	frontend_complain(frontend_open_url(s, v, NULL, NULL, 0));
+	frontend_complain(frontend_open_url(s, v, NULL, NULL, fe_open_url_NO_REFERER));
 }
 
 static void encoding_event_handler(int event, fe_view v)

@@ -153,6 +153,7 @@ extern fe_view fe_selected_view(void);
 
 extern void fe_submit_form(fe_view v, const char *id);
 extern void fe_keyboard_open(fe_view v);
+extern void fe_keyboard_close(void);
 
 extern os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle);
 
@@ -165,6 +166,7 @@ extern int movepointer(void);
 
 extern void fe_no_new_page(fe_view v, os_error *e);
 extern void fe_ensure_highlight_after_fetch(fe_view v);
+extern void fe_check_autoscroll(fe_view v, const wimp_mousestr *mp);
 
 /* From internal.h */
 

@@ -1004,10 +1004,14 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
     if (strcasecomp(panel_name, "related") == 0)
     {
+	int event = snd_WARN_BAD_KEY;
 	char *url = NULL;
 
 	if (fe_file_to_url(config_document_handler_related, &url) != NULL)
+	{
+	    sound_event(event);
 	    return generated;
+	}
 
 	v = get_source_view(query, TRUE);
 
@@ -1036,9 +1040,12 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
 /* 		tb_status_button(fevent_OPEN_RELATED_STUFF, TRUE); */
 
+		event = snd_RELATED_SHOW;
 		STBDBG(("internal_url: related %s\n", s));
 	    }
 	}
+
+	sound_event(event);
 
 	mm_free(url);
     }
@@ -1049,6 +1056,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
 	if (strcasecomp(panel_name, "displayoptions") == 0)
 	{
+	    sound_event(snd_DISPLAY_OPTIONS_SHOW);
 	    tb_status_button(fevent_OPEN_DISPLAY_OPTIONS, TRUE);
 	    e = fe_display_options_write_file(f);
 	}
@@ -1109,12 +1117,15 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "printoptions") == 0)
 	{
+	    sound_event(snd_PRINT_OPTIONS_SHOW);
 	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, TRUE);
 	    e = fe_print_options_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "printframes") == 0)
 	{
 	    char *size = extract_value(query, "size=");
+
+	    sound_event(snd_PRINT_FRAMES_SHOW);
 
 	    v = get_source_view(query, TRUE);
 
@@ -1251,6 +1262,10 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
 	    fe_file_to_url(config_doc_default, new_url);
 	    generated = fe_internal_url_REDIRECT;
 	}
+	else
+	{
+	    sound_event(snd_WARN_BAD_KEY);
+	}
     }
     else if (strcasecomp(page_name, "search") == NULL)
     {
@@ -1260,6 +1275,10 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
 	    fe_file_to_url(config_document_search, new_url);
 	    generated = fe_internal_url_REDIRECT;
 	}
+	else
+	{
+	    sound_event(snd_WARN_BAD_KEY);
+	}
     }
     else if (strcasecomp(page_name, "offline") == NULL)
     {
@@ -1268,6 +1287,10 @@ static int internal_url_openpage(const char *query, const char *bfile, const cha
 	    sound_event(snd_OFFLINE);
 	    fe_file_to_url(config_document_offline, new_url);
 	    generated = fe_internal_url_REDIRECT;
+	}
+	else
+	{
+	    sound_event(snd_WARN_BAD_KEY);
 	}
     }
 
@@ -1875,6 +1898,10 @@ void fe_internal_deleting_view(fe_view v)
     else if (strcasecomp(v->name, "__printoptions") == 0)
     {
 	tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_INACTIVE);
+
+	/* move highlight back to PRINT SETUP button */
+	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
+	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_PRESSED);
     }
     else if (strcasecomp(v->name, "__printletter") == 0)
     {
@@ -1884,14 +1911,12 @@ void fe_internal_deleting_view(fe_view v)
     {
 	tb_status_button(fevent_PRINT_LEGAL, tb_status_button_INACTIVE);
     }
-    else if (strcasecomp(v->name, TARGET_ERROR) == 0)
+    else if (strcasecomp(v->name, TARGET_ERROR) == 0 ||
+	     strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
     {
-    }
-    else if (strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
-    {
-/* 	if (pointer_mode == fe_pointermode_OFF) */
-/* 	{ */
-/* 	} */
+	/* mvoe highlight to default spot on toolbar (down arrow) */
+ 	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
+	    tb_status_highlight(TRUE);
     }
 }
 
@@ -1913,7 +1938,10 @@ os_error *fe_internal_toggle_panel(const char *panel_name)
     strcat(target, panel_name);
 
     if ((v = fe_locate_view(target)) != NULL)
+    {
+	sound_event(snd_MENU_HIDE);
 	fe_dispose_view(v);
+    }
     else if (fe_popup_open())
 	sound_event(snd_WARN_BAD_KEY);
     else
@@ -1964,17 +1992,17 @@ void fe_show_mem_dump(void)
 
 os_error *fe_search_page(fe_view v)
 {
-    return frontend_open_url("ncint:openpage?name=search", v, NULL, NULL, 0);
+    return frontend_open_url("ncint:openpage?name=search", v, NULL, NULL, fe_open_url_NO_REFERER);
 }
 
 os_error *fe_home(fe_view v)
 {
-    return frontend_open_url("ncint:openpage?name=home", v, NULL, NULL, 0);
+    return frontend_open_url("ncint:openpage?name=home", v, NULL, NULL, fe_open_url_NO_REFERER);
 }
 
 os_error *fe_offline_page(fe_view v)
 {
-    return frontend_open_url("ncint:openpage?name=offline", v, NULL, NULL, 0);
+    return frontend_open_url("ncint:openpage?name=offline", v, NULL, NULL, fe_open_url_NO_REFERER);
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -209,7 +209,7 @@ extern int nvram_write(const char *tag, int new_val);
 
 #define snd_TOOLBAR_SHOW	soundfx_TB_OPEN
 #define snd_TOOLBAR_HIDE	soundfx_TB_CLOSE
-#define snd_TOOLBAR_SHOW_SUB	soundfx_ACTION_OK
+#define snd_TOOLBAR_SHOW_SUB	0
 #define snd_TOOLBAR_HIDE_SUB	0
 
 #define snd_HISTORY_SHOW	soundfx_ACTION_OK
@@ -232,6 +232,10 @@ extern int nvram_write(const char *tag, int new_val);
 #define snd_PASSWORD_SHOW	soundfx_ACTION_OK
 #define snd_INFO_SHOW		soundfx_ACTION_OK
 #define snd_FIND_SHOW		soundfx_ACTION_OK
+#define snd_DISPLAY_OPTIONS_SHOW 0
+#define snd_PRINT_OPTIONS_SHOW	soundfx_ACTION_OK
+#define snd_PRINT_FRAMES_SHOW	soundfx_ACTION_OK
+#define snd_RELATED_SHOW	soundfx_ACTION_OK
 
 #define snd_SCROLL_LINE		0
 #define snd_SCROLL_PAGE		0
@@ -259,12 +263,20 @@ extern int nvram_write(const char *tag, int new_val);
 #define snd_MODE_MAP_START	0
 #define snd_MODE_MAP_END	0
 
-#define snd_BEEPS_ON		soundfx_BROWSER_SOUND_ON
-#define snd_BEEPS_OFF		soundfx_BROWSER_SOUND_ON
+#define snd_PRINT_START		0
+#define snd_PRINT_END		0
+
+#define snd_BEEPS_ON		0
+#define snd_BEEPS_OFF		0
+
+#define snd_SOUND_ON		soundfx_BROWSER_SOUND_ON
+#define snd_SOUND_OFF		soundfx_BROWSER_SOUND_ON
 
 #define snd_ERROR		soundfx_ACTION_FAIL
 
 #define snd_FIND_FAILED		soundfx_ACTION_FAIL
+
+#define snd_GENERIC_BACK	soundfx_BROWSER_BACK
 
 typedef int sound_event_t;
 

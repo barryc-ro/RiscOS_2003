@@ -111,7 +111,7 @@ static void convert_box_coords(wimp_box *box, fe_view v)
 static int scroll_by_flags(fe_view v, int flags)
 {
     int scrolled = FALSE;
-    if (v->displaying && v->scrolling != fe_scrolling_NONE)
+    if (v->displaying && v->scrolling != fe_scrolling_NO)
     {
 	if (flags & be_link_VERT)
 	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
@@ -159,7 +159,8 @@ static os_error *fe__locate_view_by_position(fe_view v, void *handle)
 
     STBDBG(("fe__locate_view_by_position: v%p box %d,%d,%d,%d\n", v, v->box.x0, v->box.y0, v->box.x1, v->box.y1));
 
-    if (v->children)
+    /* ignore frame if it has children or if it has no contents */
+    if (v->children || v->displaying == NULL)
 	return NULL;
     
     pdist = s1 = s2 = 0;
@@ -485,6 +486,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	if (new_link == NULL)
 	    new_link = backend_highlight_link(v->displaying, NULL, flags);
 
+/* 	if (new_link == NULL && ) */
+/* 	    new_link = backend_highlight_link(v->displaying, NULL, flags); */
+
 	if (new_link == NULL)
 	    centre_pointer(v);
 
@@ -573,7 +577,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	STBDBG(("fe_move_highlight_xy: frames v %p try scrolling\n", v));
 
 	/* try scrolling and highlighting again */
-	if (v->displaying && v->scrolling != fe_scrolling_NONE)
+	if (v->displaying && v->scrolling != fe_scrolling_NO)
 	{
 	    if (flags & be_link_VERT)
 		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
@@ -645,7 +649,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    return;
 	}
 
-	if (v->displaying && v->scrolling != fe_scrolling_NONE)
+	if (v->displaying && v->scrolling != fe_scrolling_NO)
 	{
 	    if (flags & be_link_VERT)
 		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);

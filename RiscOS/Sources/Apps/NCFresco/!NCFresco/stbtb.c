@@ -641,8 +641,9 @@ static os_error *toolactionpress(int obj, int cmp, int pressed)
 
 /* --------------------------------------------------------------------------*/
 
-static void tb_bar_set_highlight(tb_bar_info *tbi, int val, BOOL is_index)
+static BOOL tb_bar_set_highlight(tb_bar_info *tbi, int val, BOOL is_index)
 {
+    int success = FALSE;
     if (val != -1)
     {
 	wimp_box box;
@@ -650,13 +651,14 @@ static void tb_bar_set_highlight(tb_bar_info *tbi, int val, BOOL is_index)
 
 	STBDBG(("tb_bar_set_highlight(): bar %d index %d obj %x, cmp %x\n", tbi ? tbi->num : -1, val, tbi->object_handle, is_index ? tbi->buttons[val].cmp : val));
 	    
-	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, is_index ? tbi->buttons[val].cmp : val, &box);
+	success = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, is_index ? tbi->buttons[val].cmp : val, &box) == NULL;
 	wimp_get_wind_state(tbi->window_handle, &state);
 	coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
 
 	if (pointer_mode == pointermode_OFF)
 	    frontend_pointer_set_position(NULL, (box.x0 + box.x1)/2, (box.y0 + box.y1)/2);
     }
+    return success;
 }
 
 static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
@@ -1090,10 +1092,11 @@ BOOL tb_status_unstack(void)
     return TRUE;
 }
 
-void tb_status_unstack_all(void)
+void tb_status_unstack_all(BOOL leave_bar_up)
 {
     tb_bar_dispose();
-    tb_status_new(NULL, BAR_MAIN);
+    if (leave_bar_up)
+	tb_status_new(NULL, BAR_MAIN);
 }
 
 void tb_status_new(fe_view v, int bar_num)
@@ -1149,19 +1152,28 @@ BOOL tb_status_highlight(BOOL gain)
 
     if (tbi)
     {
-	if (gain && !havefocus(tbi))/* get_highlighted(tbi) == -1) */
+	/* took out the havefocus() check as it meant coming off the keyboard didn't work */
+	/* put it back as it's needed to stop the highlight always
+           ending up on down arrow when changing toolbars */
+	if (gain)
 	{
 	    int active = get_active(tbi);
 
 	    STBDBG(("tb_status_highlight: active %d\n", active));
 
-	    /* if a popup is open then move to the selected button */
+	    /* if a popup is open then move to the selected button, eg
+               moving off the keyboard or favs window, this is called
+               from gaincaret */
 	    if (active != -1)
 		tb_bar_set_highlight(tbi, tbi->buttons[active].cmp, FALSE);
-	    else
-		tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
 
-	    setfocus(tbi->object_handle);
+	    /* otherwise if we don't have the focus move to the
+               default component, eg moving off a web page */
+	    else if (!havefocus(tbi))
+	    {
+		tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
+		setfocus(tbi->object_handle);
+	    }
 	}
 	return TRUE;
     }
@@ -1217,6 +1229,22 @@ void tb_status_box(wimp_box *box)
     }
     else
 	memset(box, 0, sizeof(*box));
+}
+
+void tb_status_highlight_stop(void)
+{
+    tb_bar_info *tbi = bar_list;
+
+    STBDBG(("tb_status_highlight_stop: tbi%p\n", tbi));
+
+    if (tbi)
+    {
+	if (!havefocus(tbi))
+	    setfocus(tbi->object_handle);
+
+	if (!tb_bar_set_highlight(tbi, I_WORLD_BORDER, FALSE))
+	    tb_bar_set_highlight(tbi, I_WORLD, FALSE);
+    }
 }
 
 /* --------------------------------------------------------------------------*/
@@ -1651,31 +1679,37 @@ void tb_status_show(int small_only)
 
     if (!small_only)
     {
-        o.x = - margin_box.x0;
-
-        o.box.x0 = 0;
-        o.box.x1 = screen_box.x1;
+	if (config_display_frames_top_level)
+	    o.box = text_safe_box;
+	else
+	{
+	    o.box = screen_box;
+	    o.x = - margin_box.x0;
+	}
 
 	if (config_display_control_top)
 	{
 	    o.box.y0 = text_safe_box.y1 - bar_list->height;
-	    o.box.y1 = screen_box.y1;
+/* 	    o.box.y1 = screen_box.y1; */
 
-	    o.y = - margin_box.y1;
+	    if (config_display_frames_top_level)
+		o.y = 0;
+	    else
+		o.y = - margin_box.y1;
 	}
 	else
 	{
-	    o.box.y0 = screen_box.y0;
+/*  	    o.box.y0 = screen_box.y0; */
 	    o.box.y1 = text_safe_box.y0 + bar_list->height;
 
-	    o.y = 0;
+	    o.y = o.box.y0;
 	}
-
-        open = TRUE;
-        status_state = status_OPEN;
 
 	if (status_state != status_OPEN)
 	    sound_event(snd_TOOLBAR_SHOW);
+
+        open = TRUE;
+        status_state = status_OPEN;
     }
     else
     {
@@ -1976,7 +2010,7 @@ void tb_status_resize(int xdiff, int ydiff)
 
 int tb_status_redraw(wimp_redrawstr *r)
 {
-    STBDBGN(("stbtb: redraw %x status %x\n", r->w, tb_status_w()));
+/*     STBDBGN(("stbtb: redraw %x status %x\n", r->w, tb_status_w())); */
 
     if (config_display_control_status && r->w == tb_status_w())
     {
@@ -2129,7 +2163,7 @@ void tb_open_url(void)
 	url1 = check_url_prefix(url);
 	mm_free(url);
 
-	frontend_complain(frontend_open_url(url1, NULL, TARGET_VERY_TOP, NULL, 0));
+	frontend_complain(frontend_open_url(url1, NULL, TARGET_VERY_TOP, NULL, fe_open_url_NO_REFERER));
 
 	mm_free(url1);
     }

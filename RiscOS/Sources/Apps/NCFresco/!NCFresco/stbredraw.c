@@ -13,6 +13,7 @@
 
 #include "interface.h"
 #include "render.h"
+#include "gbf.h"
 
 #include "config.h"
 #include "consts.h"
@@ -201,7 +202,7 @@ int fe_view_scroll_x(fe_view v, int val, int flags)
 {
     STBDBG(("fe_view_scroll_x: v%p w%x val %d flags %x\n", v, v->w, val, flags));
 
-    if (v->w && v->scrolling != fe_scrolling_NONE)
+    if (v->w && v->scrolling != fe_scrolling_NO)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -224,7 +225,7 @@ int fe_view_scroll_y(fe_view v, int val, int flags)
 {
     STBDBG(("fe_view_scroll_y: v%p w%x val %d flags %x\n", v, v->w, val, flags));
 
-    if (v->w && v->scrolling != fe_scrolling_NONE)
+    if (v->w && v->scrolling != fe_scrolling_NO)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -366,7 +367,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     r.w = v->w;
     r.box = *bb;
 
-    if (use_anti_twitter)
+    if (gbf_active(GBF_ANTI_TWITTER))
     {
 	/* expand redraw box to allow for anti-twittering*/
 	/* the wimp will clip this to the window*/
@@ -386,7 +387,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
 	/* if we are transient and can't scroll then draw a border */
-	if (v->open_transient && v->scrolling == fe_scrolling_NONE)
+	if (v->open_transient && v->scrolling == fe_scrolling_NO)
 	    draw_border(&r, v);
 
 	/* if we are the top frameset and this is a call to
@@ -435,7 +436,12 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
     if (v->parent == NULL)
     {
         fvd->layout_width = fvd->user_width;
+	if (v->x_scroll_bar)
+	    fvd->layout_width += toolsprite_width-2;
+
         fvd->layout_height = fvd->min_height;
+	if (v->y_scroll_bar)
+	    fvd->layout_height -= toolsprite_height;
     }
     else
     {
@@ -512,6 +518,9 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
             }
         }
     }
+    else
+    {
+    }
 
     if (v->w)
     {
@@ -526,6 +535,15 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
 #if 1
 	r.box.x1 = fvd.wa_width - v->margin.x1;
 	r.box.y0 = fvd.wa_height - v->margin.y0 - v->stretch_document;
+#if 0
+	if (v->parent == NULL)
+	{
+	    if (v->x_scroll_bar)
+		r.box.x1 += toolsprite_width-2;
+	    if (v->y_scroll_bar)
+		r.box.y0 -= toolsprite_height;
+	}
+#endif
 #else
 	r.box.x0 = - v->margin.x0;
 	r.box.y1 = bbh - v->margin.y1;
@@ -696,6 +714,11 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
     if (!v->w)
         return 1;
 
+    /* for NetChannel compaibility we allow jumping to a fragment (ie
+       top=bottom) to work on no scroling pages */
+    if (v->scrolling == fe_scrolling_NO && top != bottom)
+	return 1;
+    
     frontend_fatal_error(wimp_get_wind_state(v->w, &state));
 
     bbh = - v->margin.y1;

@@ -490,7 +490,8 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
 
     string = string_strip_start(string);
 
-    if (string.bytes == 0)
+    if (string.bytes == 0
+         || ( string.bytes >= 3 && strnicmp("PIX", string.ptr, 3) == 0 ) )
     {
 	/* Implicitly a stdunit is in pixels but we convert to OS units */
 	v.type = value_absunit;

@@ -304,14 +304,15 @@ static int render__text_link_colour(rid_text_item *ti, antweb_doc *doc, BOOL all
     {
 	rcol = render_colour_ACTIVATED;
     }
-    else if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) )
-    {
-	rcol = render_colour_RGB | doc->rh->extracolourarray[no];
-    }
+    /* if not a link */
     else if (ti->aref == NULL || ti->aref->href == NULL || (ti->aref->flags & rid_aref_LABEL))
     {
-	rcol = render_colour_PLAIN;
+	if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) )
+	    rcol = render_colour_RGB | doc->rh->extracolourarray[no];
+	else
+	    rcol = render_colour_PLAIN;
     }
+    /* if it is a link */
     else
     {
 #if 0
@@ -371,11 +372,12 @@ int render_link_colour(rid_text_item *ti, antweb_doc *doc)
  * SJM: 110697 now passes FALSE to above, negating the whole point of the change as
  * it appears I was wrong about font colour and links. This may change again if I can
  * find the original bug that made me change it.
+ * SJM: changed again because the above is rubbish and breaks font colour totally.
  */
 
 int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
 {
-    return render__text_link_colour(ti, doc, FALSE);
+    return render__text_link_colour(ti, doc, TRUE);
 }
 
 /*

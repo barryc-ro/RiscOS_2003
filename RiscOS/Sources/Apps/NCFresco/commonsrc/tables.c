@@ -1640,7 +1640,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 	    {
 		/* Element is either <TABLE> or not a table element */
 		PRSDBGN(("table_deliver(): <%s> implies <TD>\n", element->name.ptr));
-		pseudo_html(htmlctx, "<td>");
+		pseudo_html(htmlctxof(context), "<td>");
 	    }
 	}
 #endif
@@ -1947,6 +1947,8 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if (gbf_active(GBF_TABLES_UNEXPECTED))
     {
 	PRSDBG(("Delaying connecting the table to the stream\n"));
+
+	ASSERT(me->rh->curstream != NULL);
     }
     else
     {
@@ -2012,6 +2014,8 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 	rid_text_item *nb = &table->parent->base;
 
 	PRSDBG(("Delayed table text item connection now happening.\n"));
+
+	ASSERT(me->rh->curstream != NULL);
 
 	/* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
 	if ((nb->flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0)
@@ -2140,15 +2144,18 @@ extern void finishcaption(SGMLCTX *context, ELEMENT *element)
 	TABDBG(("finishcaption(): no text items so freeing caption\n"));
 	rid_free_caption(caption);
 	table->caption = NULL;
- 	/* finishtd would have to do this if it cleared down a stream */
-	htmlctx->rh->curstream = NULL;
     }
 
     if (!gbf_active(GBF_TABLES_UNEXPECTED))
     {
 	PRSDBG(("finishcaption(): patching back to table_deliver\n"));
+	htmlctx->rh->curstream = NULL;
 
 	sgml_install_deliver(context, &table_deliver);
+    }
+    else
+    {
+	htmlctx->rh->curstream = table->oldstream;
     }
 }
 
@@ -2900,6 +2907,12 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	cell->span.y = 1;
 
     /* Refine */
+    if (cell->span.x == 0 && cell->span.y == 0)
+    {
+	TABDBG(("start_tdth: both spans are zero - ignoring\n"));
+	cell->span.x = cell->span.y = 1;
+    }
+
     if (element->id == HTML_TH)
 	cell->flags |= rid_cf_HEADER;
     if (cell->span.x < 0)
@@ -3268,6 +3281,12 @@ static void finish_thtd (SGMLCTX * context, ELEMENT * element)
     }
 
 /*      sgml_install_deliver(context, &table_deliver); */
+
+    if (gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	me->rh->curstream = cell->parent->oldstream;
+	ASSERT(me->rh->curstream != NULL);
+    }
 }
 
 extern void finishth (SGMLCTX * context, ELEMENT * element)
@@ -3297,6 +3316,7 @@ extern void finishtd (SGMLCTX * context, ELEMENT * element)
   */
 
 
+#ifndef FRESCO
 /*static*/ extern void rid_size_table( rid_header *rh, rid_table_item *table, rid_fmt_info *parfmt );
 
 static void dummy_table_min(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
@@ -3314,7 +3334,6 @@ static void dummy_table_max(rid_header *rh, rid_text_stream *stream, rid_text_it
     item->width = table->width_info.maxwidth;
     return;
 }
-
 
 extern void rid_size_stream(rid_header *rh, rid_text_stream *stream, rid_fmt_info *fmt, int flags, rid_text_item *ti)
 {
@@ -3394,6 +3413,7 @@ extern void rid_size_stream(rid_header *rh, rid_text_stream *stream, rid_fmt_inf
 #endif
 }
 
+#endif
 
 /* eof commonsrc/tables.c */
 

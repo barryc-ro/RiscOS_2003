@@ -143,9 +143,9 @@ static void basic_size_stream(antweb_doc *doc,
 	    (object_table[ti->tag].size)(ti, rh, doc);
 	}
     }
-
-    /*dump_header(rh);*/
-
+#if 0
+    dump_header(rh);
+#endif
     /* Now have all items in this stream sized except tables.  any
         nested tables have child sizes calculated. Format this stream
         to pick up size information. Set the stream width as wide as
@@ -1593,7 +1593,8 @@ extern void rid_toplevel_format(antweb_doc *doc,
     }
     else
     {
-	doc->scale_value = 100;
+	/* moved resetting this to places in backend.c */
+/* 	doc->scale_value = 100; */
 
 	FMTDBG(("Sizing root stream\n"));
 	basic_size_stream(doc, rh, root_stream, 0);
@@ -1603,12 +1604,12 @@ extern void rid_toplevel_format(antweb_doc *doc,
 		fwidth,
 		doc->scale_value,
 		MIN_SCALE));
-
-	/*dump_header(rh);*/
-
+#if 0
+	dump_header(rh);
+#endif
 	if (rh->stream.width_info.minwidth > fwidth)
 	{
-	    if ( gbf_active(GBF_AUTOFIT) && rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD )
+	    if ( gbf_active(GBF_AUTOFIT) && rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD  && doc->scale_value > MIN_SCALE)
 	    {
 		doc->scale_value = MIN_SCALE;
 
@@ -1631,15 +1632,16 @@ extern void rid_toplevel_format(antweb_doc *doc,
 			root_stream->width_info.minwidth,
 			root_stream->width_info.maxwidth));
 	    }
-	    else
-	    {
-	        FMTDBG(("doc%p: minwidth %d > fwidth %d, autofit not active\n",
-                        doc, rh->stream.width_info.minwidth, fwidth ));
-
-	        fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;
-	    }
 	}
 
+	if (rh->stream.width_info.minwidth > fwidth)
+	{
+	    FMTDBG(("doc%p: minwidth %d > fwidth %d, autofit not active\n",
+		    doc, rh->stream.width_info.minwidth, fwidth ));
+	    
+	    /*fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;*/
+	}
+	
 	FMTDBG(("Allocating widths to root stream\n"));
 	allocate_widths(doc, rh, &rh->stream, fwidth);
 

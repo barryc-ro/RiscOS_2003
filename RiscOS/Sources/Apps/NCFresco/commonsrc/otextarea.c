@@ -115,6 +115,18 @@ static void otextarea_copy_defaults(rid_textarea_item *tai)
 }
 #endif /* BUILDERS */
 
+static int useable_columns(rid_textarea_item *tai, antweb_doc *doc)
+{
+    int cols = tai->cols;
+    if (doc->scale_value != 100)
+    {
+	cols = cols * doc->scale_value / 100;
+	if (cols == 0)
+	    cols = 1;
+    }
+    return cols;
+}    
+
 void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
 #ifdef BUILDERS
@@ -127,7 +139,7 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     rid_textarea_item *tai;
     font_string fs;
     char *buffer;		/* SJM: changed from auto to malloc */
-    int i;
+    int i, cols;
 
     if ( !GETFONTUSED( doc, WEBFONT_TTY ) )
     {
@@ -139,9 +151,11 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     otextarea_copy_defaults(tai);
 
-    buffer = mm_malloc(tai->cols + 1);
-    memset(buffer, ' ', tai->cols);
-    buffer[tai->cols] = 0;
+    cols = useable_columns(tai, doc);
+    
+    buffer = mm_malloc(cols + 1);
+    memset(buffer, ' ', cols);
+    buffer[cols] = 0;
     
 /*     for(i=0; i < tai->cols; i++) */
 /* 	buffer[i] = ' '; */
@@ -150,12 +164,12 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     fs.s = buffer;
     fs.x = fs.y = (1 << 30);
     fs.split = -1;
-    fs.term = tai->cols;
+    fs.term = cols;
 
     if ( font_setfont(webfonts[WEBFONT_TTY].handle) == NULL && font_strwidth(&fs) == NULL)
 	ti->width = (fs.x / MILIPOINTS_PER_OSUNIT);
     else
-	ti->width = tai->cols * webfonts[WEBFONT_TTY].space_width;
+	ti->width = cols * webfonts[WEBFONT_TTY].space_width;
     ti->width += 20;
     ti->max_up = webfonts[WEBFONT_TTY].max_up + 10;
     ti->max_down = tai->rows * (webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down) -
@@ -500,6 +514,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     rid_textarea_line *tal;
     int len;
     int osx, osy;
+    int cols;
 
     tai = ((rid_text_item_textarea *)ti)->area;
     tal = tai->caret_line;
@@ -532,6 +547,9 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     else
     {
 	input_key_action action = lookup_key_action(key);
+
+/* 	DBG(("otextarea_key: key %d action %d\n", key, action)); */
+	
 	switch (action)
 	{
 	case key_action_NEWLINE:
@@ -753,22 +771,23 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    break;
 	default:
 	    flags &= ~CHAR_USED;
-#if DEBUG
-	    fprintf(stderr, "Key %d\n", key);
-#endif
+
+	    DBG(("Key %d\n", key));
 	    /* Ignore spurious control chars */
 	    break;
 	}
     }
 
-    if (tai->cx < tai->sx || tai->cx > (tai->sx + tai->cols))
+    cols = useable_columns(tai, doc);
+    
+    if (tai->cx < tai->sx || tai->cx > (tai->sx + cols))
     {
-	if (tai->cx < (tai->cols / 2))
+	if (tai->cx < (cols / 2))
 	    tai->sx = 0;
-	else if (tai->cx > MAX_TEXT_LINE - (tai->cols / 2))
-	    tai->sx = MAX_TEXT_LINE - tai->cols;
+	else if (tai->cx > MAX_TEXT_LINE - (cols / 2))
+	    tai->sx = MAX_TEXT_LINE - cols;
 	else
-	    tai->sx = tai->cx - (tai->cols / 2);
+	    tai->sx = tai->cx - (cols / 2);
 
 	flags |= REDRAW_ALL;
     }

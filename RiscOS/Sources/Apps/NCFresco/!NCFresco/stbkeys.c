@@ -420,7 +420,7 @@ static key_list rca_menu_keys[] =
 static key_list rca_web_keys[] =
 {
     { ctrl('a'),			fevent_HOTLIST_ADD + fevent_WINDOW },
-    { ctrl('r'),			fevent_RELOAD + fevent_WINDOW },
+    { ctrl('r'),			fevent_STOP_OR_RELOAD + fevent_WINDOW },
 
     { akbd_Fn12,			fevent_TOGGLE_STATUS },
 
@@ -438,7 +438,7 @@ static key_list rca_web_keys[] =
     { kbd_handset_FORWARD,          fevent_HISTORY_FORWARD+fevent_WINDOW },
 
     { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
-    { kbd_rca_RELOAD,		fevent_RELOAD+fevent_WINDOW },
+    { kbd_rca_RELOAD,		fevent_STOP_OR_RELOAD+fevent_WINDOW },
 
     { kbd_rca_FAV,		fevent_TOOLBAR_FAVS },
     { kbd_rca_SAVE,		fevent_HOTLIST_ADD+fevent_WINDOW },
@@ -452,9 +452,9 @@ static key_list rca_web_keys[] =
 
 static key_list rca_desktop_keys[] =
 {
-    { kbd_handset_MENU,		fevent_OFFLINE_PAGE },
+/*  { kbd_handset_MENU,		fevent_OFFLINE_PAGE }, */
 
-/*   { kbd_handset_BACK,         fevent_TOOLBAR_EXIT }, */
+/*  { kbd_handset_BACK,         fevent_TOOLBAR_EXIT }, */
 
     { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
 
@@ -501,14 +501,6 @@ static key_list rca_movement2_keys[] =
 
 static key_list rca_codec_keys[] =
 {
-    { akbd_Sh + akbd_Ctl + akbd_Fn+1, fevent_CODEC_STOP },
-    { akbd_Sh + akbd_Ctl + akbd_Fn+2, fevent_CODEC_PLAY },
-    { akbd_Sh + akbd_Ctl + akbd_Fn+3, fevent_CODEC_PAUSE },
-    { akbd_Sh + akbd_Ctl + akbd_Fn+4, fevent_CODEC_REWIND },
-    { akbd_Sh + akbd_Ctl + akbd_Fn+5, fevent_CODEC_FAST_FORWARD },
-    { akbd_Sh + akbd_Ctl + akbd_Fn+6, fevent_CODEC_RECORD },
-    { akbd_Sh + akbd_Ctl + akbd_Fn+7, fevent_CODEC_MUTE },
-
     { kbd_handset_STOP, fevent_CODEC_STOP },
     { kbd_rca_PLAY, fevent_CODEC_PLAY },
     { kbd_rca_PAUSE, fevent_CODEC_PAUSE },
@@ -588,6 +580,14 @@ static key_list platform_riscos_keys[] =
     { 27, fevent_TOOLBAR_EXIT },
     { akbd_Fn+4, fevent_HISTORY_BACK+fevent_WINDOW },
     { akbd_Fn+5, fevent_HISTORY_FORWARD+fevent_WINDOW },
+
+    { akbd_Sh + akbd_Ctl + akbd_Fn+1, fevent_CODEC_STOP },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+2, fevent_CODEC_PLAY },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+3, fevent_CODEC_PAUSE },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+4, fevent_CODEC_REWIND },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+5, fevent_CODEC_FAST_FORWARD },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+6, fevent_CODEC_RECORD },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+7, fevent_CODEC_MUTE },
 
     { 0 }
 };

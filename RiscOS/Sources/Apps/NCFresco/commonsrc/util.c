@@ -681,11 +681,20 @@ extern char *strdup_gstrans(const char *input)
 	return strdup(input);
     }
 
-    /* if overflow then just ensure terminated - should do better really */
+    /* ensure termination */
     if (r.r[2] == GSTRANS_BUFSIZE)
 	output[GSTRANS_BUFSIZE-1] = 0;
+    else
+	output[r.r[2]] = 0;
 
-    return mm_realloc(output, r.r[2]);
+    /* if it translates to nothing */
+    if (r.r[2] == 0)
+    {
+	mm_free(output);
+	return NULL;
+    }
+    
+    return mm_realloc(output, r.r[2]+1);
 }
 
 extern BOOL gstrans_not_null(const char *input)

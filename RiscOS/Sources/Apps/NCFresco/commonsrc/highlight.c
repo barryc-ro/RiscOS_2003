@@ -14,6 +14,8 @@
 #include "object.h"
 #include "stream.h"
 #include "util.h"
+#include "gbf.h"
+#include "config.h"
 
 #include "rcolours.h"
 #include "render.h"
@@ -24,8 +26,9 @@
  * discontiguous in which case it should separate boxes.
  */
 
-#define BORDER_WIDTH	12
-#define LINE_WIDTH	8
+#define render_colour_highlight_L	(0x33FF3300 | render_colour_RGB)
+#define render_colour_highlight_D	(0x00880000 | render_colour_RGB)
+#define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
 
 #if 0
 
@@ -156,6 +159,23 @@ void highlight_generate_lines(antweb_doc *doc, int ox, int oy, wimp_box *g, high
 
 #endif
 
+static int hl_colours[] =
+{
+    render_colour_highlight_L,
+    render_colour_highlight_D,
+    render_colour_highlight_D,
+    render_colour_highlight_L,
+    render_colour_highlight_M,
+    render_colour_highlight_M
+};
+
+static int get_colour(int i)
+{
+    return config_display_highlight_style == highlight_style_SIMPLE || i >= sizeof(hl_colours)/sizeof(hl_colours[0]) ?
+	render_colour_HIGHLIGHT :
+	hl_colours[i];
+}
+
 void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
 {
     LNKDBG(("highlight_render_outline: doc %p ti %p %d,%d sel %d\n", doc, ti, hpos, bline, ti->flag & rid_flag_SELECTED ? 1 : 0));
@@ -163,16 +183,23 @@ void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
     if (ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED))
     {
 	int x, y, w, h, i;
+	int last = -1;
+	int border_width = config_display_highlight_width*2 + 4;
 
-	render_set_colour(ti->flag & rid_flag_ACTIVATED ? render_colour_ACTIVATED : render_colour_HIGHLIGHT, doc);
-
-	x = hpos - BORDER_WIDTH;
-	y = bline - ti->max_down - BORDER_WIDTH;
-	w = ti->width + BORDER_WIDTH*2;
-	h = ti->max_up + ti->max_down + BORDER_WIDTH*2;
+	x = hpos - border_width;
+	y = bline - ti->max_down - border_width;
+	w = ti->width + border_width*2;
+	h = ti->max_up + ti->max_down + border_width*2;
 	
-	for (i = 0; i < LINE_WIDTH; i+=2)
-	    bbc_rectangle(x+i, y+i, w - i*2 -1, h - i*2 - 1);
+	for (i = 0; i < config_display_highlight_width; i++)
+	{
+	    int col = ti->flag & rid_flag_ACTIVATED ? render_colour_ACTIVATED : get_colour(i);
+
+	    if (col != last)
+		render_set_colour(last = col, doc);
+
+	    bbc_rectangle(x+i*2, y+i*2, w - i*2*2 -1, h - i*2*2 - 1);
+	}
     }
 }
 
@@ -199,7 +226,7 @@ void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw)
         return;
 
     LNKDBG(("highlight_update_border: draw %d box %d,%d %d,%d\n", draw, box->x0, box->y0, box->x1, box->y1));
-    if (draw)
+    if (draw && !gbf_active(GBF_ANTI_TWITTER))
     {
         frontend_view_update(doc->parent, box, render_border, doc, 0);
     }
@@ -207,29 +234,30 @@ void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw)
     {
 	wimp_box trim = *box;
     
-	trim.x1 = trim.x0 + LINE_WIDTH;
+	trim.x1 = trim.x0 + (config_display_highlight_width*2);
 	do_redraw;
 	trim.x1 = box->x1;
 
-	trim.y1 = trim.y0 + LINE_WIDTH;
+	trim.y1 = trim.y0 + (config_display_highlight_width*2);
 	do_redraw;
 	trim.y1 = box->y1;
 
-	trim.x0 = trim.x1 - LINE_WIDTH;
+	trim.x0 = trim.x1 - (config_display_highlight_width*2);
 	do_redraw;
 	trim.x0 = box->x0;
 
-	trim.y0 = trim.y1 - LINE_WIDTH;
+	trim.y0 = trim.y1 - (config_display_highlight_width*2);
 	do_redraw;
     }
 }
 
 void highlight_offset_border(wimp_box *box)
 {
-    box->x0 -= BORDER_WIDTH;
-    box->y0 -= BORDER_WIDTH;
-    box->x1 += BORDER_WIDTH + (frontend_dx-1);
-    box->y1 += BORDER_WIDTH + (frontend_dy-1);
+    int border_width = config_display_highlight_width*2 + 4;
+    box->x0 -= border_width;
+    box->y0 -= border_width;
+    box->x1 += border_width + (frontend_dx-1);
+    box->y1 += border_width + (frontend_dy-1);
 }
 
 void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
@@ -280,5 +308,118 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
 	break;
     }
 }
+
+static void draw_partial_box(BOOL first, BOOL last, int x, int y, int w, int h)
+{
+    int dx = frontend_dx, dy = frontend_dy;
+    int ww = last ? w : w - dx;
+
+    if (first)
+    {
+        bbc_move(x, y);
+        bbc_drawby(0, h-dy);
+    }
+    else
+        bbc_move(x, y + h - dy);
+
+    if (ww > 0)
+	bbc_drawby(ww, 0);
+
+    if (last)
+        bbc_drawby(0, - (h-dy));
+    else
+        bbc_moveby(0, - (h-dy));
+
+    if (ww > 0)
+	bbc_drawby(-ww, 0);
+}
+
+#if 0
+/* Draw a line using the draw module - gets round some printing problems - Oh no it doesn't !! */
+
+static void draw_line(int x, int baseline, int w)
+{
+    int buf[7], *bp = buf;
+    int cap[4];
+    int trans[6];
+    _kernel_oserror *e;
+
+    *bp++ = 2;			/* move */
+    *bp++ = x << 8;
+    *bp++ = baseline << 8;
+
+    *bp++ = 8;			/* line */
+    *bp++ = (x + w) << 8;
+    *bp++ = baseline << 8;
+
+    *bp++ = 0;			/* end */
+
+    cap[0] = 0;
+    cap[1] = 0;
+    cap[2] = 0;
+    cap[3] = 0;
+
+    trans[0] = 0x00010000;
+    trans[1] = 0;
+    trans[2] = 0;
+    trans[3] = 0x00010000;
+
+    trans[4] = 0;
+    trans[5] = 0;
+
+    e = _swix(Draw_Stroke, _INR(0,6), buf, 0x30, trans, 0, 4 << 8, cap, 0);
+    if (e) usrtrc("Draw_Stroke: %x %s\n", e->errnum, e->errmess);
+}
+#endif
+
+void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos, BOOL has_text)
+{
+    BOOL first = ti->aref->first == ti;
+    BOOL last = ti->next == NULL || ti->next->aref == NULL || ti->next->aref != ti->aref;
+    BOOL first_in_line = ti == ti->line->first;
+    BOOL last_in_line = ti->next == ti->line->next->first;
+    int width, height;
+
+    if (has_text || (first ^ last))
+    {
+	int i, n, ypos;
+	int last_col = -1;
+
+	first = first || first_in_line;
+	last = last || last_in_line || ti->next->tag != ti->tag; /* if type changes then count as end of line */
+
+	width = ti->width + (last ? 0 : ti->pad);
+	height = ti->max_up + ti->max_down - frontend_dy;
+
+	ypos =  b - ti->max_down;
+
+	/* for now limit the text border width to 4 pixels */
+	n = config_display_highlight_width;
+	if (n > 4)
+	    n = 4;
+
+	for (i = 0; i < n; i++)
+	{
+	    int col = get_colour(i);
+
+	    if (col != last_col)
+		render_set_colour(last_col = col, doc);
+
+	    draw_partial_box(first, last, hpos, ypos, width, height);
+	    if (first)
+	    {
+		hpos += 2;
+		width -= 2;
+	    }
+	
+	    if (last)
+		width -= 2;
+	
+	    height -= 4;
+	    ypos += 2;
+	}
+    }
+}
+
 
 /* eof highlight.c */

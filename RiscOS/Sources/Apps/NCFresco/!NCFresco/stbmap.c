@@ -181,7 +181,13 @@ void fe_map_event_handler(int event, fe_view v)
 
 void fe_map_check_pointer_move(const wimp_mousestr *m)
 {
-    m = m;
+    wimp_box box;
+
+    if (fe_item_screen_box(map_view, map_item, &box) && 
+        m->x >= box.x0 && m->x <= box.x1 && m->y >= box.y0 && m->y <= box.y1)
+    {
+	fe_check_autoscroll(map_view, m);
+    }
 }
 
 void fe_map_mode(fe_view v, be_item ti)

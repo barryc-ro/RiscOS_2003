@@ -70,6 +70,7 @@ struct config_str
     int display_margin_auto;
     int display_frames;
     int display_frames_scrollbars;
+    int display_frames_top_level;
     int display_smooth_scrolling;
 
     int display_time_activate;
@@ -80,6 +81,9 @@ struct config_str
     int display_leading_percent;
     int display_char_password;
     int display_encoding;
+
+    int display_highlight_style;
+    int display_highlight_width;
 
     int proxy_http_on;
     int proxy_https_on;
@@ -204,6 +208,7 @@ extern struct config_str config_array;
 #define config_display_frames (config_array.display_frames)
 #endif
 #define config_display_frames_scrollbars (config_array.display_frames_scrollbars)
+#define config_display_frames_top_level (config_array.display_frames_top_level)
 #define config_display_smooth_scrolling (config_array.display_smooth_scrolling)
 #define config_display_time_activate (config_array.display_time_activate)
 #define config_display_time_background (config_array.display_time_background)
@@ -214,6 +219,12 @@ extern struct config_str config_array;
 #define config_display_leading_percent (config_array.display_leading_percent)
 #define config_display_char_password (config_array.display_char_password)
 #define config_display_encoding (config_array.display_encoding)
+
+#define highlight_style_SIMPLE	0
+#define highlight_style_RCA	1
+
+#define config_display_highlight_style (config_array.display_highlight_style)
+#define config_display_highlight_width (config_array.display_highlight_width)
 
 #define config_proxy_http_on (config_array.proxy_http_on)
 #define config_proxy_https_on (config_array.proxy_https_on)

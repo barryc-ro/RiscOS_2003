@@ -207,71 +207,6 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 #endif /* BUILDERS */
 }
 
-#ifdef STBWEB
-static void draw_partial_box(BOOL first, BOOL last, int x, int y, int w, int h)
-{
-    int dx = frontend_dx, dy = frontend_dy;
-    int ww = last ? w : w - dx;
-
-    if (first)
-    {
-        bbc_move(x, y);
-        bbc_drawby(0, h-dy);
-    }
-    else
-        bbc_move(x, y + h - dy);
-
-    if (ww > 0)
-	bbc_drawby(ww, 0);
-
-    if (last)
-        bbc_drawby(0, - (h-dy));
-    else
-        bbc_moveby(0, - (h-dy));
-
-    if (ww > 0)
-	bbc_drawby(-ww, 0);
-}
-#endif
-
-#if 0
-/* Draw a line using the draw module - gets round some printing problems - Oh no it doesn't !! */
-
-static void draw_line(int x, int baseline, int w)
-{
-    int buf[7], *bp = buf;
-    int cap[4];
-    int trans[6];
-    _kernel_oserror *e;
-
-    *bp++ = 2;			/* move */
-    *bp++ = x << 8;
-    *bp++ = baseline << 8;
-
-    *bp++ = 8;			/* line */
-    *bp++ = (x + w) << 8;
-    *bp++ = baseline << 8;
-
-    *bp++ = 0;			/* end */
-
-    cap[0] = 0;
-    cap[1] = 0;
-    cap[2] = 0;
-    cap[3] = 0;
-
-    trans[0] = 0x00010000;
-    trans[1] = 0;
-    trans[2] = 0;
-    trans[3] = 0x00010000;
-
-    trans[4] = 0;
-    trans[5] = 0;
-
-    e = _swix(Draw_Stroke, _INR(0,6), buf, 0x30, trans, 0, 4 << 8, cap, 0);
-    if (e) usrtrc("Draw_Stroke: %x %s\n", e->errnum, e->errmess);
-}
-#endif
-
 void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {
 #ifndef BUILDERS
@@ -344,7 +279,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
-/*  RENDBG(("otext_redraw: fg %08x bg %08x text '%s' vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word)); */
+    RENDBG(("otext_redraw: fg %08x bg %08x text '%s' vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
 
 #if 0
     dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
@@ -359,43 +294,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #ifdef STBWEB
     if (draw_highlight_box)
     {
-	BOOL first = ti->aref->first == ti;
-	BOOL last = ti->next == NULL || ti->next->aref == NULL || ti->next->aref != ti->aref;
-	BOOL first_in_line = ti == ti->line->first;
-	BOOL last_in_line = ti->next == ti->line->next->first;
-	int width, height;
-
-	if (!no_text || (first ^ last))
-	{
-	    int i, ypos;
-
-	    first = first || first_in_line;
-	    last = last || last_in_line || ti->next->tag != ti->tag; /* if type changes then coutn as end of line */
-
-	    width = ti->width + (last ? 0 : ti->pad);
-	    height = ti->max_up + ti->max_down - frontend_dy;
-
-	    ypos =  b - ti->max_down;
-	    
-	    render_set_colour(render_link_colour(ti, doc), doc);
-
-	    for (i = 0; i < 4; i++)
-	    {
-		draw_partial_box(first, last, hpos, ypos, width, height);
-
-		if (first)
-		{
-		    hpos += 2;
-		    width -= 2;
-		}
-		
-		if (last)
-		    width -= 2;
-
-		height -= 4;
-		ypos += 2;
-	    }
-	}
+	highlight_draw_text_box(ti, doc, b, hpos, !no_text);
     }
     else
 #endif /* STBWEB */

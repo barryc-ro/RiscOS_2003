@@ -24,6 +24,7 @@
 #include "stbopen.h"
 #include "stbutils.h"
 #include "stbfe.h"
+#include "stbtb.h"
 #include "frameutils.h"
 
 /* ------------------------------------------------------------------------------------------- */
@@ -224,7 +225,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     char *referer = NULL, *title = NULL;
     int oflags;
 
-    STBDBG(("frontend_open_url '%s' in window '%s' parent v%p '%s'\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : ""));
+    STBDBG(("frontend_open_url '%s' in window '%s' parent v%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
 
     if (target && parent)
     {
@@ -336,16 +337,30 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
 	    frontend_view_status(parent, sb_status_URL, url);
 
-	    return frag ? backend_goto_fragment(parent->displaying, frag+1) : NULL;
+	    if ((ep = backend_goto_fragment(parent->displaying, frag+1)) != NULL)
+		return ep;
+
+	    /* need to ensure highlight is visible after jumping to fragment */
+	    fe_ensure_highlight_after_fetch(parent);
+	    
+	    return NULL;
         }
     }
 
+    /* close the keyboard when opening any URL */
+    fe_keyboard_close();
+    
     session_log(url, session_REQUESTED);
 
     /* open the fetch status*/
     if (keyboard_state == fe_keyboard_ONLINE)
 	fe_status_open_fetch_only(parent);
 
+    /* move the highlight */
+    if ((flags & fe_open_url_FROM_FRAME) == 0 && !parent->open_transient && pointer_mode == pointermode_OFF && tb_is_status_showing())
+	tb_status_highlight_stop();
+
+    /* setup the opening flags */
     if (flags & fe_open_url_NO_CACHE)
         oflags = parent->flags | be_openurl_flag_NOCACHE;
     else
@@ -427,7 +442,7 @@ os_error *fe_show_file(fe_view v, char *file, int no_history)
     if (ep)
         return ep;
 
-    ep = frontend_open_url(url, v, TARGET_TOP, NULL, fe_open_url_NO_CACHE | (no_history ? fe_open_url_NO_HISTORY : 0));
+    ep = frontend_open_url(url, v, TARGET_TOP, NULL, fe_open_url_NO_CACHE | (no_history ? fe_open_url_NO_HISTORY : 0) | fe_open_url_NO_REFERER);
 
     mm_free(url);
 
@@ -443,7 +458,7 @@ os_error *fe_show_file_in_frame(fe_view v, char *file, char *frame)
     if (ep)
         return ep;
 
-    ep = frontend_open_url(url, v, frame, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_HISTORY);
+    ep = frontend_open_url(url, v, frame, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_HISTORY | fe_open_url_NO_REFERER);
 
     mm_free(url);
 
@@ -542,9 +557,13 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
 	view->backend_margin.x0 =  20;
 	view->backend_margin.x1 = -20;
-	view->backend_margin.y0 =  16;
-	view->backend_margin.y1 = -16;
+	view->backend_margin.y0 =  10;
+	view->backend_margin.y1 = -10;
 
+#if 0
+	/* took this out as although it gives some more area usually
+	 * it also makes some pages unviewable especially frames pages
+	 */
  	if (view->margin.x0)	/* was is_a_tv() - really 'do we have a safe area?' */
 	{
  	    view->margin.x0 -= view->backend_margin.x0;
@@ -552,6 +571,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 	    view->margin.y0 -= view->backend_margin.y0;
 	    view->margin.y1 -= view->backend_margin.y1;
 	}
+#endif
     }
     else
     {

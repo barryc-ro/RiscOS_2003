@@ -210,8 +210,9 @@ extern fe_view frameutils_find_top(fe_view v);
 	    
 /* ----------------------------------------------------------------------------- */
 
-/* extra scrolling code in assition to those in interface.h */
-#define fe_scrolling_NONE	0xff /* no scroll bars and cannot scroll page */
+/* extra scrolling code in addition to those in interface.h
+ */
+#define fe_scrolling_INVISIBLE	(0xff) /* no scroll bars but can scroll page */
 
 /* ----------------------------------------------------------------------------- */
 

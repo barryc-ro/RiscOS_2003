@@ -25,12 +25,12 @@
 #include "unwind.h"
 #include "util.h"
 #include "verstring.h"
+#include "gbf.h"
 
 #include "interface.h"
 #include "stbutils.h"
 #include "stbfe.h"
 
-BOOL use_anti_twitter = FALSE;
 static BOOL done_init = FALSE;
 
 int frontend_dx, frontend_dy;
@@ -273,7 +273,7 @@ os_error *fe_plot_sprite(char *name, int x, int y, wimp_box *bb)
 
 void fe_anti_twitter(const wimp_box *bb)
 {
-    if (use_anti_twitter)
+    if (gbf_active(GBF_ANTI_TWITTER))
     {
         os_regset r;
         os_error *e;
@@ -287,14 +287,14 @@ void fe_anti_twitter(const wimp_box *bb)
         {
             e = os_swix(0x838C0, &r);
             if (e && e->errnum == 486 /* no such swi */)
-                use_anti_twitter = FALSE;
+                gbf_flags &= ~GBF_ANTI_TWITTER;
         }
     }
 }
 
 void toggle_anti_twitter(void)
 {
-    use_anti_twitter = !use_anti_twitter;
+    gbf_flags ^= GBF_ANTI_TWITTER;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -826,7 +826,8 @@ void feutils_init_2(void)
     error_box.y0 = screen_box.y0 + margin_box.y0;
     error_box.y1 = screen_box.y1 + margin_box.y1;
 
-    use_anti_twitter = is_a_tv();
+    if (is_a_tv())
+	gbf_flags |= GBF_ANTI_TWITTER;
     
     get_tool_sprite_sizes(&toolsprite_width, &toolsprite_height);
 

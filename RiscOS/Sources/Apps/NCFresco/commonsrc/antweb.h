@@ -210,6 +210,7 @@ extern void highlight_render_outline(rid_text_item *ti, antweb_doc *doc, int hpo
 extern void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw);
 extern void highlight_offset_border(wimp_box *box);
 extern void highlight_render(wimp_redrawstr *rr, antweb_doc *doc);
+extern void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos, BOOL has_text);
 
 #endif
 
