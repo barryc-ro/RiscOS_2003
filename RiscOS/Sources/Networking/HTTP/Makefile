@@ -26,13 +26,10 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -zps1 -ff -wp ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4 -DUSING_INET5 -DADD_CRLF=0
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -zps1 -ff -wp ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
-
-SECUREFLAGS= -DVERIFY_MD
-INSECUREFLAGS= -DNO_SECURE
 
 #
 # Libraries
@@ -56,7 +53,7 @@ SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
 # Include files
 #
 INCLUDES  = -IC:,TCPIPLibs:,$(SSLDIR),<Lib$Dir>.
-DFLAGS = -DCSFS ${DB}
+DFLAGS = -DCSFS ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DADD_CRLF=0 -DVERIFY_MD
 #
 # Program specific options:
 #
@@ -71,22 +68,21 @@ EXPORTS   = h.httppub h.pads
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $< ${INSECUREFLAGS}
-.c.os:;     ${CC} ${CFLAGS} -o $@ $< ${SECUREFLAGS}
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< ${INSECUREFLAGS}
-.cmhg.os:;  ${CMHG} ${CMHGFLAGS} -o $@ $< ${SECUREFLAGS}
+.c.o:;      ${CC} ${CFLAGS} -o $@ $< -DNO_SECURE
+.c.os:;     ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< -DNO_SECURE
+.cmhg.os:;  ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
 all: rm.${COMPONENT}mod rm.${COMPONENT}smod
-#all: rm.${COMPONENT}mod
 
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom:	rom_${TYPE}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -120,8 +116,12 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS} ${REMOTEDB}
-        ${LD} -o $@ -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS} ${REMOTEDB}
+
+rom_secure: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
+        ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
+
+rom_ rom_insecure: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
+        ${LD} -o ${TARGET} -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
 
 #
 # Final link for the ROM Image (using given base address)
