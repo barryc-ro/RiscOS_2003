@@ -53,7 +53,7 @@ LD		= link
 RM		= remove
 SQUEEZE		= squeeze
 WIPE		= -wipe
-AWK		= awk
+AWK		= do awk
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
 AFLAGSRAMZ	= ${AFLAGS} -PD "REMOVE_RAMLOAD_CHECK SETL {TRUE}" -PD "UsePathForHelpMessages SETL {TRUE}"
