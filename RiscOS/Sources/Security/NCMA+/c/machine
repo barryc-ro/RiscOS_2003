@@ -79,9 +79,8 @@ char *trans_string(NCMA_TRANS trans)
      "Trans_BootedFull",
      "Trans_BootedFast",
      "Trans_BootedUpdate",
-     "Trans_URLTransfer"
-
-
+     "Trans_URLTransfer",
+     "Trans_Cron"
   };
 
 
@@ -115,7 +114,8 @@ char *state_string(NCMA_STATE state)
     "State_NCMADiallingRelServer",
     "State_NCMAMoved",
     "State_NCMADiallingRegServer",
-    "State_NCMABadUnblockPIN"
+    "State_NCMABadUnblockPIN",
+    "State_Cron"
   };
 
   return(s_table[state]);
@@ -159,11 +159,23 @@ NCMA_STATE machine(NCMA_TRANS trans)
 #ifdef POINTLESS_BUTTONS
          if(ncma_state == State_NCMABadCard) return(State_NCMABadCard); /* oh, how hatefully poor */
 #endif
+#if 0
     	 if(ncma_started) {
     	     ncma_dbox_open(URL_PATH(splash.html));
     	     return(State_NCMANoCard);
     	 } else return(State_NCMAInit);
     	 break;
+#endif
+	if(ncma_started) {
+            if(ui_present()) {
+                ncma_url_gsopen(TOPLEVEL_UI_URL);
+                return(State_NCMAInit);
+            } else {
+                ncma_dbox_open(URL_PATH(splash.html));
+                return(State_NCMANoCard);
+            }
+        } else return(State_NCMAInit); /* sc layer kicks off with a card removed event */
+        break;
 
     default:
          break;
@@ -183,6 +195,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
            case Trans_HUP: /* HUP ack, we're displaying an error screen and waiting for retry */
                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got HUP, ignoring\n");
                 return(State_NCMAInit);
+
+           case Trans_CardOK: /* ignore it */
+           	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: ignoring card OK event\n");
+           	return(State_NCMAInit);
 
 	   case Trans_PowerUp:  /* and so, I awake... */
 
@@ -509,6 +525,9 @@ NCMA_STATE machine(NCMA_TRANS trans)
                       strncpy(old_chv_pin, chv_pin, chv_pin_size);
                       old_chv_pin_size = chv_pin_size;
 #ifdef CHIMPANZEE_INTERFACE
+       		      ncma_trans = Trans_Registry; /* cue on up */
+       		      setcallback();
+
        		      return(State_NCMAApresPIN);
 #else
 		      goto proceed_after_pin;
@@ -749,14 +768,11 @@ NCMA_STATE machine(NCMA_TRANS trans)
       	     	          ncma_url_user();
       	     	      }
       	     	  }
-
-
-
-
     	     	  return(State_NCMABooted);
 
     	     case Trans_MIMEBad:
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: bad MIME reload - ignoring\n");
+    	     	  ncma_dbox_open(URL_PATH(scprobs.html));
     	     	  return(State_NCMABooted);
 
     	     case Trans_NCMASurf:
@@ -764,6 +780,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     	  return(State_NCMABooted);
 
 	     case Trans_PPPTimeout:
+	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PPP timeout event received\n");
 	     	  ignore_ppp_timeout = 1;
 	     	  set_ppp_timeout();
 	     	  ncma_sound_effect(NCMA_TIMEOUT_SOUND);
@@ -782,6 +799,16 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 	     case Trans_HUP:
 	     	  return(State_NCMABooted);
+
+	     case Trans_Cron:
+	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got CRON event\n");
+	     	  if(cron_upcall(cron_value)<0)
+	     	    return(State_NCMABooted); /* failed */
+	     	  else {
+	     	      pre_cron_state = State_NCMABooted;
+	     	      return(State_NCMACron);
+	     	  }
+
 
 	     case Trans_BootedFull:
 	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: MIME reload Full Boot completed\n");
@@ -1111,8 +1138,14 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     	    return(State_NCMAInit);
     	     	    break;
     	     	  }
-    	     	  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: Bad MIME object from relationship server - waiting for HUP\n");
-    	     	  return(State_NCMADiallingRelServer);
+
+		  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Bad MIME - showing scprobs.html\n");
+		  ncma_dbox_open(URL_PATH(SCprobs.html));
+		  return(State_NCMAInit);
+		  break;
+
+		  /* this should never happen now */
+  	     	  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: Bad MIME object from relationship server - waiting for HUP\n");    	   	    	     	  return(State_NCMADiallingRelServer);
 
     	     case Trans_MIMEOk: /* wahey! It worked! */
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: MIME object thoroughly grokked - doing netstuff\n");
@@ -1131,6 +1164,44 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     	  break;
 
    	 }
+
+/*********************************************************************************
+
+    STATE_NCMACRON
+
+ *********************************************************************************/
+    case State_NCMACron:
+
+    	 switch(trans) {
+    	     case Trans_DialBad:
+    	     	  DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: CRON dial failed\n");
+    	     case Trans_HUP:
+    	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: CRON rescheduling\n");
+    	     	  ncma_cron_kick(cron_value);
+    	     	  return(pre_cron_state);
+    	     	  break;
+
+    	     case Trans_DialOK:
+    	     	  if(ro_smurf_mounted == 0) {
+        	    if(ncma_mount_ro_smurfs()<0) {
+            	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: CRON: couldn't mount read-only SMURF\n");
+            	        ncma_hangup();
+            	        return(State_NCMACron); /* hangup, reschedule on HUP notification */
+        	    }
+    		  }
+
+    		  /* mount succeeded */
+    		  cron_value = -1; /* reschedule for tomorrow on hangup */
+    		  ncma_exec_schedboot();
+    		  return(State_NCMACron);
+    		  break;
+
+             case Trans_BootedUpdate: /* scheduled update completion */
+             	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: CRON update completed\n");
+             	  ncma_hangup();
+             	  return(State_NCMACron);
+             	  break;
+         }
 
 
 /*********************************************************************************
