@@ -8,10 +8,11 @@ CC=gcc
 DERIVED= datenow.h
 OBJALL=bytesex.o chunkfls.o disass.o err.o fname.o prgname.o re.o ieeeflt.o \
 dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o dem.o symdefs.o \
-pathmacro.o
+pathmacro.o mapping.o disass16.o
 HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
 ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
-chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h symdefs.h pathmacro.h
+chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h symdefs.h pathmacro.h \
+mapping.h elf.h
 
 CFLhost= -I${RISCOS_CLIB_HDRS}
 CFLpathmacro= -Dkernelheader=\"${RISCOS_CLIB_HDRS}/kernel.h\"
@@ -26,6 +27,7 @@ bytesex.o:	bytesex.h
 	$(CC) $(CFLAGS) $(CFLbytesex) bytesex.c -o bytesex.o
 disass.o:	disass.c
 disass.o:	disass.h
+disass.o:	disass_int.h
 	$(CC) $(CFLAGS) $(CFLdisass) disass.c -o disass.o
 filestamp.o:	filestamp.c
 filestamp.o:	filestamp.h
@@ -80,6 +82,9 @@ dtos.o:	ieeeflt.h
 wholefls.o:	wholefls.c
 wholefls.o:	wholefls.h
 	$(CC) $(CFLAGS) $(CFLwholefls) wholefls.c -o wholefls.o
+mapping.o:	mapping.c
+mapping.o:	mapping.h
+	$(CC) $(CFLAGS) $(CFLmapping) mapping.c -o mapping.o
 
 # Dependencies to /nfs/sun1/bb/xdevt/release/bin/topcc -l from local to build directories
 

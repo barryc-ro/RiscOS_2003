@@ -61,22 +61,25 @@ TARGETD    = ${COMPONENTD}
 SOURCE     = 
 EXPORTS    = 
 
-OBJS=	o.bytesex o.chunkfls o.disass o.dtos o.err o.fname \
+OBJS=	o.bytesex o.chunkfls o.disass o.disass16 o.dtos o.err o.fname \
 	o.host o.hash o.ieeeflt o.prgname o.re o.wholefls \
-	o.filestamp o.dir o.wildcard o.dem o.symdefs o.pathmacro
+	o.filestamp o.dir o.wildcard o.dem o.symdefs o.pathmacro \
+	o.mapping
 
-OBJSD=	od.bytesex od.chunkfls od.disass od.dtos od.err od.fname \
+OBJSD=	od.bytesex od.chunkfls od.disass od.disass16 od.dtos od.err od.fname \
 	od.host od.hash od.ieeeflt od.prgname od.re od.wholefls \
-	od.filestamp od.dir od.wildcard od.dem od.symdefs od.pathmacro
+	od.filestamp od.dir od.wildcard od.dem od.symdefs od.pathmacro \
+	od.mapping
 
-OBJSZ=	oz.bytesex oz.chunkfls oz.disass oz.dtos oz.err oz.fname \
+OBJSZ=	oz.bytesex oz.chunkfls oz.disass oz.disass16 oz.dtos oz.err oz.fname \
 	oz.host oz.hash oz.ieeeflt oz.prgname oz.re oz.wholefls \
-	oz.filestamp oz.dir oz.wildcard oz.dem oz.symdefs oz.pathmacro
+	oz.filestamp oz.dir oz.wildcard oz.dem oz.symdefs oz.pathmacro \
+	oz.mapping
 
 HDRS=	h.aif h.aof h.aout h.asdfmt h.asdllfmt h.bytesex h.chunkfls h.chunkfmt \
 	h.disass h.err h.fname h.hash h.host h.ieeeflt h.libflfmt h.ovrflfmt \
 	h.prgname h.re h.wholefls h.filestamp h.dir h.wildcard h.dem h.symdefs \
-	h.pathmacro
+	h.pathmacro h.mapping
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
 
@@ -86,7 +89,7 @@ LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
 .SUFFIXES: .oz .od
 .c.o:;     ${CC} ${CCFLAGS} -DROM=0 -ff     -o $@ $<
 .c.oz:;    ${CC} ${CCFLAGS} -DROM=1 -ff -zM -o $@ $<
-.c.od:;    ${CC} ${CCFLAGS} -DROM=0         -o $@ $<
+.c.od:;    ${CC} ${CCFLAGS} -DROM=0 -g      -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 .cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
 .cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
@@ -127,6 +130,7 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.chunkfmt ${CLXLIBDIR}.h.chunkfmt ${CPFLAGS}
 	${CP} h.dem ${CLXLIBDIR}.h.dem ${CPFLAGS}
 	${CP} h.disass ${CLXLIBDIR}.h.disass ${CPFLAGS}
+	${CP} h.elf ${CLXLIBDIR}.h.elf ${CPFLAGS}
 	${CP} h.err ${CLXLIBDIR}.h.err ${CPFLAGS}
 	${CP} h.filestamp ${CLXLIBDIR}.h.filestamp ${CPFLAGS}
 	${CP} h.dir ${CLXLIBDIR}.h.dir ${CPFLAGS}
@@ -135,6 +139,7 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.host ${CLXLIBDIR}.h.host ${CPFLAGS}
 	${CP} h.ieeeflt ${CLXLIBDIR}.h.ieeeflt ${CPFLAGS}
 	${CP} h.libflfmt ${CLXLIBDIR}.h.libflfmt ${CPFLAGS}
+	${CP} h.mapping ${CLXLIBDIR}.h.mapping ${CPFLAGS}
 	${CP} h.ovrflfmt ${CLXLIBDIR}.h.ovrflfmt ${CPFLAGS}
 	${CP} h.pathmacro ${CLXLIBDIR}.h.pathmacro ${CPFLAGS}
 	${CP} h.prgname ${CLXLIBDIR}.h.prgname ${CPFLAGS}
