@@ -180,7 +180,7 @@ clean:	pppd
 
 pppd:
         Dir pppd
-        amu ${MFLAGS}
+        amu ${MFLAGS} ${MAKECMDGOALS}
         Up
 
 local_dirs:
