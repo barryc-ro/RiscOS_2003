@@ -92,6 +92,7 @@ resources_NCFresco_base:
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscats  -o ${RESRES}.html.favscats  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
@@ -138,6 +139,7 @@ install_NCFresco:
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscats  -o ${INSTALLDIR}.html.favscats  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLDIR}.html.histr     ${TRFLAGS}
