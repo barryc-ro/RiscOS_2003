@@ -17,7 +17,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -65,13 +65,16 @@ install_rom: ${ROMTARGET}
 all: ${DISCTARGETS}
 	@echo ${COMPONENT}: disc modules built
 
-install: ${DISCTARGETS}
+install: ${DISCTARGETS} install_dirs
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         ${CP} rm.MacroA ${INSTDIR}.MacroA ${CPFLAGS}
         ${CP} rm.MacroB ${INSTDIR}.MacroB ${CPFLAGS}
         ${CP} rm.MacroC ${INSTDIR}.MacroC ${CPFLAGS}
         ${CP} rm.MacroD ${INSTDIR}.MacroD ${CPFLAGS}
 	@echo ${COMPONENT}: disc modules installed
+
+install_dirs:
+        ${MKDIR} ${INSTDIR}
 
 #
 # ROM variants
