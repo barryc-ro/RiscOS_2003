@@ -53,8 +53,6 @@ Date      Who     Description of change
 03-Mar-2000 SAR    Withdrew the above change to make reboot off the default state.
                    Also changed the *STBStateOn command to do nothing (rather than
                    change screen mode).
-08-Jun-2001 SAR    Changed ticker event so that it really does happen every 50 cs
-                   (rather than every 51)!
 
 ***************************************************************************/
 
@@ -73,6 +71,8 @@ Date      Who     Description of change
 #include "Global/Upcall.h"
 #include "Global/Services.h"
 #include "Global/PaletteV.h"
+#include "Global/Keyboard.h"
+#include "Global/RISCOS.h"
 
 #include "NVRAM.h"
 #include "PortMan.h"
@@ -87,8 +87,6 @@ Date      Who     Description of change
 #define FLASH_INTERVAL	50	/* Flash the leds every 50 centiseconds */
 #define TIMEOUT		30	/* Init state times out to fatal after 30s */
 #undef TIMEOUT
-
-#define PaletteV  0x23 /* for OS_CallAVector */
 
 /*
  * Other people's things
@@ -117,6 +115,7 @@ Date      Who     Description of change
  */
 #define KeyBdDisable 0xC9
 
+#define STANDBY_KEYCODE 0xd1
 
 /*
  * Bits in IRQA mask
@@ -198,6 +197,7 @@ static void go_busy(int r0);
 static void go_off(void);
 static void go_fatal(void);
 static bool match_strings (const char *s1, const char *s2);
+static void toggleStandby( void );
 
 /******* match_strings *****************************************************
 
@@ -346,7 +346,14 @@ _kernel_oserror *STBState_init (const char *cmd_tail, int podule_base, void *pw)
   regs.r[4] = 4;				/* LiteralString */
   _kernel_swi (OS_SetVarVal, &regs, &regs);
 
-  return NULL;
+
+  /* Claim KeyV so that we see standby key presses */
+  regs.r[0] = KEYV;
+  regs.r[1] = (int) STBState_keypress_entry;
+  regs.r[2] = (int) pw;
+  e = _kernel_swi (OS_Claim, &regs, &regs);
+
+  return (e);
 }
 
 
@@ -355,12 +362,21 @@ _kernel_oserror *STBState_init (const char *cmd_tail, int podule_base, void *pw)
  */
 _kernel_oserror *STBState_final(int fatal, int podule, void *pw)
 {
+  _kernel_oserror *err, *e;
   /*
    * Get off callevery
    */
   regs.r[0] = (int) STBState_callevery_entry;
   regs.r[1] = (int) pw;
-  return _kernel_swi (OS_RemoveTickerEvent, &regs, &regs);
+  err = _kernel_swi (OS_RemoveTickerEvent, &regs, &regs);
+
+  /* Release KeyV, even if previous call failed */
+  regs.r[0] = KEYV;
+  regs.r[1] = (int) STBState_keypress_entry;
+  regs.r[2] = (int) pw;
+  e = _kernel_swi (OS_Release, &regs, &regs);
+
+  return err ? err : e; /* Return first error that occured as we can't return more than one */
 }
 
 /*----------------------------------------------------------------------
@@ -518,9 +534,52 @@ _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
 
   case STBState_Busy:
     go_busy(r->r[0]);
-  break;
+    break;
 
   case STBState_Standby: /* toggles on/off state */
+    toggleStandby();
+    break;
+
+  case STBState_State:
+    r->r[0] = state;
+    break;
+
+  case STBState_Control:
+    set_io_port((r->r[0] & 1) ? LED_ON : LED_OFF,
+                (r->r[0] & 2) ? LED_ON : LED_OFF, DOG_OFF);
+    break;
+
+  default: /* This happens if someone calls a SWI that we don't implement */
+    return error_BAD_SWI;
+    break;
+  }
+  return NULL;
+}
+
+extern _kernel_oserror *STBState_keypress_handler(_kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *e = NULL;
+
+  if(    (r->r[0] == KeyV_KeyDown   )
+      && (r->r[1] == STANDBY_KEYCODE )
+    )
+  {
+    regs.r[0] = (int) STBState_callback_entry;
+    regs.r[1] = (int) pw;
+    e = _kernel_swi( OS_AddCallBack, &regs, &regs );
+  }
+
+  return NULL;
+}
+
+extern _kernel_oserror *STBState_callback_handler(_kernel_swi_regs *r, void *pw)
+{
+  toggleStandby();
+  return NULL;
+}
+
+static void toggleStandby( void )
+{
 //  6/8/97:CP
 //    Whole chunk of module code disabled because it doesn't work properly.
 //    Replaced with code which simply turns screen off, nothing else.
@@ -549,7 +608,6 @@ _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
 // end QDF
 
 // new functionality :
-
     if ( (state == ON) || (state == INIT) || (state == FATAL) )
     {
       go_off();
@@ -559,26 +617,7 @@ _kernel_oserror *STBState_swi (int swi_no, _kernel_swi_regs *r, void *pw)
     {
       go_on();
     }
-
-
-    break;
-
-  case STBState_State:
-    r->r[0] = state;
-    break;
-
-  case STBState_Control:
-    set_io_port((r->r[0] & 1) ? LED_ON : LED_OFF,
-                (r->r[0] & 2) ? LED_ON : LED_OFF, DOG_OFF);
-    break;
-
-  default: /* This happens if someone calls a SWI that we don't implement */
-    return error_BAD_SWI;
-    break;
-  }
-  return NULL;
 }
-
 
 /*
  * Turn the TV display on, either by resetting the MPEGVideo module or by just
