@@ -21,8 +21,12 @@ CD	= dir
 # MULTITABLESIZE : a single box isn't likely to be interested in receiving more than this number of multicast
 # channels simultaneously.  Setting this too high will incur unecessary overhead.  n/a if HASHED_MULTICAST.
 
+# FILTER_IP_ADDR : enable driver filtering on IP address.  This is a performance enhancement that caters for
+# the imperfect mapping between IP addresses and Ethernet addresses.  To use this option, make sure that
+# MULTITABLESIZE is set as described above. 
+
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} -DMULTITABLESIZE=8 \
+CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} -DMULTITABLESIZE=8 -DFILTER_IP_ADDR \
 	${DEBUG} -depend !Depend ${THROWBACK} -DCOMPAT_INET4# -DSUPPORT_TRADITIONAL_MBUFS
 
 

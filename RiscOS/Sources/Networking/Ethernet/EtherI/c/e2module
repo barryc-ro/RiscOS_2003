@@ -69,6 +69,9 @@
 #define IS_MULTICAST(x)	((*(u_char *)(x) & 0x01) && \
 			 (*(u_char *)(x)) != 0xff)
 
+#define IS_MULTICAST_IP(x) ((*(u_char *)(x) >= 224) && \
+                            (*(u_char *)(x)) <= 239)
+
 struct swient
 {
     static int (*swi_call)();			/* swi handler */
@@ -252,14 +255,19 @@ static int af_multicast(FilterSingleRef fs, u_char *pack_hdr, struct en_softc *e
 	/* fall through case */
 
       case ADDRLVL_MULTICAST:
-#ifndef HASHED_MULTICAST
-	if (fs->fs_multiall)
-	    /* want it */
-	    return(0);
+#ifndef HASHED_MULTICAST       /* Could add && !defined(FILTER_IP_ADDR) here; on the one  */
+	if (fs->fs_multiall)   /* hand there's little point checking for clashes in the   */
+	    /* want it */      /* hash table if we're going to filter on the IP address   */
+	    return(0);         /* soon afterwards, but on the other hand the existing     */
+                               /* code means we get rid of unwanted packets sooner        */
+                               /* rather than later when clashes occur.  This way is also */
+                               /* safer, since it may be that sometimes the protocol      */
+                               /* module only provides the Ethernet address with no IP    */
+                               /* address to match.                                       */
 
         for (i = 0; i < fs->fs_multitablesize; i++)
         {
-             if ((memcmp(&fs->fs_multitable[i], (void *)pack_hdr, 6)) == 0)
+             if ((memcmp(&fs->fs_multitable[i].mac_address, (void *)pack_hdr, 6)) == 0)
                  /* keep it */
                  return(0);
         }
@@ -998,6 +1006,9 @@ static int en_multicast(_kernel_swi_regs *r)
     FilterSingleRef filter=0;
     FilterChainRef chain;
     unsigned char zeroaddr[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+#ifdef FILTER_IP_ADDR
+    unsigned char zeroaddr_ip[] = { 0x00, 0x00, 0x00, 0x00 };
+#endif
     unsigned int set;
     unsigned int c;
 
@@ -1080,21 +1091,51 @@ static int en_multicast(_kernel_swi_regs *r)
 	            en->en_multicount[hash]++;
 #else
 
+#ifdef FILTER_IP_ADDR
+
+            if (IS_MULTICAST_IP(r->r[4]))
+            {
+                int found = 0;
+                for (c = 0; c < filter->fs_multitablesize; c++)
+                {
+                     if (!memcmp(&filter->fs_multitable[c].ip_address, (void *)r->r[4], 4))
+                     {
+                         found = 1;
+                         break;
+                     }
+                }
+
+                if (!found)
+                {
+                    /* Find a hole and stick it in */
+                    for (c = 0; c < filter->fs_multitablesize; c++)
+                    {
+                         if (!memcmp(&filter->fs_multitable[c].ip_address,zeroaddr_ip,4 ))
+                         {
+                             memset(&filter->fs_multitable[c].ip_address,0,4);
+                             memcpy(&filter->fs_multitable[c].ip_address,(void *)r->r[4],4);
+                             break;
+                         }
+                    }
+                }
+            }
+#endif
+
             /* Doesn't matter if we are in multiall, still set this entry for future reference */
             for ( set=0, c=0; c<filter->fs_multitablesize; c++ )
             {
                 /* Already done ? */
-                if ( !memcmp ( &filter->fs_multitable[c], (void *) r->r[3], 6 ) )
+                if ( !memcmp ( &filter->fs_multitable[c].mac_address, (void *) r->r[3], 6 ) )
                     return 0;
             }
 
 	    /* Find a hole and stick it in */
             for ( set=0, c=0; c<filter->fs_multitablesize; c++ )
             {
-                if ( !memcmp ( &filter->fs_multitable[c], zeroaddr, 6 ) )
+                if ( !memcmp ( &filter->fs_multitable[c].mac_address, zeroaddr, 6 ) )
                 {
-                    memset ( &filter->fs_multitable[c], 0, 8 );
-                    memcpy ( &filter->fs_multitable[c], (void *) r->r[3], 6 );
+                    memset ( &filter->fs_multitable[c].mac_address, 0, 8 );
+                    memcpy ( &filter->fs_multitable[c].mac_address, (void *) r->r[3], 6 );
                     set=1;
                     break;
                 }
@@ -1123,11 +1164,21 @@ static int en_multicast(_kernel_swi_regs *r)
 	        if (--filter->fs_multicount[hash] == 0)
 	            en->en_multicount[hash]--;
 #else
+
+#ifdef FILTER_IP_ADDR
+
+            for (c = 0; c < filter->fs_multitablesize; c++)
+            {
+                 if (!memcmp(&filter->fs_multitable[c].ip_address, (void *)r->r[4], 4))
+                     memset(&filter->fs_multitable[c].ip_address, 0, 4);
+            }
+#endif
+
             /* Doesn't matter if we are in multiall, still remove this entry for future reference */
             for ( c=0; c<filter->fs_multitablesize; c++ )
             {
-                if ( !memcmp ( &filter->fs_multitable[c], (void *) r->r[3], 6 ) )
-                    memset ( &filter->fs_multitable[c], 0, 8 );
+                if ( !memcmp ( &filter->fs_multitable[c].mac_address, (void *) r->r[3], 6 ) )
+                    memset ( &filter->fs_multitable[c].mac_address, 0, 8 );
             }
 #endif
             break;
@@ -1156,7 +1207,13 @@ static int en_multicast(_kernel_swi_regs *r)
 #else
             filter->fs_multiall = 0;
             for ( c=0; c<filter->fs_multitablesize; c++ )
-                memset ( &filter->fs_multitable[c], 0, 8 );
+                memset ( &filter->fs_multitable[c].mac_address, 0, 8 );
+
+#ifdef FILTER_IP_ADDR
+            for ( c=0; c<filter->fs_multitablesize; c++)
+                memset ( &filter->fs_multitable[c].ip_address,0,4);
+#endif
+
 #endif
             break;
     }

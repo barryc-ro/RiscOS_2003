@@ -86,6 +86,10 @@
 #undef TXBUF_PROFILE
 #undef ONBOARD_ETHERNET
 
+#ifdef FILTER_IP_ADDR
+#define IP_HDR_LEN 20 /* # bytes of fixed IP header (excluding options) */
+#endif
+
 #ifdef TXBUF_PROFILE
 static int max_txbuf = 100;
 #endif
@@ -125,6 +129,9 @@ unsigned int parallel = 0;
 
 #define PSET(bit) parallel|=(1<<(bit));parallel_write(parallel);
 #define PCLR(bit) parallel&=~(1<<(bit));parallel_write(parallel);
+
+#define IS_MULTICAST_IP(x) ((*(u_char *)(x) >= 224) && \
+                            (*(u_char *)(x)) <= 239)
 
 /*
  * MXPATCH
@@ -319,6 +326,9 @@ void en_read(struct en_softc *en, NICRef nic)
     register volatile u_int *port = en->dma_port;
     register struct mbuf *m, *m0 = NULL;
     struct mbuf *pd;
+#ifdef FILTER_IP_ADDR
+    int ip_hdr_captured = 0;
+#endif
 
     /*
      * XXX
@@ -573,6 +583,45 @@ void en_read(struct en_softc *en, NICRef nic)
         nic->rbcr1 = datalen >> 8;
         nic->command = START_DMA(DMA_READ);
 
+#ifdef FILTER_IP_ADDR
+        if ((type == 0x0800) && fs)
+        {
+            if ((fs->fs_addrlevel == ADDRLVL_MULTICAST) && (!fs->fs_multiall))
+            {
+                 char *p = mtod(m->m_next,char *);
+                 char *dst_address;
+
+                 en_io_in(port,p,IP_HDR_LEN);
+                 ip_hdr_captured = 1;
+                 dst_address = p + 16;
+
+                 if (IS_MULTICAST_IP(dst_address))
+                 {
+                     int j;
+                     int found = 0;
+
+                     for (j = 0; j < fs->fs_multitablesize; j++)
+                     {
+                          if ((memcmp(&fs->fs_multitable[j].ip_address, (void *)dst_address,4)) == 0)
+                          {
+                               found = 1;
+                               break;
+                          }
+                     }
+
+                     if (!found)
+                     {
+                         nic->command = START_DMA(DMA_ABORT);
+                         nulldev(*port);
+                         en->en_st_unwanted_frames++;
+                         fs = NULL;
+                         goto unwanted;
+                     }
+                 }
+            }
+        }
+#endif
+
 	for( pd = m->m_next; pd; pd = pd->m_next )
 	{
 redo:
@@ -618,8 +667,21 @@ redo:
 	    }
 
 	    pd->m_type = MT_DATA;
-	    en_io_in(port, mtod(pd, char *), pd->m_len);
+
+#ifdef FILTER_IP_ADDR
+            if (ip_hdr_captured)
+            {
+                en_io_in(port, mtod(pd, char *) + IP_HDR_LEN, pd->m_len - IP_HDR_LEN);
+                ip_hdr_captured = 0;  /* carry on as normal */
+            }
+            else
+#endif
+	    {
+	        en_io_in(port, mtod(pd, char *), pd->m_len);
+	    }
+
 	    datalen -= pd->m_len;
+
 	}
 
 	if( datalen != 0 )
@@ -2857,7 +2919,6 @@ int prenstats(int flag)
 	        	en->en_st_rx_bytes,
 	        	en->en_st_rx_interrupts);
 
-
 	printf ( "   Frame types claimed:\n" );
 
 	if( ieeefilter[unit] )
@@ -3320,11 +3381,11 @@ static int en_add_addrs ( struct en_softc *en, FilterSingleRef filter )
     /* Add all the addresses */
     for ( c=0; c<filter->fs_multitablesize; c++ )
     {
-        if ( !memcmp ( &filter->fs_multitable[c], zeroaddr, 8 ) )
+        if ( !memcmp ( &filter->fs_multitable[c].mac_address, zeroaddr, 8 ) )
             continue;
 
         /* We have an address to add here */
-	crc = calc_crc2 ( (unsigned char *)&filter->fs_multitable[c], 6 );
+	crc = calc_crc2 ( (unsigned char *)&filter->fs_multitable[c].mac_address, 6 );
 
         /* crc is 6 MS bits of crc */
         crc = crc>>(32-6);
