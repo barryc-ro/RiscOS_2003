@@ -23,11 +23,12 @@ RM		= remove
 LD		= link
 LB		= libfile
 WIPE		= -wipe
+AOF2ALF		= aof.AOF2ALF
 
-CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CCFLAGS		= -c -depend !Depend -ffah $(INCLUDES) $(DFLAGS) $(THROWBACK)
 ASFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~cf~nr~v
-LBFLAGS		= -c
+LBFLAGS		= -o -c
 LNFLAGS		= -aof
 WFLAGS		= ~CFR~V
 
@@ -44,10 +45,11 @@ ROMSTUBS	= RISCOSLIB:o.romstubs
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
 
-REMOTEDBLIB	= ${LIBDIR}.debug.o.lremote
-PDEBUG		= ${LIBDIR}.PDebug.o.Lib_PL
-PDEBUGZM	= ${LIBDIR}.PDebug.o.Lib_M_PL
-
+REMOTEDBLIB	= $(LIBDIR).debug.o.lremote
+PDEBUG		= $(LIBDIR).PDebug.o.Lib_PL
+PDEBUGZM	= $(LIBDIR).PDebug.o.Lib_M_PL
+TRACELIB	= libs.t_pl
+TRACELIBZM	= libs.t_m_pl
 
 # ------------------------------------------------------------------------------
 # Include files
@@ -64,7 +66,9 @@ DFLAGS		=
 COMPONENT	= DebugLib
 TARGET		= DebugLib
 TARGETZ		= DebugLibzm
-EXPORTS		= ${EXP_HDR}.${COMPONENT}
+AOFFile		= AOF_File
+AOFFileZ	= AOF_FileZ
+EXPORTS		= $(EXP_HDR).$(COMPONENT)
 
 OBJS = \
  o.debug \
@@ -83,83 +87,87 @@ OBJSZ = \
  oz.buffering \
 
 LIBS = \
- ${PDEBUG} \
- libs.t_pl \
- ${REMOTEDBLIB} \
+ $(PDEBUG) \
+ $(TRACELIB) \
+ $(REMOTEDBLIB) \
 
 LIBSZ = \
- ${PDEBUGZM} \
- libs.t_m_pl \
- ${REMOTEDBLIB}zm \
+ $(PDEBUGZM) \
+ $(TRACELIB) \
+ $(REMOTEDBLIB)zm \
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
 
 .SUFFIXES: .o .oz .s .h .c
-.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.c.oz:;    ${CC} ${CCFLAGS} -zm -o $@ $<
-.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
+.c.o:;     $(CC) $(CCFLAGS) -o $@ $<
+.c.oz:;    $(CC) $(CCFLAGS) -zm -o $@ $<
+.s.o:;     $(AS) $(ASFLAGS) -o $@ $<
 
 
 # ------------------------------------------------------------------------------
 # Build all the library
 #
 
-all:	${TARGET} ${TARGETZ}
+all:	$(TARGET) $(TARGETZ)
 
 
 # ------------------------------------------------------------------------------
 # RISC OS ROM build rules
 #
 
-export: export_${PHASE}
+export: export_$(PHASE)
 
-install_rom: ${TARGET}
-	${CP} 	${TARGET} ${INSTDIR}.${COMPONENT} 		${CPFLAGS}
-	@echo ${COMPONENT}: rom module installed
+install_rom: $(TARGET)
+	$(CP) 	$(TARGET) $(INSTDIR).$(COMPONENT) 		$(CPFLAGS)
+	@echo $(COMPONENT): rom module installed
 
 clean:
-	${WIPE} o ${WFLAGS}
-	${WIPE} oz ${WFLAGS}
-	${RM} ${TARGET}
-	${RM} ${TARGETZ}
-	@echo ${COMPONENT}: cleaned
+	$(WIPE) o $(WFLAGS)
+	$(WIPE) oz $(WFLAGS)
+	$(RM) $(TARGET)
+	$(RM) $(TARGETZ)
+	@echo $(COMPONENT): cleaned
 
 export_hdrs: h.DebugLib dirs
-	${CP}	h.DebugLib	${EXPORT_DIR}.h.DebugLib 	${CPFLAGS}
-	${CP}   VersionNum      ${EXPORT_DIR}.VersionNum 	${CPFLAGS}
-	@echo * ${COMPONENT}: export complete (hdrs)
+	$(CP)	h.DebugLib	$(EXPORT_DIR).h.DebugLib 	$(CPFLAGS)
+	$(CP)   VersionNum      $(EXPORT_DIR).VersionNum 	$(CPFLAGS)
+	@echo * $(COMPONENT): export complete (hdrs)
 
-export_libs: ${TARGET} ${TARGETZ} dirs
-	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
-	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
-	@echo * ${COMPONENT}: export complete (libs)
+export_libs: $(TARGET) $(TARGETZ) dirs
+	$(CP)	$(TARGET)	$(EXPORT_DIR).o.$(TARGET)	$(CPFLAGS)
+	$(CP)	$(TARGETZ)	$(EXPORT_DIR).o.$(TARGETZ)	$(CPFLAGS)
+	@echo * $(COMPONENT): export complete (libs)
 
 o.dirs:
-	${MKDIR} o
-	${MKDIR} oz
+	$(MKDIR) o
+	$(MKDIR) oz
 	create o.dirs
 	stamp  o.dirs
 
 dirs:
-	${MKDIR} ${LIBDIR}
-	${MKDIR} ${EXPORT_DIR}
-	${MKDIR} ${EXPORT_DIR}.h
-	${MKDIR} ${EXPORT_DIR}.o
+	$(MKDIR) $(LIBDIR)
+	$(MKDIR) $(EXPORT_DIR)
+	$(MKDIR) $(EXPORT_DIR).h
+	$(MKDIR) $(EXPORT_DIR).o
 
 # ------------------------------------------------------------------------------
 # Final link
 #
 
-${TARGET}: ${OBJS} o.dirs
-	${LD} ${LNFLAGS} -o ${TARGET} ${OBJS} ${LIBS}
+$(TARGET): $(OBJS) o.dirs
+	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJS) $(LIBS)
+        $(LB) $(LBFLAGS) $(TARGET) $(AOFFile)
+        $(RM) $(AOFFile)
 
-${TARGETZ}: ${OBJSZ} o.dirs
-	${LD} ${LNFLAGS} -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
+$(TARGETZ): $(OBJSZ) o.dirs
+	$(LD) $(LNFLAGS) -o $(AOFFileZ) $(OBJSZ) $(LIBSZ)
+        $(LB) $(LBFLAGS) $(TARGETZ) $(AOFFileZ)
+        $(RM) $(AOFFileZ)
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+$(EXP_HDR).$(COMPONENT): hdr.$(COMPONENT)
+	$(CP) hdr.$(COMPONENT) $@ $(CPFLAGS)
 
 
 # ------------------------------------------------------------------------------
