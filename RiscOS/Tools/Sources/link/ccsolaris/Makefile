@@ -1,6 +1,8 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
+TARGET=armlink
+
 CLX=${CLXPATH}/clx.a
 
 CFLAGS=-D__acorn -DTARGET_IS_ACORN_RISC_OS=1 -c -O -I${CLXPATH} ${CFL}
@@ -15,8 +17,8 @@ EXTLIB1=${CLX}
 HSOURCE=aifcode.h hostdep.h msgnos.h options.h 
 
 
-noarg: armlink
-	@echo "Made armlink (the default target)"
+noarg: ${TARGET}
+	@echo "Made ${TARGET} (the default target)"
 
 # Dependencies
 aifcode.o:	aifcode.c
@@ -44,30 +46,30 @@ link.o:	msgnos.h
 link.o:	options.h
 	$(CC) $(CFLAGS) $(CFLlink) link.c -o link.o
 
-armlink: $(OBJALL)
-armlink: $(HSOURCE)
-armlink: $(DERIVED)
-armlink: $(EXTLIB1)
-	$(CC) -o armlink $(OBJALL) $(EXTLIB1)
-	@echo "Made armlink"
+${TARGET}: $(OBJALL)
+${TARGET}: $(HSOURCE)
+${TARGET}: $(DERIVED)
+${TARGET}: $(EXTLIB1)
+	$(CC) -o ${TARGET} $(OBJALL) $(EXTLIB1)
+	@echo "Made ${TARGET}"
 
-install: armlink
-	cp -p armlink ${RISCOS_BUILD_TOOLS}/
-	strip ${RISCOS_BUILD_TOOLS}/armlink
+install: ${TARGET}
+	install ${TARGET} ${RISCOS_BUILD_TOOLS}/${TARGET}
+	strip ${RISCOS_BUILD_TOOLS}/${TARGET}
 
 clean:
 	-rm ${OBJALL}
-	-rm armlink
+	-rm ${TARGET}
 	-rm $(DERIVED)
-	@echo cleaned linke
+	@echo cleaned ${TARGET}
 
 realclean: clean
 	-find . -type l -print | xargs rm
-	@echo cleaned link links
+	@echo cleaned ${TARGET} links
 
 links:
 	./mklinks
-	@echo made link links
+	@echo made ${TARGET} links
 
 datenow.h: FRC
 	touch -f datenow.h
