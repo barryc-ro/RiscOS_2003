@@ -122,12 +122,6 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.handset
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
 o.handset:	c.handset
 o.handset:	C:h.kernel
 o.handset:	C:h.swis
@@ -135,3 +129,9 @@ o.handset:	h.utils
 o.handset:	h.ir_api
 o.handset:	h.handset
 o.handset:	h.veneers
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
