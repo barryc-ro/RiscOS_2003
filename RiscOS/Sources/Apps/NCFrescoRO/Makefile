@@ -42,6 +42,15 @@ resources:
 	${CP} Resources.* <resource$dir>.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+export: export_${PHASE}
+
+export_libs:
+	@echo ${COMPONENT}: export complete(libs)
+
+export_hdrs:
+        ${CP} h.plugin ${EXP_HDR}.C.h.plugin ${CPFLAGS}
+        @echo ${COMPONENT}: export complete(hdrs)
+
 #
 # Final link for the ROM Image (using given base address)
 #
