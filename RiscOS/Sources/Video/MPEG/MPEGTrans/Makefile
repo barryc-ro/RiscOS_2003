@@ -42,6 +42,10 @@ install: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: disc module installed
 
+install_rom: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom module installed
+
 clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
