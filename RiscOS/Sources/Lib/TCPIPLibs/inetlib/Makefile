@@ -93,10 +93,12 @@ dirs:
 local_dirs:
         ${MKDIR} o
         ${MKDIR} z
+        Create local_dirs
 
 clean:
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} z.* ${WFLAGS}
+	${RM} local_dirs
 	${RM} inetlib
 	${RM} inetlibzm
 
