@@ -206,6 +206,7 @@ OBJS = \
  o.Hotlist		\
  o.Images		\
  o.ImgHistory		\
+ o.ItemInfo		\
  o.JavaScript		\
  o.LineOne		\
  o.Main			\
@@ -214,6 +215,7 @@ OBJS = \
  o.Meta			\
  o.MimeMap		\
  o.Mouse		\
+ o.Multiuser		\
  o.Object		\
  o.OpenURL		\
  o.PlugIn		\
@@ -228,6 +230,7 @@ OBJS = \
  o.SaveFile		\
  o.SaveObject		\
  o.SaveText		\
+ o.SetPBoxes		\
  o.Tables		\
  o.TokenUtils		\
  o.Toolbars		\
@@ -262,6 +265,7 @@ OBJSZ = \
  oz.Hotlist		\
  oz.Images		\
  oz.ImgHistory		\
+ oz.ItemInfo		\
  oz.JavaScript		\
  oz.LineOne		\
  oz.Main		\
@@ -270,6 +274,7 @@ OBJSZ = \
  oz.Meta		\
  oz.MimeMap		\
  oz.Mouse		\
+ oz.Multiuser		\
  oz.Object		\
  oz.OpenURL		\
  oz.PlugIn		\
@@ -284,6 +289,7 @@ OBJSZ = \
  oz.SaveFile		\
  oz.SaveObject		\
  oz.SaveText		\
+ oz.SetPBoxes		\
  oz.Tables		\
  oz.TokenUtils		\
  oz.Toolbars		\
@@ -318,6 +324,7 @@ OBJSD = \
  od.Hotlist		\
  od.Images		\
  od.ImgHistory		\
+ od.ItemInfo		\
  od.JavaScript		\
  od.LineOne		\
  od.Main		\
@@ -326,6 +333,7 @@ OBJSD = \
  od.Meta		\
  od.MimeMap		\
  od.Mouse		\
+ od.Multiuser		\
  od.Object		\
  od.OpenURL		\
  od.PlugIn		\
@@ -340,6 +348,7 @@ OBJSD = \
  od.SaveFile		\
  od.SaveObject		\
  od.SaveText		\
+ od.SetPBoxes		\
  od.svcprint		\
  od.Tables		\
  od.TokenUtils		\
@@ -376,6 +385,7 @@ OBJSDZ = \
  odz.Hotlist		\
  odz.Images		\
  odz.ImgHistory		\
+ odz.ItemInfo		\
  odz.JavaScript		\
  odz.LineOne		\
  odz.Main		\
@@ -384,6 +394,7 @@ OBJSDZ = \
  odz.Meta		\
  odz.MimeMap		\
  odz.Mouse		\
+ odz.Multiuser		\
  odz.Object		\
  odz.OpenURL		\
  odz.PlugIn		\
@@ -398,6 +409,7 @@ OBJSDZ = \
  odz.SaveFile		\
  odz.SaveObject		\
  odz.SaveText		\
+ odz.SetPBoxes		\
  odz.svcprint		\
  odz.Tables		\
  odz.TokenUtils		\
@@ -433,6 +445,7 @@ OBJS_SURF = \
  o_surf.History		\
  o_surf.Images		\
  o_surf.ImgHistory	\
+ o_surf.ItemInfo	\
  o_surf.JavaScript	\
  o_surf.LineOne		\
  o_surf.Main		\
@@ -441,6 +454,7 @@ OBJS_SURF = \
  o_surf.Meta		\
  o_surf.MimeMap		\
  o_surf.Mouse		\
+ o_surf.Multiuser	\
  o_surf.Object		\
  o_surf.OpenURL		\
  o_surf.PlugIn		\
@@ -455,6 +469,7 @@ OBJS_SURF = \
  o_surf.SaveFile	\
  o_surf.SaveObject	\
  o_surf.SaveText	\
+ o_surf.SetPBoxes	\
  o_surf.Tables		\
  o_surf.TokenUtils	\
  o_surf.Toolbars	\
@@ -488,6 +503,7 @@ OBJSD_SURF = \
  od_surf.History	\
  od_surf.Images		\
  od_surf.ImgHistory	\
+ od_surf.ItemInfo	\
  od_surf.JavaScript	\
  od_surf.LineOne	\
  od_surf.Main		\
@@ -496,6 +512,7 @@ OBJSD_SURF = \
  od_surf.Meta		\
  od_surf.MimeMap	\
  od_surf.Mouse		\
+ od_surf.Multiuser	\
  od_surf.Object		\
  od_surf.OpenURL	\
  od_surf.PlugIn		\
@@ -510,6 +527,7 @@ OBJSD_SURF = \
  od_surf.SaveFile	\
  od_surf.SaveObject	\
  od_surf.SaveText	\
+ od_surf.SetPBoxes	\
  od_surf.svcprint	\
  od_surf.Tables		\
  od_surf.TokenUtils	\
@@ -546,6 +564,7 @@ OBJS_ITALK = \
  o_italk.Hotlist	\
  o_italk.Images		\
  o_italk.ImgHistory	\
+ o_italk.ItemInfo	\
  o_italk.JavaScript	\
  o_italk.LineOne	\
  o_italk.Main		\
@@ -554,6 +573,7 @@ OBJS_ITALK = \
  o_italk.Meta		\
  o_italk.MimeMap	\
  o_italk.Mouse		\
+ o_italk.Multiuser	\
  o_italk.Object		\
  o_italk.OpenURL	\
  o_italk.PlugIn		\
@@ -568,6 +588,7 @@ OBJS_ITALK = \
  o_italk.SaveFile	\
  o_italk.SaveObject	\
  o_italk.SaveText	\
+ o_italk.SetPBoxes	\
  o_italk.Tables		\
  o_italk.TokenUtils	\
  o_italk.Toolbars	\
@@ -602,6 +623,7 @@ OBJSD_ITALK = \
  od_italk.Hotlist	\
  od_italk.Images	\
  od_italk.ImgHistory	\
+ od_italk.ItemInfo	\
  od_italk.JavaScript	\
  od_italk.LineOne	\
  od_italk.Main		\
@@ -610,6 +632,7 @@ OBJSD_ITALK = \
  od_italk.Meta		\
  od_italk.MimeMap	\
  od_italk.Mouse		\
+ od_italk.Multiuser	\
  od_italk.Object	\
  od_italk.OpenURL	\
  od_italk.PlugIn	\
@@ -624,6 +647,7 @@ OBJSD_ITALK = \
  od_italk.SaveFile	\
  od_italk.SaveObject	\
  od_italk.SaveText	\
+ od_italk.SetPBoxes	\
  od_italk.svcprint	\
  od_italk.Tables	\
  od_italk.TokenUtils	\

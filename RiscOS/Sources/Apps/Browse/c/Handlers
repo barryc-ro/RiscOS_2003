@@ -60,6 +60,7 @@
 #include "Reformat.h"
 #include "Save.h"
 #include "SaveFile.h"
+#include "SetPBoxes.h"
 #include "TokenUtils.h"
 #include "Toolbars.h"
 #include "URLutils.h"
@@ -199,6 +200,20 @@ static void handlers_get_call_info(browser_data ** bp, ObjectId * op, IdBlock * 
 
 int handle_messages(WimpMessage * m, void * handle)
 {
+  #ifndef SINGLE_USER
+
+    /* Multiuser builds will refuse to handle various message types */
+
+    int complain = 0;
+
+    #define ChkLogin if (!logged_in) {complain = 1; break;} else
+
+  #else
+
+    #define ChkLogin {}
+
+  #endif
+
   switch (m->hdr.action_code)
   {
     case Wimp_MQuit: quit = 1;
@@ -267,41 +282,54 @@ int handle_messages(WimpMessage * m, void * handle)
 
     /* App to app transfer (Message_DataSaveAck is in the multiple source section) */
 
-    case Wimp_MDataLoadAck:  ChkError(protocols_atats_got_data_load_ack(m));  break;
-    case Wimp_MRAMFetch:     ChkError(protocols_atats_got_ram_fetch(m));      break;
+    case Wimp_MDataLoadAck:             ChkLogin ChkError(protocols_atats_got_data_load_ack(m));  break;
+    case Wimp_MRAMFetch:                ChkLogin ChkError(protocols_atats_got_ram_fetch(m));      break;
 
-    case Wimp_MDataOpen:     ChkError(protocols_atatl_got_data_open(m));      break;
-    case Wimp_MDataLoad:     ChkError(protocols_atatl_got_data_load(m));      break;
-    case Wimp_MDataSave:     ChkError(protocols_atatl_got_data_save(m));      break;
-    case Wimp_MRAMTransmit:  ChkError(protocols_atatl_got_ram_transmit(m));   break;
+    case Wimp_MDataOpen:                         ChkError(protocols_atatl_got_data_open(m));      break;
+    case Wimp_MDataLoad:
+    {
+      /* Allow certain browser systems to get a look at the message first */
+
+      #ifndef SINGLE_USER
+
+        if (setpboxes_check_message(m)) break;
+
+      #endif
+
+      ChkLogin ChkError(protocols_atatl_got_data_load(m));
+    }
+    break;
+
+    case Wimp_MDataSave:                ChkLogin ChkError(protocols_atatl_got_data_save(m));      break;
+    case Wimp_MRAMTransmit:             ChkLogin ChkError(protocols_atatl_got_ram_transmit(m));   break;
 
     /* Printing protocol (Message_DataSaveAck is in the multiple source section) */
 
-    case Browser_Message_PrintError:   ChkError(protocols_pp_got_print_error(m));    break;
-    case Browser_Message_PrintTypeOdd: ChkError(protocols_pp_got_print_type_odd(m)); break;
+    case Browser_Message_PrintError:    ChkLogin ChkError(protocols_pp_got_print_error(m));       break;
+    case Browser_Message_PrintTypeOdd:  ChkLogin ChkError(protocols_pp_got_print_type_odd(m));    break;
 
     /* Multiple source messages */
 
-    case Wimp_MDataSaveAck:  ChkError(protocols_multi_got_data_save_ack(m)); break;
+    case Wimp_MDataSaveAck:             ChkLogin ChkError(protocols_multi_got_data_save_ack(m));  break;
 
     /* URI handler */
 
-    case URI_MProcess:       ChkError(protocols_auh_got_process(m));         break;
-    case URI_MReturnResult:  ChkError(protocols_auh_got_return_result(m));   break;
-    case URI_MDying:         ChkError(protocols_auh_got_dying(m));           break;
+    case URI_MProcess:                           ChkError(protocols_auh_got_process(m));          break;
+    case URI_MReturnResult:                      ChkError(protocols_auh_got_return_result(m));    break;
+    case URI_MDying:                             ChkError(protocols_auh_got_dying(m));            break;
 
     /* ANT URL broadcast protocol */
 
-    case Message_ANTOpenURL: ChkError(protocols_aub_got_open_url(m));        break;
+    case Message_ANTOpenURL:            ChkLogin ChkError(protocols_aub_got_open_url(m));         break;
 
     /* Plug-In protocol */
 
-    case Message_PlugIn_Opening:        ChkError(plugin_got_opening(m));         break;
-    case Message_PlugIn_URLAccess:      ChkError(plugin_got_url_access(m));      break;
-    case Message_PlugIn_StreamNew:      ChkError(plugin_got_stream_new(m));      break;
-    case Message_PlugIn_ReshapeRequest: ChkError(plugin_got_reshape_request(m)); break;
-    case Message_PlugIn_Status:         ChkError(plugin_got_status(m));          break;
-    case Message_PlugIn_Busy:           ChkError(plugin_got_busy(m));
+    case Message_PlugIn_Opening:        ChkLogin ChkError(plugin_got_opening(m));                 break;
+    case Message_PlugIn_URLAccess:      ChkLogin ChkError(plugin_got_url_access(m));              break;
+    case Message_PlugIn_StreamNew:      ChkLogin ChkError(plugin_got_stream_new(m));              break;
+    case Message_PlugIn_ReshapeRequest: ChkLogin ChkError(plugin_got_reshape_request(m));         break;
+    case Message_PlugIn_Status:         ChkLogin ChkError(plugin_got_status(m));                  break;
+    case Message_PlugIn_Busy:           ChkLogin ChkError(plugin_got_busy(m));                    break;
 
 // For debugging. This should only ever bounce, i.e. go through handle_ack.
 //
@@ -326,6 +354,22 @@ int handle_messages(WimpMessage * m, void * handle)
 
     default: return 0; break;
   }
+
+  #ifndef SINGLE_USER
+
+    if (complain)
+    {
+      erb.errnum = Utils_Error_Custom_Message;
+
+      StrNCpy0(erb.errmess,
+               lookup_token("MustLogIn:The browser cannot fetch Web pages until you log in.",
+                            0,
+                            0));
+
+      show_error_ret(&erb);
+    }
+
+  #endif
 
   return 1;
 }
@@ -1874,9 +1918,10 @@ int handle_forwards(int eventcode, ToolboxEvent * event, IdBlock * idb, void * h
 int handle_stop(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
   browser_data * b;
-  int            shift;
 
   #ifdef SINGLE_USER
+
+    int shift;
 
     /* Is Shift being pressed? */
 
@@ -1990,21 +2035,17 @@ int handle_reload(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
 
   if (b->urlddata)
   {
-    /* If not going to a new view, set the reloading flag and */
-    /* get the URL; if this is fails for whatever reason,     */
-    /* don't forget to clear the reloadng flag before         */
-    /* reporting the error.                                   */
+    /* If not going to a new view, set the reloading flag */
+    /* and get the URL.                                   */
 
     if (!new_view)
     {
-      b->reloading = 1;
+      b->reloading   = 1;
+      b->reload_lock = 1;
+
       e = fetchpage_new(b, b->urlddata, 0, 1);
 
-      if (e)
-      {
-        b->reloading = 0;
-        show_error_ret(e);
-      }
+      if (e) show_error_ret(e);
     }
 
     /* Otherwise, just fetch the URL in a new window. */
@@ -2070,6 +2111,25 @@ int handle_view_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void
     int from_menu = handlers_menu_or_toolbar(idb);
     int adjust    = 0;
 
+  #else
+
+    browser_data * b;
+    char           path[Limits_URL];
+    int            from_menu = 0;
+
+  #endif
+
+  #ifndef SINGLE_USER
+
+    /* In multiuser builds, if not logged in, claim the event */
+    /* but don't do anything with it.                         */
+
+    if (!logged_in) return 1;
+
+  #endif
+
+  #ifndef REMOTE_HOTLIST
+
     /* If not from a menu, allow Adjust to toggle the display type */
     /* at open time to the opposite of that specified by the       */
     /* HotlistShow option in the Choices file.                     */
@@ -2095,10 +2155,6 @@ int handle_view_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void
                           choices.hotlist_show == Choices_HotlistType_URLs));
 
   #else
-
-    browser_data * b;
-    char           path[Limits_URL];
-    int            from_menu = 0;
 
     handlers_get_call_info(&b, NULL, idb, ButtonBarViewHotlist);
     from_menu = handlers_menu_or_toolbar(idb);
@@ -2232,13 +2288,6 @@ int handle_add_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
                            choices.add_hotlist == Choices_AddHotlist_Top
                            :
                            choices.add_hotlist == Choices_AddHotlist_Bottom));
-
-      /* If required, save the hotlist */
-
-      if (choices.save_hotlist == Choices_SaveHotlist_Always)
-      {
-        show_error_ret(hotlist_save(lookup_choice("HotlistSave:Browse:User.Hotlist",0,0)));
-      }
     }
 
   #else
@@ -2809,9 +2858,29 @@ int handle_show_history_menu(int eventcode, ToolboxEvent * event, IdBlock * idb,
 
 int handle_show_info(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
+  #ifndef SINGLE_USER
+
+    /* Make sure that the tokens buffer is invalidated, */
+    /* or we could end up appending multiple '(M)'s to  */
+    /* the string if lookup_token thinks it has no      */
+    /* reason to look up the token again.               */
+
+    *lasttokn = 0;
+
+  #endif
+
+  lookup_token("Version:(Unknown!)",1,0);
+
+  #ifndef SINGLE_USER
+
+    strcat(tokens, " (M)");
+
+  #endif
+
   ChkError(proginfo_set_version(0,
                                 idb->self_id,
-                                lookup_token("Version:(Unknown!)",1,0)));
+                                tokens));
+
   return 1;
 }
 

@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "swis.h"
 #include "flex.h"
@@ -67,6 +68,7 @@
 /* Static function prototypes */
 
 static HStream * fetch_find_anchor_token_r (browser_data * b, HStream * streambase, char * anchor);
+static HStream * fetch_find_text_token_r   (browser_data * b, char * text, HStream ** last_t, int * last_o, int * offset, int cs, HStream * streambase, int * enabled);
 
 /*************************************************/
 /* fetch_start()                                 */
@@ -220,11 +222,13 @@ char * fetch_find_name_tag(char * url)
 {
   char * p;
 
-  p = strchr(url,'/'); /* Get past the first /, as in http:/ */
+  p = strrchr(url, '#');
 
-  if (p) p = strchr(p + 1, '/'); /* Get past second /, as in http://                     */
-  if (p) p = strchr(p + 1, '/'); /* Get past site specifier, as in http://www.this.that/ */
-  if (p) p = strchr(p + 1, '#'); /* Find # in the document path                          */
+//  p = strchr(url,'/'); /* Get past the first /, as in http:/ */
+//
+//  if (p) p = strchr(p + 1, '/'); /* Get past second /, as in http://                     */
+//  if (p) p = strchr(p + 1, '/'); /* Get past site specifier, as in http://www.this.that/ */
+//  if (p) p = strchr(p + 1, '#'); /* Find # in the document path                          */
 
   return p;
 }
@@ -340,6 +344,387 @@ static HStream * fetch_find_anchor_token_r(browser_data * b, HStream * streambas
               !utils_strcasecmp(tp->name, anchor)
             )
             return tp;
+
+    tp = tp->next;
+  }
+
+  /* No match found - return NULL. */
+
+  return NULL;
+}
+
+/*************************************************/
+/* fetch_find_text_token()                       */
+/*                                               */
+/* Returns the address of the first token in the */
+/* token list after a given one (or NULL for the */
+/* very first) which points to a string holding  */
+/* the given text, or NULL if none can be found. */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the token list;       */
+/*                                               */
+/*             Pointer to a fragment of text to  */
+/*             find;                             */
+/*                                               */
+/*             Pointer to the HStream where text */
+/*             was last found (the function will */
+/*             find the next), or NULL for the   */
+/*             first call;                       */
+/*                                               */
+/*             The offset into that token the    */
+/*             string was found at, or 0;        */
+/*                                               */
+/*             Pointer to an int, into which, if */
+/*             text is found in a token, the     */
+/*             offset into that text at which    */
+/*             the search string was found;      */
+/*                                               */
+/*             1 for case sensitive comparison,  */
+/*             else 0;                           */
+/*                                               */
+/*             1 to find the next item, else     */
+/*             find the previous one.            */
+/*                                               */
+/* Returns:    Pointer to the token associated   */
+/*             with the given anchor name, or    */
+/*             NULL if none is found.            */
+/*                                               */
+/* Assumes:    The int pointer may NOT be NULL.  */
+/*************************************************/
+
+HStream * fetch_find_text_token(browser_data * b, char * text, HStream * last_t,
+                                int last_o, int * offset, int cs, int forwards)
+{
+  int flags;
+
+  if (!text || !*text) return NULL;
+
+  /* Searching forwards is easy... */
+
+  if (forwards)
+  {
+    flags = 0;
+
+    return fetch_find_text_token_r(b,
+                                   text,
+                                   &last_t,
+                                   &last_o,
+                                   offset,
+                                   cs,
+                                   b->stream,
+                                   &flags);
+  }
+
+  /* Going backwards is a bit trickier. Start from the top */
+  /* of the page; remember if anything is found, and keep  */
+  /* going until the last_t and last_o passed in here are  */
+  /* matched. Return the previously found item (which may  */
+  /* be NULL if you're already on the first).              */
+
+  else
+  {
+    HStream * local_last_t  = NULL;
+    int       local_last_o  = 0;
+
+    HStream * local_start_t = NULL;
+    int       local_start_o = 0;
+
+    HStream * local_pass_t  = NULL;
+    int       local_pass_o  = 0;
+
+    for (;;)
+    {
+      /* The call may corrupt flags, local_start_t and */
+      /* local_start_o, so reset flags before entry,   */
+      /* and use a second copy of the other two.       */
+
+      flags = 0;
+
+      local_pass_t = local_start_t;
+      local_pass_o = local_start_o;
+
+      local_last_t = fetch_find_text_token_r(b,
+                                             text,
+                                             &local_pass_t,
+                                             &local_pass_o,
+                                             &local_last_o,
+                                             cs,
+                                             b->stream,
+                                             &flags);
+
+      if (local_last_t == last_t && local_last_o == last_o) break;
+      if (!local_last_t) break;
+
+      local_start_t = local_last_t;
+      local_start_o = local_last_o;
+    }
+
+    *offset = local_start_o;
+
+    return local_start_t;
+  }
+}
+
+/*************************************************/
+/* fetch_find_text_token_r()                     */
+/*                                               */
+/* Recursive back-end to fetch_find_text_token.  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the token list;       */
+/*                                               */
+/*             Pointer to a fragment of text to  */
+/*             find;                             */
+/*                                               */
+/*             Pointer to a pointer to the       */
+/*             HStream where text was last found */
+/*             (the function will find the       */
+/*             next), or pointer to NULL for the */
+/*             first call (contents may be       */
+/*             updated);                         */
+/*                                               */
+/*             Pointer to an int holding the     */
+/*             offset into that token the string */
+/*             was found at, or pointer to 0     */
+/*             (again, contents may be updated); */
+/*                                               */
+/*             Pointer to an int, into which, if */
+/*             text is found in a token, the     */
+/*             offset into that text at which    */
+/*             the search string was found;      */
+/*                                               */
+/*             1 for case sensitive comparison,  */
+/*             else 0;                           */
+/*                                               */
+/*             Pointer to the first HStream in   */
+/*             the list to search;               */
+/*                                               */
+/*             Pointer to an int, which contains */
+/*             1 if string comparisons are to be */
+/*             done yet, else 0 - this is so the */
+/*             'find next' functionality can     */
+/*             deal with recursion correctly.    */
+/*             The int contents may be updated.  */
+/*                                               */
+/* Returns:    As fetch_find_text_token.         */
+/*                                               */
+/* Assumes:    As fetch_find_text_token, and     */
+/*             that no other pointers are NULL   */
+/*             unless stated (remember, there    */
+/*             is a difference between being a   */
+/*             NULL pointer and pointing to a    */
+/*             NULL value!).                     */
+/*************************************************/
+
+static HStream * fetch_find_text_token_r(browser_data * b, char * text, HStream ** last_t, int * last_o,
+                                         int * offset, int cs, HStream * streambase, int * enabled)
+{
+  HStream * tp;
+
+  tp = streambase;
+
+  /* Go down the token list, checking if a token has text. */
+  /* If so, and comparisons are enabled, see if the given  */
+  /* string lies in the token.                             */
+
+  while (tp && (tp->flags & HFlags_DealtWithToken))
+  {
+    if (!(*last_t) || (*last_t) == tp) *enabled = 1;
+
+    /* A table token? */
+
+    if (tp->tagno == TAG_TABLE)
+    {
+      table_stream   * table      = (table_stream *) tp;
+      table_row      * row        = NULL;
+      table_headdata * head       = NULL;
+      HStream        * tf;
+      int              cellcount  = 0;
+      int              cellmax    = table->ColSpan * table->RowSpan;
+
+      /* Scan the table for the token, using a recursive */
+      /* call to this function for each cell.            */
+
+      if (table->cells)
+      {
+        row = table->List;
+
+        while (row && cellcount < cellmax)
+        {
+          head = row->List;
+
+          while (head && cellcount < cellmax)
+          {
+            switch (head->Tag)
+            {
+              case TagTableData:
+              case TagTableHead:
+              {
+                tf = fetch_find_text_token_r(b,
+                                             text,
+                                             last_t,
+                                             last_o,
+                                             offset,
+                                             cs,
+                                             (HStream *) head->List,
+                                             enabled);
+                if (tf) return tf;
+              }
+              break;
+            }
+
+            cellcount ++;
+
+            head = head->Next;
+
+          /* Closure of 'while (head && ...)' */
+          }
+
+          row = row->Next;
+
+        /* Closure of 'while (row && ...)' */
+        }
+
+      /* Closure of 'if (table->cells)' */
+      }
+
+    /* Closure of check to see if token represents a table */
+    }
+    else if (
+              tp->text             &&
+              (tp->style & PCDATA) &&
+              *enabled
+            )
+    {
+      const char * find = tp->text;
+
+      /* If we're on the last found token, must make */
+      /* sure we start looking just past the given   */
+      /* offset.                                     */
+
+      if (tp == (*last_t))
+      {
+        (*last_o) ++;
+
+        /* If last_o is still within range of the token's */
+        /* attached text, advance the pointer into that   */
+        /* text past the start of the found offset.       */
+        /* Otherwise, set last_o to -1 to signal that we  */
+        /* have, in fact, finished with this token and    */
+        /* should move onto the next one.                 */
+
+        if ((*last_o) < strlen(find)) find += (*last_o), (*last_o) = 0;
+        else (*last_o) = -1;
+      }
+
+      if ((*last_o) == 0)
+      {
+        const char * start_p   = find;
+        const char * current_p = start_p;
+
+        HStream    * current_t;
+
+        const char * search_p  = text;
+
+        char         search_b;
+        char         current_b;
+
+find_first_char:
+
+        /* Get the byte of search string to look for, converting  */
+        /* to lower case if this is a case insensitive comparison */
+
+        current_t = tp;
+
+        search_b = *search_p;
+        if (!cs) search_b = tolower(search_b);
+
+        do
+        {
+          /* Similarly, get a byte of the comparison string, possibly */
+          /* converting to lower case.                                */
+
+          current_b = *start_p;
+          if (!cs) current_b = tolower(current_b);
+
+          /* Keep looking as long as the strings don't run out and we */
+          /* don't have a match. If we do find a match, we still want */
+          /* to have start_p point past it in case the rest of the    */
+          /* search string doesn't match and we need to jump back     */
+          /* into this 'find the first character' routine.            */
+
+          start_p++;
+        }
+        while (search_b && current_b && search_b != current_b);
+
+        /* If we've still got a non-zero search string and comparison */
+        /* string byte, they matched (otherwise, there's nothing      */
+        /* else to do).                                               */
+
+        if (search_b && current_b)
+        {
+          /* Now we step through both strings, not just the comparison */
+          /* string, to make sure that all of the search string is     */
+          /* contained within the comparison string.                   */
+
+          current_p = start_p - 1;
+
+check_rest_matches:
+
+          do
+          {
+            search_p++;
+            current_p++;
+
+            search_b  = *search_p;
+            current_b = *current_p;
+
+            if (!cs) search_b = tolower(search_b), current_b = tolower(current_b);
+          }
+          while (search_b && current_b && search_b == current_b);
+
+          /* If we've run out of search string, we have a match. If we've */
+          /* run out of neither, the match failed; jump back to finding   */
+          /* the first character in the rest of the comparison string.    */
+
+          if (!search_b)
+          {
+            /* Found it - return the token pointer and offset */
+
+            *offset = start_p - tp->text - 1; /* (-1 as start_p was advanced past the start point by 1) */
+            return tp;
+          }
+
+          /* Mismatch - start looking again */
+
+          if (search_b && current_b)
+          {
+            search_p = text;
+
+            goto find_first_char;
+          }
+
+          /* If we've run out of *comparison* string, it might continue */
+          /* in the next token (and the next, and the next, etc.)       */
+
+          if (
+               current_t->next                   &&
+               current_t->next->text             &&
+               (current_t->next->style & PCDATA)
+             )
+          {
+            current_t = current_t->next;
+
+            current_p = current_t->text - 1;
+            search_p--;
+
+            goto check_rest_matches;
+          }
+        }
+      }
+      else (*last_o) = 0;
+    }
 
     tp = tp->next;
   }
@@ -1608,7 +1993,6 @@ void fetch_stop(browser_data * b, int keep_source)
   #endif
 
   memory_set_chunk_size(b, NULL, CK_FURL, 0);
-  b->reloading = 0;
 
   /* Update the status bar */
 
