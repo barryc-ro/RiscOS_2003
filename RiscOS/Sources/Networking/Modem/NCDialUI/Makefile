@@ -60,7 +60,7 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -o $@ $<  h.cmhg_modem
 .s.o:;      ${AS} ${AFLAGS} $< $@
 .d.o:;      datatoaof -f $< -o $@ $(Datatoaofflags)
 
