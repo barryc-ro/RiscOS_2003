@@ -50,7 +50,7 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
-#MemCheckCC	= MemCheck.CC
+#MemCheckCC	= #MemCheck.CC
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -94,7 +94,7 @@ ASMFLAGS=
 
 HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h entity.h \
 		from.h header.h headers.h messageid.h MIMEentity.h MIMEimage.h MIMEmultip.h mimevers.h \
-		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.h XNFdevicec.h \
+		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.o XNFdevicec.o \
 		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
 		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
 		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist
