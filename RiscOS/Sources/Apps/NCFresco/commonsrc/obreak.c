@@ -98,7 +98,7 @@ void obreak_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (update == object_redraw_HIGHLIGHT)
+    if (update == object_redraw_HIGHLIGHT || update == object_redraw_BACKGROUND)
 	return;
     
     if (ti->tag == rid_tag_HLINE)

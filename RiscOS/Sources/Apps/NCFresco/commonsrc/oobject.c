@@ -220,6 +220,9 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	return;
     }
 
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
     bw = obj->bwidth;
 
     bbox.x0 = hpos + obj->hspace + bw;

@@ -27,6 +27,7 @@ typedef struct {
 #define object_redraw_REDRAW	0
 #define object_redraw_UPDATE	1
 #define object_redraw_HIGHLIGHT	2
+#define object_redraw_BACKGROUND 3
 
 typedef void (*object_redraw)(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
 

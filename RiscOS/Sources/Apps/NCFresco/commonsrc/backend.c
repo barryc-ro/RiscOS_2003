@@ -1504,6 +1504,7 @@ int antweb_render_background(wimp_redrawstr *rr, void *h, int update)
     int do_fill, do_tile;
     int ox, oy;
     rid_header *rh = doc->rh;
+    int rc = -1;
 
     if (update)
 	return -1;
@@ -1547,10 +1548,10 @@ int antweb_render_background(wimp_redrawstr *rr, void *h, int update)
 	image_tile((image) rh->tile.im, ox, oy, &(rr->g), render_get_colour(render_colour_BACK, doc), doc->scale_value);
 #endif
 
-	return (int)doc;
+	rc = (int)doc;
     }
 
-    if (do_fill)
+    if (!do_tile && do_fill)
     {
 	int col;
 	RENDBG(("Clearing background\n"));
@@ -1559,10 +1560,26 @@ int antweb_render_background(wimp_redrawstr *rr, void *h, int update)
 	bbc_move(rr->g.x0, rr->g.y0);
 	bbc_plot(bbc_RectangleFill + bbc_DrawAbsBack, rr->g.x1, rr->g.y1);
 
-	return col | 1;
+	rc = col | 1;
     }
 
-    return -1;
+    if (doc->flags & doc_flag_DOC_COLOURS)
+    {
+	object_font_state fs;
+	int oox, ooy;
+
+	fs.lf = fs.lfc = -1;
+#if USE_MARGINS
+	oox = ox + doc->margin.x0;
+	ooy = oy + doc->margin.y1;
+#endif
+        stream_render(&doc->rh->stream, doc,
+		      oox, ooy,
+		      rr->g.x0, rr->g.y1 - ooy, rr->g.x1, rr->g.y0 - ooy,
+		      &fs, &rr->g, object_redraw_BACKGROUND);
+    }
+    
+    return rc;
 }
 
 /*--- Individual event routines for the window ---*/

@@ -538,6 +538,9 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	return;
     }
 
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
     bbox.x0 = hpos + tii->hgap;
     bbox.y0 = bline - ti->max_down + tii->vgap;
     bbox.x1 = hpos + ti->width - tii->hgap;

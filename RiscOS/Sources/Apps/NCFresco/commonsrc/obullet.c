@@ -274,6 +274,9 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (update == object_redraw_HIGHLIGHT)
 	return;
 
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
     symfont = getbulletfont( doc, tib, &wf );
     fh = wf->handle;
 

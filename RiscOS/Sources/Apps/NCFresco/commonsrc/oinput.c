@@ -365,6 +365,8 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 		whichfont -= (1<<WEBFONT_SIZE_SHIFT);
 	    }
 
+	    antweb_doc_ensure_font( doc, whichfont );
+
 	    wf = &webfonts[whichfont];
 	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(whichfont, t) + INPUT_BUTTON_BORDER_X*2;
 	    if (ii->hh.type != value_absunit)
@@ -463,14 +465,17 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    selected = backend_is_selected(doc, ti);
-
     if (update == object_redraw_HIGHLIGHT)
     {
 	if (oinput_update_highlight(ti, doc, 0, NULL))
 	    highlight_render_outline(ti, doc, hpos, bline);
 	return;
     }
+
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
+    selected = backend_is_selected(doc, ti);
 
     switch (ii->tag)
     {

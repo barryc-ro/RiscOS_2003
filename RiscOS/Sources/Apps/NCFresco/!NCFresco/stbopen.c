@@ -516,13 +516,22 @@ static os_error *fe__reload(fe_view v, void *handle)
 	/* We have to take a copy because if the file is from local disc
 	 * the 'displaying' doc will be removed before
 	 * the operation has completed
-	 * We use the FROM HISTORY flag so that it doesn't get entered into the history.
+	 * We use the NO_HISTORY flag so that it doesn't get entered into the history.
 	 */
         if (!ep)
         {
+	    wimp_wstate state;
+
             url = strdup(url);
-            ep = frontend_complain(frontend_open_url(url, v, TARGET_SELF, NULL,
-						     fe_open_url_NO_CACHE | fe_open_url_NO_REFERER | fe_open_url_FROM_HISTORY));
+
+	    /* set scroll offsets so we reload to the same position
+	    wimp_get_wind_state(v->w, &state);
+	    v->fetching_data.xscroll = state.o.x + v->margin.x0;
+	    v->fetching_data.yscroll = state.o.y + v->margin.y1;
+	    */
+
+	    ep = frontend_complain(frontend_open_url(url, v, TARGET_SELF, NULL,
+						     fe_open_url_NO_CACHE | fe_open_url_NO_REFERER));
             mm_free(url);
         }
     }
@@ -541,6 +550,10 @@ int fe_reload_possible(fe_view v)
 os_error *fe_reload(fe_view v)
 {
     sound_event(snd_RELOAD);
+
+    /* set the fetching_data hist ptr so that we don't get added to the history */
+    v->fetching_data.hist = v->hist_at;
+
     return iterate_frames(v, fe__reload, NULL);
 }
 
@@ -680,6 +693,10 @@ void fe_dispose_view(fe_view v)
     STBDBG(("fe_dispose_view: disposing\n"));
 
     v->delete_pending = -1;
+
+    /* restore pointer bounding box */
+    if (strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
+	pointer_limit(screen_box.x0, screen_box.y0, screen_box.x1, screen_box.y1);
 
     fe_internal_deleting_view(v);
 

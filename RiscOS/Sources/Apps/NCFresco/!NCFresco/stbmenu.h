@@ -31,6 +31,7 @@ extern BOOL stbmenu_check_redraw(wimp_w w);
 extern BOOL stbmenu_is_open(void);
 extern void stbmenu_event_handler(int event);
 extern void stbmenu_close(void);
+extern BOOL stbmenu_check_pointer(wimp_mousestr *mp);
 
 /* eof stbmenu.h */
 

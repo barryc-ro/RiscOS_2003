@@ -56,3 +56,5 @@ extern void fe_open_temp_file(fe_view v, fe_temp_file_builder fn, void *handle, 
 extern char *extract_value(const char *s, const char *tag);
 extern char *check_url_prefix(const char *url);
 extern os_error *fe_start_task(const char *cli, wimp_t *task_out);
+
+extern int check_edge_proximity(int pos, int left, int right, int threshold);

@@ -519,12 +519,12 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 
     if ((flags & be_link_DONT_WRAP_H) == 0 && min_link == NULL)
     {
-	LNKDBG(("antweb_highlight_scan_xy: using fallback link %p dist %d sec %d\n", min_link1, min_dist1, min_secdist1));
+	LNKDBG(("antweb_highlight_scan_xy: using fallback link %p dist %d sec %d\n", min_link1, min_link1 ? min_dist1 : 0, min_link1 ? min_secdist1 : 0));
 	min_link = min_link1;
     }
     else
     {
-	LNKDBG(("antweb_highlight_scan_xy: using main link %p dist %d sec %d\n", min_link, min_dist, min_secdist));
+	LNKDBG(("antweb_highlight_scan_xy: using main link %p dist %d sec %d\n", min_link, min_link ? min_dist : 0, min_link ? min_secdist : 0));
     }
 
     return min_link;

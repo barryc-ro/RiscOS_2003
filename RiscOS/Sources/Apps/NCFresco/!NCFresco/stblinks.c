@@ -518,9 +518,6 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	if (new_link == NULL)
 	    new_link = backend_highlight_link(v->displaying, NULL, flags);
 
-/* 	if (new_link == NULL && ) */
-/* 	    new_link = backend_highlight_link(v->displaying, NULL, flags); */
-
 	if (new_link == NULL)
 	    centre_pointer(v);
 
@@ -713,6 +710,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 /* 		    v->current_link = new_link; */
 		    }
 
+		    /* just check that we can see the highlight somewhere */
+		    fe_ensure_highlight(v, flags);
+		    
 		    /* return if scrolled whether or not new link found */
 		    STBDBG(("fe_move_highlight_xy: no frames v %p scrolled new link %p\n", v, new_link));
 		    return;

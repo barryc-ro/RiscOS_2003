@@ -219,6 +219,9 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
 #ifdef STBWEB
     draw_highlight_box = ti->aref && ti->aref->href &&
 	((ti->aref->flags & rid_aref_LABEL) == 0 || ti->aref->href) && /* SJM: 11/05/97: made LABELs not cause text to highlight */

@@ -169,7 +169,7 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     RENDBGN(("Top work area = %d, bottom = %d\n", top, bot));
     RENDBGN(("Left = %d, right = %d, capt_size = %d\n", left, right, capt_size));
 
-    if (/*table->border > 0 &&*/ table->frame != HTML_TABLE_FRAME_VOID)
+    if (update != object_redraw_BACKGROUND && /*table->border > 0 &&*/ table->frame != HTML_TABLE_FRAME_VOID)
     {
 	const fr = table->frame;
 	const int span = -(oy_bot - oy_top);
@@ -198,14 +198,14 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    bbc_rectanglefill(ox + table->size.x - border, oy_bot, border - XF, span - YF);
 	}
     }
-
+    
     /* Then any cell borders - all or nothing exercise */
     /* We draw a line around the inside of the cell border */
     /* This is the only place should need to decompose how */
     /* we arrived at the row/col border values. If we're drawing */
     /* a line, cellspacing will have room for it, 'cause we force this. */
 
-    if (table->cellspacing > 0 && table->rules != HTML_TABLE_RULES_NONE)
+    if (update != object_redraw_BACKGROUND && table->cellspacing > 0 && table->rules != HTML_TABLE_RULES_NONE)
     {
 	if (stream_first_visable_cell(table, ox, oy, g, &x, &y))
 	{
@@ -324,7 +324,7 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 
     /* Coloured backgrounds for cells, if necessary */
 
-    if ((table->flags & rid_tf_BGCOLOR) && (doc->flags & doc_flag_DOC_COLOURS))
+    if (update == object_redraw_BACKGROUND && (table->flags & rid_tf_BGCOLOR) && (doc->flags & doc_flag_DOC_COLOURS))
     {
 	TABDBG(("Have table background colours\n"));
 

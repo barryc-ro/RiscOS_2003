@@ -489,6 +489,9 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 	return;
     }
 
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
     tai = ((rid_text_item_textarea *)ti)->area;
     has_caret = be_item_has_caret(doc, ti);
 

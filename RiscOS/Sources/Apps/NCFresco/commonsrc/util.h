@@ -296,6 +296,7 @@ extern void sound_event(sound_event_t event_num);
 #endif
 
 extern void pointer_set_position(int x, int y);
+extern void pointer_limit(int x0, int y0, int x1, int y1);
 
 /*
 

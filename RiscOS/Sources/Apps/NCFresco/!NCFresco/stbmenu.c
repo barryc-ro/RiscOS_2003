@@ -8,14 +8,17 @@
 #include <string.h>
 
 #include "akbd.h"
+#include "alarm.h"
 #include "bbc.h"
 #include "coords.h"
 #include "colourtran.h"
 #include "font.h"
 
+#include "interface.h"
 #include "config.h"
 #include "memwatch.h"
 #include "rcolours.h"
+#include "render.h"
 #include "webfonts.h"
 #include "util.h"
 
@@ -29,6 +32,9 @@
 
 #define X_BORDER 12
 #define Y_BORDER 12
+
+#define X_BORDER_HL 12
+#define Y_BORDER_HL 12
 
 #ifndef OPEN_AS_MENU
 #define OPEN_AS_MENU 0
@@ -138,10 +144,10 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	if (font_setfont(webfonts[MENU_FONT].handle) != NULL)
 	    continue;
 
-	for(h=0, i=0; i < mh->n && (h-line_space) >= top; h -= line_space, i++)
+	for (h=0, i=0; i < mh->n && (h-line_space) >= top; h -= line_space, i++)
 	    ;
 
-	for( ; i < mh->n && h >= bot; h -= line_space, i++)
+	for ( ; i < mh->n && h >= bot; h -= line_space, i++)
 	{
 	    int nfc, opcol;
 
@@ -184,17 +190,29 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	    /* draw the text itself */
 	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - webfonts[MENU_FONT].max_up);
 
+#if 0
 	    /* draw the selection box */
-            if (i == mh->highlight && pointer_mode == pointermode_OFF)
-            {
-                colourtran_setGCOL(config_colours[col_HIGHLIGHT], 0, 0, &junk);
+	    if (i == mh->highlight/*  && pointer_mode == pointermode_OFF */)
+	    {
+		colourtran_setGCOL(config_colours[col_HIGHLIGHT], 0, 0, &junk);
 
-                bbc_rectangle(ox-2, h + oy - line_space, width+4-1, line_space-1);
-                bbc_rectangle(ox, h + oy - line_space+2, width-1, line_space-4-1);
-            }
+		bbc_rectangle(ox-2, h + oy - line_space, width+4-1, line_space-1);
+		bbc_rectangle(ox, h + oy - line_space+2, width-1, line_space-4-1);
+	    }
+#endif
 	}
 
-        fe_anti_twitter(&r.g);
+#if 1
+	/* draw the selection box - inefficient */
+	{
+	    int hh = - mh->highlight * line_space;
+	    render_plinth_from_list(0, config_colour_list[render_colour_list_TEXT_HIGHLIGHT], render_plinth_NOFILL,
+				    ox - X_BORDER_HL, hh + oy - line_space - Y_BORDER_HL,
+				    width + X_BORDER_HL*2, line_space + Y_BORDER_HL*2, NULL);
+	}
+#endif
+
+	fe_anti_twitter(&r.g);
 	wimp_get_rectangle(&r, &more);
     }
 
@@ -213,32 +231,41 @@ static void fe_menu_redraw_window(wimp_w handle, fe_menu mh)
 	fe_menu_redo_window(&r, mh, 0);
 }
 
-static void fe_menu_window_click(fe_menu mh, wimp_mousestr *m)
+static int fe_menu_coords_to_index(fe_menu mh, int my)
 {
     wimp_wstate ws;
     int y;
     int line_space;
-    int right = TRUE;		/* Keep the window open if it is a middle button */
 
     line_space = get_line_space();
+
+    if (wimp_get_wind_state(mh->wh, &ws))
+	return -1;
+
+    y = ws.o.box.y1 - ws.o.y;
+
+    y = my - y;
+
+    y = -y;
+    y /= line_space;
+
+    if (y < 0)
+        y = 0;
+    if (y >= mh->n)
+        y = mh->n - 1;
+
+    return y;
+}
+
+static void fe_menu_window_click(fe_menu mh, wimp_mousestr *m)
+{
+    int right = TRUE;		/* Keep the window open if it is a middle button */
 
     if (m->bbits & (wimp_BRIGHT | wimp_BLEFT))
     {
 	right = m->bbits & wimp_BRIGHT;
 
-	if (wimp_get_wind_state(mh->wh, &ws))
-	    return;
-
-	y = ws.o.box.y1 - ws.o.y;
-
-	y = m->y - y;
-
-	y = -y;
-	y /= line_space;
-
-	/* @@@@ Do something with the click */
-
-	(mh->cb)(mh, mh->h, y, right);
+	(mh->cb)(mh, mh->h, fe_menu_coords_to_index(mh, m->y), right);
     }
 
     if (!right)
@@ -261,7 +288,7 @@ static os_error *fe_menu_window(fe_menu mh)
 
         win.behind = -1;
         win.flags = wimp_WNEW;
-        win.colours[wimp_WCWKAREABACK] = 3;
+        win.colours[wimp_WCWKAREABACK] = 0xff; /* 3; */
         win.colours[wimp_WCWKAREAFORE] = 7;
         win.colours[wimp_WCTITLEFORE] = 7;
 
@@ -315,7 +342,8 @@ static os_error *fe_menu_window(fe_menu mh)
 
 static void fe_menu_move_highlight(fe_menu mh, int dir)
 {
-    int new_highlight = mh->highlight + dir;
+    int new_highlight = (mh->highlight < 0 ? first_checked(mh) : mh->highlight) + dir;
+
     if (new_highlight < 0)
         new_highlight = 0;
     if (new_highlight >= mh->n)
@@ -371,13 +399,17 @@ void frontend_menu_update_item(fe_menu mh, int i)
 
     STBDBG(("stbmenu: update mh %p item %d\n", mh, i));
 
+    if (i < 0)
+	return;
+    
     line_space = get_line_space();
 
     r.w = mh->wh;
     r.box.x0 = - X_BORDER;
     r.box.x1 =   X_BORDER + mh->width;
-    r.box.y1 = - line_space*i       + 4;
-    r.box.y0 = - line_space*(i + 1) - 4;
+    r.box.y1 = - line_space*i       + 4 + Y_BORDER_HL; /* extra 4 is for anti-twitter protection I think */
+    r.box.y0 = - line_space*(i + 1) - 4 - Y_BORDER_HL;
+
 #if 1
     frontend_fatal_error(wimp_force_redraw(&r));
 #else
@@ -446,7 +478,6 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
         state.o.box.x1 = p.x + mh->width + 2*X_BORDER;
         state.o.box.y0 = p.y - mh->size*line_space - 2*Y_BORDER;
         state.o.x = 0;
-        state.o.y = 0;
         state.o.behind = (wimp_w)-1;
 
 	/* See if we overhang the rh safe area */
@@ -465,7 +496,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
         if (state.o.box.x0 < text_safe_box.x0)
             state.o.box.x0 = text_safe_box.x0;
 
-
+	
 	/* see if we overhang the bottom of the safe area */
         overhang = - state.o.box.y0 + text_safe_box.y0;
 
@@ -479,6 +510,10 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
 	/* then clip the top edge */
         if (state.o.box.y1 > text_safe_box.y1)
             state.o.box.y1 = text_safe_box.y1;
+
+
+	/* put the first checked in the middle of the menu */
+	state.o.y = - first_checked(mh) * line_space + (state.o.box.y1 - state.o.box.y0)/2;
 
 	/* open menu window */
 	frontend_fatal_error(wimp_open_wind(&state.o));
@@ -515,7 +550,6 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
 	return 0;
 
     menu = mm_calloc(sizeof(*menu), 1);
-
     menu->cb = cb;
     menu->h = handle;
     menu->n = n;
@@ -533,6 +567,91 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
 
 /* ------------------------------------------------------------------------------------------- */
 
+#define AUTOSCROLL_EDGE_THRESHOLD	24	/* closeness to edge to start auto-scrolling in OS units */
+#define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
+#define AUTOSCROLL_HOVER_AREA		8	/* space to stay within during DELAY period */
+
+static void fe_menu_window_autoscroll(fe_menu mh, wimp_mousestr *mp)
+{
+    static int autoscroll_yedge = 0, autoscroll_time = 0;
+    wimp_wstate state;
+    int yedge;
+
+    if (mh == NULL || mh->wh != mp->w)
+	return;
+
+    wimp_get_wind_state(mh->wh, &state);
+
+    /* check edge returns how far over the threshold we are */
+    yedge = check_edge_proximity(mp->y, state.o.box.y0, state.o.box.y1, AUTOSCROLL_EDGE_THRESHOLD);
+
+    STBDBG(("fe_menu_window_autoscroll: ypos %d window %d-%d yedge %d\n", mp->y, state.o.box.y0, state.o.box.y1, yedge));
+    
+    /* we start scrolling if we stay in one place for AUTOSCROLL_DELAY
+     * we continue scrolling as long as we are over the threshold
+     */
+    if (autoscroll_yedge)
+    {
+	autoscroll_yedge = yedge;
+
+	state.o.y += yedge*4;
+	wimp_open_wind(&state.o);
+    }
+    else if (yedge)
+    {
+	int now = alarm_timenow();
+	if (abs(yedge - autoscroll_yedge) < AUTOSCROLL_HOVER_AREA)
+	{
+	    if (now - autoscroll_time >= AUTOSCROLL_DELAY)
+	    {
+		state.o.y += yedge*4;
+		wimp_open_wind(&state.o);
+	    }
+	}
+	else
+	{
+	    autoscroll_yedge = yedge;
+	    autoscroll_time = now;
+	}
+    }
+    else
+    {
+	autoscroll_yedge = 0;
+    }
+}
+
+static void fe_menu_highlight_under_pointer(fe_menu mh, wimp_mousestr *mp)
+{
+    int new_highlight;
+
+    if (mh == NULL)
+	return;
+
+    new_highlight = mh->wh == mp->w ? fe_menu_coords_to_index(mh, mp->y) : -1;
+
+    if (new_highlight != mh->highlight)
+    {
+        int old_highlight = mh->highlight;
+        mh->highlight = new_highlight;
+
+        frontend_menu_update_item(mh, old_highlight);
+        frontend_menu_update_item(mh, new_highlight);
+    }
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+BOOL stbmenu_check_pointer(wimp_mousestr *mp)
+{
+    if (pointer_mode == pointermode_ON)
+    {
+	fe_menu_window_autoscroll(current_menu, mp);
+
+	fe_menu_highlight_under_pointer(current_menu, mp);
+    }
+    return FALSE;
+}
+
 BOOL stbmenu_check_mouse(wimp_mousestr *mp)
 {
     STBDBG(("stbmenu: mouse mh %p w %x\n", current_menu, mp->w));
@@ -549,6 +668,7 @@ BOOL stbmenu_check_mouse(wimp_mousestr *mp)
     }
 
     fe_menu_window_click(current_menu, mp);
+    
     return TRUE;
 }
 

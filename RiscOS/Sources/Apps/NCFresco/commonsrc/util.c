@@ -838,6 +838,7 @@ void sound_event(sound_event_t event_num)
  */
 
 #define osword_Mouse        0x15
+#define Mouse_DefineCoords  1   /* signed 16bit - X0, Y), X1, Y1 */
 #define Mouse_SetPosition   3   /* signed 16bit - X, Y - mouse position */
 
 #ifndef FRESCO
@@ -849,6 +850,21 @@ void pointer_set_position(int x, int y)
     block[2] = (x >> 8) & 0xff;
     block[3] = y & 0xff;
     block[4] = (y >> 8) & 0xff;
+    _kernel_osword(osword_Mouse, (int *)block);
+}
+
+void pointer_limit(int x0, int y0, int x1, int y1)
+{
+    char block[9];
+    block[0] = Mouse_DefineCoords;
+    block[1] = x0 & 0xff;
+    block[2] = (x0 >> 8) & 0xff;
+    block[3] = y0 & 0xff;
+    block[4] = (y0 >> 8) & 0xff;
+    block[5] = x1 & 0xff;
+    block[6] = (x1 >> 8) & 0xff;
+    block[7] = y1 & 0xff;
+    block[8] = (y1 >> 8) & 0xff;
     _kernel_osword(osword_Mouse, (int *)block);
 }
 #endif

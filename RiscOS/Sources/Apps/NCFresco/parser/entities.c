@@ -549,7 +549,10 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 	else if (c == '&' &&
 		 (rules & SGMLTRANS_HASH) != 0 &&
 		 in_bytes > 1 &&
-		 (in_ptr[0] == '#' || isdigit(in_ptr[0]))) /* handle &160; as a legal case */
+		 (in_ptr[0] == '#'/*  || isdigit(in_ptr[0]) */))
+	    /* SJM: 30/09/97. Don't allow numbers without a hash. I
+	       don't know why I put this in in the first place but
+	       NS doesn't do it */
 	{
 	    char *end;
 	    long x;

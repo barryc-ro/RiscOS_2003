@@ -1178,4 +1178,34 @@ os_error *fe_start_task(const char *cli, wimp_t *task_out)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+int check_edge_proximity(int pos, int left, int right, int threshold)
+{
+    int dleft, dright, r;
+
+    /* check threshold isn't too big for window */
+    if (threshold > (right-left)/2)
+	threshold = (right-left)/2;
+
+    /* calculate distances from window */
+    dleft = pos - left;
+    dright = right - pos;
+    r = 0;
+
+    if (dleft < dright)
+    {
+	r = dleft - threshold;
+	if (r > 0)
+	    r = 0;
+    }
+    else
+    {
+	r = threshold - dright;
+	if (r < 0)
+	    r = 0;
+    }
+    return r;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 /* eof feutils.c*/

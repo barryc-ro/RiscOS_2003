@@ -1072,7 +1072,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		v->scrolling = /* config_display_frames_scrollbars && config_display_frames_top_level ? fe_scrolling_AUTO :  */fe_scrolling_INVISIBLE;
 
 	    v->fast_load = FALSE;
-	    v->dont_add_to_history = FALSE;
+/* 	    v->dont_add_to_history = FALSE; Don't need to reset this as it is always set correctly in open_url */
 	    v->transient_position = fe_position_UNSET;
 
 	    v->offline_mode = keyboard_state = fe_keyboard_ONLINE;
@@ -1882,7 +1882,8 @@ int fe_check_download_finished(fe_view v)
 		frontend_view_redraw(top, NULL); /* put inside because of ncint:select */
 	    }
 #endif
-/* 	    if (strcmp(top->name, "TARGET_DBOX") == 0) */
+	    if (strncmp(top->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
+		pointer_limit(top->box.x0, top->box.y0, top->box.x1, top->box.y1);
 	}
 	else
 	{
@@ -3613,34 +3614,6 @@ static fe_view find_view(wimp_w w)
 
 /* ------------------------------------------------------------------------------------------- */
 
-static int check_edge_proximity(int pos, int left, int right, int threshold)
-{
-    int dleft, dright, r;
-
-    /* check threshold isn't too big for window */
-    if (threshold > (right-left)/2)
-	threshold = (right-left)/2;
-
-    /* calculate distances from window */
-    dleft = pos - left;
-    dright = right - pos;
-    r = 0;
-
-    if (dleft < dright)
-    {
-	r = dleft - threshold;
-	if (r > 0)
-	    r = 0;
-    }
-    else
-    {
-	r = threshold - dright;
-	if (r < 0)
-	    r = 0;
-    }
-    return r;
-}
-
 static int scrollsafe(int scroll)
 {
     return scroll * 4;
@@ -3776,6 +3749,9 @@ static void fe_idle_handler(void)
         return;
     }
 
+    /* check for menu mode stuff - returns if over menu window */
+    stbmenu_check_pointer(&m);
+    
     /* if pointer not moved and menu up then special menu help code */
     if (!pointer_moved && use_toolbox && tb_menu_showing())
     {
@@ -3891,7 +3867,7 @@ static void fe_idle_handler(void)
 
     /* check for autoscrolling */
     fe_check_autoscroll(v, &m);
-    
+
     /* otherwise update link from current position  */
     {
 	be_item ti = NULL;

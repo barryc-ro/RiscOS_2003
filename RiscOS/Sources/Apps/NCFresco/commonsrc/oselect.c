@@ -286,7 +286,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     char *str = NULL;
     font_string fstr;
     int fg, bg;
-    BOOL selected = backend_is_selected(doc, ti);
+    BOOL selected;
     int whichfont;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
@@ -298,6 +298,11 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    highlight_render_outline(ti, doc, hpos, bline);
 	return;
     }
+
+    if (update == object_redraw_BACKGROUND)
+	return;
+    
+    selected = backend_is_selected(doc, ti);
 
     fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
 
