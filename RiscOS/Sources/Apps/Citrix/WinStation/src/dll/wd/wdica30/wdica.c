@@ -1002,7 +1002,7 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
              */
             if ( pIca->KbdMode == Kbd_Scan ) {
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
                 if ( !pIca->fKbdShiftStateSet ) {
 
                     BYTE bLED = (BYTE) pIca->ShiftState;

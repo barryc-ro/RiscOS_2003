@@ -68,18 +68,8 @@ typedef struct _PORTENTRY {
  * Initialize the port entries
  */
 
-static PORTENTRY Ports[8] = {
+static PORTENTRY Ports[MAX_PRINTER_PORTS] = {
        { "printer:", 0, 0, FALSE, 0 }
-#if 0
-       { "LPT2:", 0, 0, FALSE, 0 },
-       { "LPT3:", 0, 0, FALSE, 0 },
-       { "LPT4:", 0, 0, FALSE, 0 },
-
-       { "COM1", 0, 0, FALSE, 0 },
-       { "COM2", 0, 0, FALSE, 0 },
-       { "COM3", 0, 0, FALSE, 0 },
-       { "COM4", 0, 0, FALSE, 0 }
-#endif
    };
 
 

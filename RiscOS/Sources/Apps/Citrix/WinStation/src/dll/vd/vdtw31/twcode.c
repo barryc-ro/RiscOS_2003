@@ -88,14 +88,39 @@
 
 /* arm assembler defines */
 
-#define code_ALWAYS	0xE0000000
+#define code_ALWAYS	(0xE << 28)
+#define code_EQ		(0 << 28)
+#define code_NE		(1 << 28)
 
 #define code_AND	(0 << 21)
 #define code_EOR	(1 << 21)
+#define code_ADD	(4 << 21)
+#define code_CMP	((0xA << 21) | code_S)
+#define code_CMN	((0xB << 21) | code_S)
 #define code_ORR	(0xC << 21)
 #define code_MOV	(0xD << 21)
 #define code_BIC	(0xE << 21)
 #define code_MVN	(0xF << 21)
+
+#define code_LDR	((1<<26) + (1<<20))
+#define code_LDRB	((1<<26) + (1<<22) + (1<<20))
+#define code_STR	(1<<26)
+#define code_STRB	((1<<26) + (1<<22))
+
+#define code_I		(1<<25)
+#define code_S		(1<<20)
+
+#define shift_LSL	(0<<5)
+#define shift_LSR	(1<<5)
+#define shift_ASR	(2<<5)
+#define shift_ROR	(3<<5)
+
+#define VAL(n)			(code_I + (n))
+#define SHIFT(r, t, s)		((r) + (t) + ((s) << 4))
+#define REGSHIFT(r, t, s)	((r) + (t) + (1<<4) + ((s) << 8))
+
+#define PREINC(n)		((1<<24) + (1<<23) + (1<<21) + (n))	// pre/up/writeback
+#define REGINDEX(r)		((1<<24) + (1<<23) + (r) + code_I)	// pre/up
 
 #define OP1(a)	((a) << 16)
 #define DST(a)	((a) << 12)
@@ -147,6 +172,41 @@ static char *logop_name[] =
     "BIC",
     "MOV"
 };
+#endif
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+#ifdef DEBUG
+void dump_code(unsigned *code)
+{
+    extern int ghLogHandle;
+    extern int guLogFlags;
+    extern int guLogClass;
+
+    if (ghLogHandle != -1 && (guLogFlags & LOG_FILE) != 0 && (guLogClass & TC_TW) != 0)
+    {
+	unsigned c, *cp = code;
+	do
+	{
+	    char *s;
+	    char buf[12];
+	    int n;
+
+	    c = *cp;
+
+	    n = sprintf(buf, "%08x: ", c);
+	    write( ghLogHandle, buf, n );
+
+	    _swix(Debugger_Disassemble, _INR(0,1) | _OUTR(1,2), c, cp, &s, &n);
+	    write( ghLogHandle, s, n );
+
+	    write( ghLogHandle, "\n", 1 );
+
+	    cp++;
+	}
+	while (c != code_MOV_pc_lr);
+    }
+}
 #endif
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -203,7 +263,7 @@ static int get_operand(int *parse_string)
  *   rn_SPECIAL = pushed result
  */
 
-static int rop3_function(unsigned *code, int rop3)
+int build_rop3_function(unsigned *code, int rop3)
 {
     int parse_string_index = (rop3 & EPS_INDEX) >> EPS_INDEX_SHIFT;
     int parse_string = ParseStrings[parse_string_index];
@@ -317,42 +377,42 @@ static int rop3_function(unsigned *code, int rop3)
     return code - code_start;
 }
 
-pp_function make_function(int rop3)
+int build_end_function(unsigned *code)
 {
-    unsigned *code = code_array;
-
-    code += rop3_function(code, rop3);
-
-    *code = code_MOV_pc_lr;	// note, no increment so SWI gets inclusive size
-
-    LOGERR(_swix(OS_SynchroniseCodeAreas, _INR(0,2), 1, code_array, code));
-
-    dump_code(code_array);
-    
-    return (pp_function)code_array;
+    *code = code_MOV_pc_lr;
+    return 1;
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
 
 #if 0
 
-#define CONST(n)
-#define PREINC(n)
-#define SHIFT(reg, shift)
+/*
+ * IN
+ *  rn_SOURCE_*
+ * OUT
+ *  rn_PIXEL
+ *  rn_SOURCE
+ *  rn_SOURCE_PHASE
+ */
 
-static void construct_pixel(int *code)
+static int construct_pixel(unsigned *code_start, void *coltrans)
 {
-    *code++ = construct_arith	(code_ALWAYS,	rn_PIXEL,		code_AND, rn_SOURCE,		rn_SOURCE_MASK);
-    *code++ = construct_arith	(code_ALWAYS,	rn_SOURCE_PHASE,	code_ADD, rn_SOURCE_PHASE,	rn_SOURCE_BPP);
-    *code++ = construct_cmp	(code_ALWAYS,				code_CMP, rn_SOURCE_PHASE,	CONST(32));
+    unsigned *code = code_start;
+    
+    *code++ = code_ALWAYS	| DST(rn_PIXEL)		| code_AND | OP1(rn_SOURCE)		| OP2(rn_SOURCE_MASK);
+    *code++ = code_ALWAYS	| DST(rn_SOURCE_PHASE)	| code_ADD | OP1(rn_SOURCE_PHASE)	| OP2(rn_SOURCE_BPP);
+    *code++ = code_ALWAYS 				| code_CMP | OP1(rn_SOURCE_PHASE)	| VAL(32);
 
-    *code++ = construct_load	(code_EQ,	rn_SOURCE,		rn_SOURCE_PTR,			PREINC(4));
-    *code++ = construct_arith	(code_EQ,	rn_SOURCE_PHASE,	code_MOV, 0,			CONST(0));
+    *code++ = code_EQ		| DST(rn_SOURCE)	| code_LDR | OP1(rn_SOURCE_PTR)		| PREINC(4);
+    *code++ = code_EQ		| DST(rn_SOURCE_PHASE)	| code_MOV 				| VAL(0);
 
-    *code++ = construct_arith	(code_NE,	rn_SOURCE,		code_MOV, 0,			REGSHIFT(rn_SOURCE, rn_SOURCE_BPP));
+    *code++ = code_NE		| DST(rn_SOURCE)	| code_MOV				| REGSHIFT(rn_SOURCE, shift_LSL, rn_SOURCE_BPP);
 
-    if (line->coltrans)
-	*code++ = construct_load(code_ALWAYS,	rn_PIXEL,		rn_COLTRANS,			REGINDEX(rn_PIXEL));
+    if (coltrans)
+	*code++ = code_ALWAYS	| DST(rn_PIXEL)		| code_LDR | OP1(rn_COLTRANS)		| REGINDEX(rn_PIXEL);
+
+    return code - code_start;
 }
 #endif
 

@@ -32,6 +32,7 @@
 #include "version.h"
 #include "session.h"
 #include "main.h"
+#include "server.h"
 
 #include "icaclient.h"
 
@@ -133,6 +134,8 @@ static IdBlock event_id_block;      /* declare an event block for use with toolb
 
 static int ToolBox_EventList[] =
 {
+    tbres_event_SERVER_CONNECT,
+    tbres_event_MENU_CONNECT,
     tbres_event_CONNECT,
     tbres_event_DISCONNECT,
     tbres_event_QUIT,
@@ -172,9 +175,15 @@ static int scrap_ref = -1;
 
 static int task_handle = 0;
 static BOOL running = TRUE;
-static int quitting = 0;
+
+#define quitting_NO		0
+#define quitting_SELF		1
+#define quitting_DESKTOP	2
+
+static int quitting = quitting_NO;
 
 static ObjectId disconnect_id = NULL_ObjectId;
+static ObjectId connect_menu_id = NULL_ObjectId;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -417,8 +426,37 @@ static int icon_menu_handler(int event_code, ToolboxEvent *event, IdBlock *id_bl
                          void *handle)
 {
     BOOL connected = session_connected(current_session);
+
     LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT, !connected));
     LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_DISCONNECT, !connected));
+
+    if (connect_menu_id == NULL_ObjectId)
+	connect_menu_id = serverlist_create_menu( APPSRV_FILE );
+
+    if (connect_menu_id != NULL_ObjectId)
+	LOGERR(menu_set_sub_menu_show(0, id_block->self_id, tbres_c_CONNECT_SUBMENU, connect_menu_id));
+    
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(handle);
+}
+
+static int server_connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+				  void *handle)
+{
+    const char *name = serverlist_get_name(id_block->self_component);
+
+    TRACE((TC_UI, TT_API1, "server_connect_handler: component %d name '%s'\n", id_block->self_component, strsafe(name)));
+
+    if (name)
+    {
+	current_session = session_open_appsrv(name);
+	
+	if (current_session)
+	    connection_state(connection_OPENED);
+    }
+    
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -460,11 +498,20 @@ static int confirm_handler(int event_code, ToolboxEvent *event, IdBlock *id_bloc
 {
     kill_current_session();
 
-    if (quitting != 0)
-	running = FALSE;
+    switch (quitting)
+    {
+    case quitting_NO:
+	break;
 
-    if (quitting == 2)
+    case quitting_SELF:
+	running = FALSE;
+	break;
+
+    case quitting_DESKTOP:
+	running = FALSE;
 	LOGERR(wimp_process_key(0x1FC));
+	break;
+    }
     
     return 1;
     NOT_USED(event_code);
@@ -484,7 +531,7 @@ static int try_disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *
 			       id_block ? id_block->self_id : NULL_ObjectId,
 			       id_block ? id_block->self_component : NULL_ComponentId));
 
-    quitting = 0;
+    quitting = quitting_NO;
 
     return 1;
     NOT_USED(event_code);
@@ -506,7 +553,7 @@ static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
 	LOGERR(toolbox_show_object(0, disconnect_id, Toolbox_ShowObject_Centre, NULL,
 				   id_block ? id_block->self_id : NULL_ObjectId,
 				   id_block ? id_block->self_component : NULL_ComponentId));
-	quitting = 1;
+	quitting = quitting_SELF;
     }
 
     return 1;
@@ -525,7 +572,7 @@ static int pre_quit_handler(WimpMessage *message, void *handle)
 	WimpMessage reply;
 
 	/* see if it is just us or others also */
-	quitting = message->hdr.size == 20 || (message->data.words[0] & 1) == 0 ? 2 : 1;
+	quitting = message->hdr.size == 20 || (message->data.words[0] & 1) == 0 ? quitting_DESKTOP : quitting_SELF;
 
 	/* acknowledge the message to stop the quit */
 	reply = *message;
@@ -545,6 +592,8 @@ static int pre_quit_handler(WimpMessage *message, void *handle)
 
 static int quit_handler(WimpMessage *message, void *handle)
 {
+    TRACE((TC_UI, TT_API1, "quit_handler: sess %p\n", current_session));
+    
     kill_current_session();
 
     running = FALSE;
@@ -884,6 +933,36 @@ static int control_handler(WimpMessage *message, void *handle)
     }
     }
 
+    return 1;
+    NOT_USED(handle);
+}
+
+static int config_handler(WimpMessage *message, void *handle)
+{
+    icaclient_message_config *config = (icaclient_message_config *)&message->data;
+    switch (config->reason)
+    {
+    case icaclient_CONFIG_FILE_UPDATED:
+	if (config->flags & icaclient_config_APPSRV_CHANGED)
+	{
+	    /* if the AppSrv file has changed then uncache the server details */
+	    serverlist_uncache();
+
+	    /* and get rid of the menu object */
+	    if (connect_menu_id != NULL_ObjectId)
+	    {
+		ObjectId menu_id;
+		ComponentId menu_cmp;
+	    
+		if (LOGERR(toolbox_get_parent(0, connect_menu_id, &menu_id, &menu_cmp)) == NULL && menu_id != NULL_ObjectId)
+		    LOGERR(menu_set_sub_menu_show(0, menu_id, menu_cmp, NULL_ObjectId));
+		
+		LOGERR(toolbox_delete_object(0, connect_menu_id));
+		connect_menu_id = NULL_ObjectId;
+	    }
+	}
+	break;
+    }
     return 1;
     NOT_USED(handle);
 }
@@ -1461,12 +1540,17 @@ static void initialise(int argc, char *argv[])
 
     /* other general handlers */
     err_fatal(event_register_wimp_handler(0, Wimp_ENull, null_handler, NULL));
+
     err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
+
     err_fatal(event_register_message_handler(wimp_MOPENURL, openurl_handler, NULL));
     err_fatal(event_register_message_handler(MESSAGE_URI_MPROCESS, openuri_handler, NULL));
+
     err_fatal(event_register_message_handler(message_ICACLIENT_CONTROL, control_handler, NULL));
+    err_fatal(event_register_message_handler(message_ICACLIENT_CONFIG, config_handler, NULL));
+
     err_fatal(event_register_message_handler(Wimp_MSaveDesktop, save_desktop_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
@@ -1475,6 +1559,8 @@ static void initialise(int argc, char *argv[])
 
     err_fatal(event_register_toolbox_handler(-1, ProgInfo_AboutToBeShown, proginfo_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_SHOWING_ICON_MENU, icon_menu_handler, NULL));
+
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_SERVER_CONNECT, server_connect_handler, NULL));
 
     /* initialise application components */
 
@@ -1535,7 +1621,7 @@ int main(int argc, char *argv[])
 
     err_fatal(event_set_mask(event_mask));
 
-    TRACE((TC_UI, TT_API1, "(1) Entering poll loop\n"));
+    TRACE((TC_UI, TT_API1, "(1) Entering poll loop"));
     while (running)
     {
 	int event_code;
@@ -1550,7 +1636,7 @@ int main(int argc, char *argv[])
 #endif
 
     	if (event_code != 0)
-    	    TRACE((TC_UI, TT_API1, "(7) Poll: %d\n", event_code));
+    	    TRACE((TC_UI, TT_API1, "(7) Poll: %d running %d quitting %d", event_code, running, quitting));
     }
 
     return EXIT_SUCCESS;

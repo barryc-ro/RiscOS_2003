@@ -472,21 +472,29 @@ KbdReadScan( int * pScanCode, int * pShiftState )
  *
  ******************************************************************************/
 
+#define led_SCROLL_LOCK_ON	(1<<1)
+#define led_NUM_LOCK_OFF	(1<<2)
+#define led_CAPS_LOCK_OFF	(1<<4)
+
+#define led_MASK		(led_SCROLL_LOCK_ON | led_NUM_LOCK_OFF | led_CAPS_LOCK_OFF)
+
 int WFCAPI
 KbdSetLeds( int ShiftState )
 {
     int state = 0;
 
+    TRACE((TC_KEY, TT_API1, "KbdSetLeds: %x", ShiftState));
+
     if (ShiftState & KSS_SCROLLLOCKON)
-	state |= 1<<1;
+	state |= led_SCROLL_LOCK_ON;
 
     if ((ShiftState & KSS_NUMLOCKON) == 0)
-	state |= 1<<2;
+	state |= led_NUM_LOCK_OFF;
 
     if ((ShiftState & KSS_CAPSLOCKON) == 0)
-	state |= 1<<4;
+	state |= led_CAPS_LOCK_OFF;
 
-    LOGERR(_swix(OS_Byte, _INR(0,2), 202, state, ~((1<<1) | (1<<2) | (1<<4))));
+    LOGERR(_swix(OS_Byte, _INR(0,2), 202, state, ~led_MASK));
     LOGERR(_swix(OS_Byte, _IN(0), 118));
 
     return( CLIENT_STATUS_SUCCESS );

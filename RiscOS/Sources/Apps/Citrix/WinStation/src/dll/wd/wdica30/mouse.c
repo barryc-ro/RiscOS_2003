@@ -121,7 +121,7 @@ IcaSetMousePosition( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 
     Y = (USHORT) *((PUSHORT)pInputBuffer);
 
-#if defined(DOS) || defined(RISCOS)
+#if defined(DOS)/* || defined(RISCOS) */
     rc = MousePosition( X, Y );
     ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
 #endif

@@ -136,6 +136,7 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} 
 .SUFFIXES:	.c .s .o .oz .od .or
 
 .c.o:;	$(CC) $< -o $@     -DROM=0             $(CCFLAGS)
+#.c.o:;	$(CC) $<     -E -C -DROM=0             $(CCFLAGS) > $@
 
 .c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
 
@@ -588,6 +589,7 @@ VDTW31LIBSRC=	\
 		src/dll/vd/vdtw31/pixpack.c \
 		src/dll/vd/vdtw31/tw.c \
 		src/dll/vd/vdtw31/twbez.c \
+		src/dll/vd/vdtw31/twcode.c \
 		src/dll/vd/vdtw31/twdata.c \
 		src/dll/vd/vdtw31/twro.c \
 		src/dll/vd/vdtw31/twroot.c \
@@ -613,6 +615,7 @@ VDTW31LIBOBJS=	\
 		src/dll/vd/vdtw31/pixpack.o \
 		src/dll/vd/vdtw31/tw.o \
 		src/dll/vd/vdtw31/twbez.o \
+		src/dll/vd/vdtw31/twcode.o \
 		src/dll/vd/vdtw31/twdata.o \
 		src/dll/vd/vdtw31/twro.o \
 		src/dll/vd/vdtw31/twroot.o \
@@ -638,6 +641,7 @@ VDTW31LIBOBJSD=	\
 		src/dll/vd/vdtw31/pixpack.od \
 		src/dll/vd/vdtw31/tw.od \
 		src/dll/vd/vdtw31/twbez.od \
+		src/dll/vd/vdtw31/twcode.od \
 		src/dll/vd/vdtw31/twdata.od \
 		src/dll/vd/vdtw31/twro.od \
 		src/dll/vd/vdtw31/twroot.od \
@@ -663,6 +667,7 @@ VDTW31LIBOBJSZ=	\
 		src/dll/vd/vdtw31/pixpack.oz \
 		src/dll/vd/vdtw31/tw.oz \
 		src/dll/vd/vdtw31/twbez.oz \
+		src/dll/vd/vdtw31/twcode.oz \
 		src/dll/vd/vdtw31/twdata.oz \
 		src/dll/vd/vdtw31/twro.oz \
 		src/dll/vd/vdtw31/twroot.oz \
@@ -829,13 +834,16 @@ MODULEWRAP_ROM=	src/app/ModuleWrap.oz
 MODULEWRAP_RAM=	src/app/ModuleWrap.or
 
 APPSRC=		src/app/connect.c src/app/main.c \
-		src/app/session.c src/app/utils.c
+		src/app/session.c src/app/utils.c src/app/server.c
+
 APPOBJS=	src/app/connect.o src/app/main.o \
-		src/app/session.o src/app/utils.o
+		src/app/session.o src/app/utils.o src/app/server.o
+
 APPOBJSD=	src/app/connect.od src/app/main.od \
-		src/app/session.od src/app/utils.od
+		src/app/session.od src/app/utils.od src/app/server.od
+
 APPOBJSZ=	src/app/connect.oz src/app/main.oz \
-		src/app/session.oz src/app/utils.oz
+		src/app/session.oz src/app/utils.oz src/app/server.oz
 
 ${APP}: ${APPOBJS} ${APPLIBS} ${BASELIBS} local_dirs
 	${LD} ${LDFLAGS} -o ${APP} ${APPOBJS} ${APPLIBS} ${BASELIBS}

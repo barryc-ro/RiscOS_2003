@@ -272,11 +272,7 @@ static ICADATA ICAData[] =
    -1, IcaSetText,                         // PACKET_SET_TEXT         0x34
     1, IcaSetGlobalAttr,                   // PACKET_SET_GLOBAL_ATTR  0x35
     3, IcaSetVideoMode,                    // PACKET_SET_VIDEO_MODE   0x36
-#ifdef DOS
     1, IcaSetLed,                          // PACKET_SET_LED          0x37
-#else
-    1, NULL,                               // PACKET_SET_LED          0x37
-#endif
     2, IcaVirtualFlush,                    // PACKET_VIRTUAL_FLUSH    0x38
    -2, NULL,                               // PACKET_MOUSE2           0x39
     0, NULL,                               // PACKET_COMMAND_CACHE    0x3A

@@ -22,8 +22,7 @@
 #define tbres_event_SHOWING_ICON_MENU	0x2000
 #define tbres_event_MENU_CONNECT	0x2001
 
-#define tbres_event_SERVER_CONNECT	0x3000 // range of 256 events for the server menu
-#define tbres_event_SERVER_CONNECT_MASK	0x00FF
+#define tbres_event_SERVER_CONNECT	0x3000
 
 #define tbres_DISCONNECT_W	"disconnectW"
 #define tbres_ICON		"mainI"

@@ -2,104 +2,232 @@
  *
  */
 
+#include "windows.h"
+
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "tboxlibs/toolbox.h"
 #include "tboxlibs/menu.h"
 
+#include "../inc/client.h"
+#include "../inc/debug.h"
+
+#include "utils.h"
+#include "tbres.h"
+#include "server.h"
+
+/* -------------------------------------------------------------------------------- */
 
 static char *server_section = NULL;
-static char **server_list = NULL;
+static const char **server_list = NULL;
 static int server_count = 0;
 
-void servermenu_create(void)
+/* -------------------------------------------------------------------------------- */
+
+extern int GetSection( PCHAR, PCHAR, PCHAR * );
+
+/* -------------------------------------------------------------------------------- */
+
+static int count_entries(const char *s)
 {
-    char *buf;
-    if (GetSection( INI_APPSERVERLIST, APPSRV_FILE, &buf) == CLIENT_STATUS_SUCCESS)
+    int count = 0;
+
+    while (*s)
     {
-	char *s, *end, **list;
-	int count;
-	MenuTemplateHeader *menu;
-	MenuTemplate *item;
+	s += strlen(s) + 1;
+	count++;
+    }
 
-	/* count number of entries */
-	count = 0;
-	s = buf;
-	do
+    return count;
+}
+
+static int list_servers( const char *file, char **buf_out, const char ***list_out )
+{
+    int count = 0;
+    char *buf = NULL;
+    const char **list = NULL;
+
+    TRACE((TC_UI, TT_API1, "list_servers: '%s'", file));
+
+    if (GetSection( INI_APPSERVERLIST, (PCHAR)file, &buf) == CLIENT_STATUS_SUCCESS)
+    {
+	TRACE((TC_UI, TT_API1, "list_servers: Section @%p", buf));
+
+	count = count_entries(buf);
+
+	TRACE((TC_UI, TT_API1, "list_servers: %d entries", count));
+	
+	if (count)
 	{
-	    end = strchr(s, '=');
-	    if (end)
+	    if ((list = malloc(count * sizeof(char *))) != NULL)
 	    {
-		count++;
-		s = end + 1;
-	    }
-	}
-	while (end);
+		char *s = buf, *end;
+		int i = 0;
 
-	menu = NULL;
-	list = NULL;
-
-	if (count &&
-	    (menu = sizeof(MenuTemplateHeader) + count * sizeof(MenuTemplate)) != NULL &&
-	    (list = malloc(count * sizeof(char *))) != NULL)
-	{
-	    int cmp;
-
-	    /* setup header */
-	    menu->flags = 0;
-	    menu->title = msgs_lookup("MserverT");
-	    menu->max_title = strlen(menu->title);
-	    menu->help_message = msgs_lookup("MserverH");
-	    menu->max_help = strlen(menu->help_message);
-	    menu->show_event = 0;
-	    menu->hide_event = 0;
-	    menu->num_entries = count;
-
-	    item = (MenuTemplate *)(menu + 1);
-	    
-	    s = buf;
-	    cmp = 0;
-	    do
-	    {
-		/* end the server name at the equals */
-		end = strchr(s, '=');
-		if (end)
+		while (*s)
 		{
-		    /* terminate string for convenience */
-		    *end = '\0';
+		    char *next = s + strlen(s) + 1;
 
-		    /* process string at 's' */
-		    item->flags = 0;
-		    item->component_id = cmp;
-		    item->text = s;
-		    item->max_text = strlen(item->text);
-		    item->click_show = NULL;
-		    item->submenu_show = NULL;
-		    item->submenu_event = 0;
-		    item->click_event = tbres_event_SERVER_CONNECT + cmp;
-		    item->help_message = msgs_lookup("MserverHi");
-		    item->max_entry_help = strlen(item->help_message);
+		    TRACE((TC_UI, TT_API1, "list_servers: '%s'", s));
+
+		    /* end the server name at the equals */
+		    end = strchr(s, '=');
+		    if (end)
+			*end = '\0';
 
 		    /* save pointer to string */
-		    list[cmp] = s;
-		    
-		    /* increment component */
-		    cmp++;
+		    list[i++] = s;
 
-		    /* skip whitespace to start of next string */
-		    for (s = end+1; *s && isspace(*s); s++)
-			;
+		    s = next;
 		}
 	    }
-	    while (*s);
-	}
-	else
-	{
-	    free(menu);
-	    free(list);
 	}
     }
 
-    server_count = count;
-    server_section = buf;
-    server_list = list;
+    FlushPrivateProfileCache();
+
+    *buf_out = buf;
+    *list_out = list;
+
+    return count;
 }
+
+static MenuTemplate *create_menu_structure(int count, const char *list[], int *menu_size)
+{
+    MenuTemplate *menu = NULL;
+
+    TRACE((TC_UI, TT_API1, "create_menu_structure: count %d strings %p", count, list));
+    
+    *menu_size = sizeof(MenuTemplateHeader) + (count ? count : 1) * sizeof(MenuTemplateEntry);
+
+    if ((menu = malloc(*menu_size)) != NULL)
+    {
+	MenuTemplateHeader *hdr;
+	MenuTemplateEntry *item;
+	char *help;
+	int cmp, help_len;
+
+	/* setup header */
+	hdr = &menu->hdr;
+	hdr->flags = 0;
+	hdr->title = utils_msgs_lookup("MserverT");
+	hdr->max_title = strlen(hdr->title) + 1;
+	hdr->help_message = utils_msgs_lookup("MserverH");
+	hdr->max_help = strlen(hdr->help_message) + 1;
+	hdr->show_event = 0;
+	hdr->hide_event = 0;
+
+	help = utils_msgs_lookup("MserverHi");
+	help_len = strlen(help) + 1;
+	
+	item = menu_template_entry(menu, 0);
+
+	if (count == 0)
+	{
+	    hdr->num_entries = 1;
+
+	    item->flags = Menu_Entry_Faded;
+	    item->component_id = 0;
+	    item->text = (char *)utils_msgs_lookup("MserverNone");
+	    item->max_text = strlen(item->text) + 1;
+	    item->click_show = NULL;
+	    item->submenu_show = NULL;
+	    item->submenu_event = 0;
+	    item->click_event = 0;
+	    item->help_message = help;
+	    item->max_entry_help = help_len;
+	}
+	else
+	{
+	    hdr->num_entries = count;
+	    
+	    /* process string at 's' */
+	    for (cmp = 0; cmp < count; cmp++, item++)
+	    {
+		const char *s = list[cmp];
+
+		TRACE((TC_UI, TT_API1, "create_menu_structure: string %d %p", cmp, s));
+		TRACE((TC_UI, TT_API1, "create_menu_structure: '%s'", s));
+
+		item->flags = 0;
+		item->component_id = cmp;
+		item->text = (char *)s;
+		item->max_text = strlen(s) + 1;
+		item->click_show = NULL;
+		item->submenu_show = NULL;
+		item->submenu_event = 0;
+		item->click_event = tbres_event_SERVER_CONNECT;
+		item->help_message = help;
+		item->max_entry_help = help_len;
+	    }
+	}
+    }
+
+    TRACE((TC_UI, TT_API1, "create_menu_structure: returns %p", menu));
+
+    return menu;
+}
+
+/* -------------------------------------------------------------------------------- */
+
+ObjectId serverlist_create_menu( const char *file )
+{
+    MenuTemplate *menu;
+    int menu_size;
+    ObjectId id;
+
+    TRACE((TC_UI, TT_API1, "serverlist_create_menu: '%s'", file));
+
+    server_count = list_servers( file, &server_section, &server_list);
+    menu = create_menu_structure( server_count, server_list, &menu_size );
+
+    id = NULL;
+    if (menu)
+    {
+	ObjectTemplateHeader templ;
+	templ.object_class = Menu_ObjectClass;
+	templ.flags = Object_Shared;
+	templ.version = 102;
+	strcpy(templ.name, "serverM");
+	templ.total_size = sizeof(templ);
+	templ.body = menu;
+	templ.body_size = menu_size;
+	
+	LOGERR(toolbox_create_object(Toolbox_CreateObject_InCore, &templ, &id));
+    }
+
+    TRACE((TC_UI, TT_API1, "serverlist_create_menu: returns id %p", id));
+
+    free(menu);
+    /* don't free the names as we need to be able to look them up later */
+    
+    return id;
+}
+
+const char *serverlist_get_name( int index )
+{
+    if (index < 0 || index >= server_count)
+	return NULL;
+
+    if (server_list == NULL)
+	return NULL;
+    
+    return server_list[index];
+}
+
+void serverlist_uncache(void)
+{
+    free(server_section);
+    server_section = NULL;
+
+    free(server_list);
+    server_list = NULL;
+
+    server_count = 0;
+}
+
+/* -------------------------------------------------------------------------------- */
 
 /* eof app/server.c */
