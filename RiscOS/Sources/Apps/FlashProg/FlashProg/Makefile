@@ -132,17 +132,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.flashprog
-o.module:	h.error
-o.flashprog:	c.flashprog
-o.flashprog:	C:h.kernel
-o.flashprog:	C:h.swis
-o.flashprog:	C:h.time
-o.flashprog:	h.module
-o.flashprog:	h.flashprog
-o.flashprog:	h.error
-o.flashprog:	<Lib$Dir>.DebugLib.h.DebugLib
