@@ -14,7 +14,7 @@ STANDARDOBJ=aaof.o asd.o asm.o
 RISCiXOBJ=aoutobj.o dbx.o uasm.o
 
 OBJALL=driver.o gen.o mcdep.o peephole.o aetree.o bind.o \
-builtin.o cg.o codebuf.o compiler.o cse.o csescan.o sr.o flowgraf.o \
+builtin.o cg.o codebuf.o compiler.o cse.o csescan.o sr.o flowgraf.o inline.o \
 jopprint.o misc.o regalloc.o regsets.o store.o lex.o pp.o sem.o simplify.o \
 syn.o vargen.o version.o ${STANDARDOBJ}
 
@@ -40,6 +40,8 @@ noarg: ${TARGET}
 	@echo "Made ${TARGET} (the default target)"
 
 # Dependencies
+inline.o: inline.c
+	$(CC) $(CFLAGS) $(CFLinline) inline.c -o inline.o
 aaof.o:	aaof.c
 aaof.o:	mcdpriv.h
 aaof.o:	ops.h
