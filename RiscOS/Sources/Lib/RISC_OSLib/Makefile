@@ -192,6 +192,8 @@ HEADERS =\
  RISC_OSLib:h.fileicon \
  RISC_OSLib:h.flex \
  RISC_OSLib:h.font \
+ RISC_OSLib:h.fontlist \
+ RISC_OSLib:h.fontselect \
  RISC_OSLib:h.heap \
  RISC_OSLib:h.help \
  RISC_OSLib:h.magnify \
@@ -627,6 +629,8 @@ RISC_OSLib:h.event: rlib.h.event;            ${CP} rlib.h.event $@ ${CPFLAGS}
 RISC_OSLib:h.fileicon: rlib.h.fileicon;      ${CP} rlib.h.fileicon $@ ${CPFLAGS}
 RISC_OSLib:h.flex: rlib.h.flex;              ${CP} rlib.h.flex $@ ${CPFLAGS}
 RISC_OSLib:h.font: rlib.h.font;              ${CP} rlib.h.font $@ ${CPFLAGS}
+RISC_OSLib:h.fontlist: rlib.h.fontlist;      ${CP} rlib.h.fontlist $@ ${CPFLAGS}
+RISC_OSLib:h.fontselect: rlib.h.fontselect;  ${CP} rlib.h.fontselect $@ ${CPFLAGS}
 RISC_OSLib:h.heap: rlib.h.heap;              ${CP} rlib.h.heap $@ ${CPFLAGS}
 RISC_OSLib:h.help: rlib.h.help;              ${CP} rlib.h.help $@ ${CPFLAGS}
 RISC_OSLib:h.magnify: rlib.h.magnify;        ${CP} rlib.h.magnify $@ ${CPFLAGS}
