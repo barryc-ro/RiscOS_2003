@@ -56,6 +56,7 @@
 #include "errors.h"
 #include "aeops.h"
 #include "codebuf.h"
+#include "inline.h"
 
 #ifdef CPLUSPLUS
 static bool ispurefnconst(Expr *e)
@@ -71,6 +72,11 @@ static bool ispurefnconst(Expr *e)
 }
 #endif
 
+enum blk_flavour { blk_BODY,            /* for rd_block(function body)  */
+                   blk_INNER,           /* for rd_block(inner block)    */
+                   blk_IMPLICIT,        /* for rd_block(C++/C99 decl)   */
+                   blk_SSTMT };         /* ??? */
+
 struct SynScope {
   struct SynScope *cdr;
   SynBindList *car;
@@ -85,10 +91,6 @@ struct SynGoto {
 };
 #define mkSynGoto(a,b,c) (SynGoto *)syn_list3(a,b,c)
 
-enum blk_flavour { blk_BODY,            /* for rd_block(function body)  */
-                   blk_INNER,           /* for rd_block(inner block)    */
-                   blk_IMPLICIT };      /* for rd_block(C++ decl)       */
-
 /* The next line is in flux, but flags code which is invented, and     */
 /* does not correspond to a user written action.  E.g. narrowing in    */
 /* f(x) float x; {...}.  Note that x = 1 in { int x = 1; is not so.    */
@@ -96,17 +98,24 @@ static FileLine syn_invented_fl = { 0, 0, 0 };
 /* Code may test for invented FileLines by testing (fl.f == 0)!!!      */
 
 /* forward references within this file - reorganise to reduce */
+static void NoteCurrentFileLine(FileLine *fl);
 static void ensure_formals_typed(DeclRhsList *d,bool proto);
 static TypeExpr *rd_typename(int declflag);
 static Expr *rd_expr(int n);
 static Expr *rd_prefixexp(int n);
+static Expr *rd_compound_literal(TypeExpr *t);
 #ifdef EXTENSION_VALOF
 static Cmd *rd_block(enum blk_flavour f);
 #endif
 static Cmd *rd_command(bool declposs);
 static DeclRhsList *rd_decllist(int declflag);
+static DeclRhsList *rd_decl2(int declflag, SET_BITMAP accbits);
 static void rd_enumdecl(TagBinder *tb);
 static void rd_classdecl(TagBinder *tb);
+static Expr *make_vla_initialisation(DeclRhsList *d);
+static DeclRhsList *make_vla_decls(DeclRhsList *d);
+static void ensure_no_vla_stars(const DeclRhsList *d);
+static void merge_formal_decl(DeclRhsList *d, DeclRhsList *dnew);
 #ifdef CPLUSPLUS
 static Cmd *rd_meminit(TagBinder *ctorclass);
 static Expr *syn_memdtor(TagBinder *dtorclass);
@@ -134,10 +143,16 @@ static void syn_setlab(LabBind *, SynScope *);
 static Cmd *syn_reflab(LabBind *lab, SynScope *s, Cmd *c);
 static SynBindList *reverse_SynBindList(SynBindList *x);
 #else
-#define cmd_rescope(s,ss,c) (c)
-#define syn_setlab(l, s) (void)0
-#define syn_reflab(l, s, c) (c)
-#define reverse_SynBindList(x) (SynBindList *)dreverse((List *)x)
+static Cmd *cmd_rescope(SynScope *to, SynScope *from, Cmd *c);
+static void syn_setlab(LabBind *, SynScope *);
+static Cmd *syn_reflab(LabBind *lab, SynScope *s, Cmd *c);
+static SynBindList *reverse_SynBindList(SynBindList *x);
+static SynBindList *reverse_SynBindList_VLAs(SynBindList *x);
+static SynBindList *merge_SynBindList_nonVLAs(SynBindList *x, SynBindList *dd);
+//#define cmd_rescope(s,ss,c) (c)
+//#define syn_setlab(l, s) (void)0
+//#define syn_reflab(l, s, c) (c)
+//#define reverse_SynBindList(x) (SynBindList *)dreverse((List *)x)
 #endif
 
 /* newer comments...
@@ -198,9 +213,10 @@ bool implicit_return_ok;
                                   /* (probably really a stg bit).          */
 #define CATCHER           0x2000  /* C++ 'catch' context.                  */
 #define ANONU             0x4000  /* OR-able with MEMBER/BLOCKHEAD etc.    */
+#define FORDECL           0x8000  /* C99 for()                             */
 /* contexts in which 'storage classes' are allowed (vestigial):         */
 /* [ES] seems to disallow "catch(register int x) { ... }". We don't.    */
-#define STGCLASS_OK        (TOPLEVEL|BLOCKHEAD|FORMAL|ARG_TYPES|CATCHER)
+#define STGCLASS_OK        (TOPLEVEL|BLOCKHEAD|FORMAL|ARG_TYPES|CATCHER|FORDECL)
 /* contexts in which a type is REQUIRED (typename and struct member):   */
 #ifdef CPLUSPLUS
 #define TYPE_NEEDED        (TYPENAME|FLEX_TYPENAME|NEW_TYPENAME|CATCHER)
@@ -208,11 +224,21 @@ bool implicit_return_ok;
 #define TYPE_NEEDED        (TYPENAME|FLEX_TYPENAME|NEW_TYPENAME|MEMBER|CATCHER)
 #endif
 /* contexts in which declarators must be ABSTRACT or CONCRETE.          */
-#define CONC_DECLARATOR    (TOPLEVEL|BLOCKHEAD|ARG_TYPES|MEMBER)
+#define CONC_DECLARATOR    (TOPLEVEL|BLOCKHEAD|ARG_TYPES|MEMBER|FORDECL)
 #define ABS_DECLARATOR     (TYPENAME|FLEX_TYPENAME|NEW_TYPENAME)
+#define BLOCKSCOPE         (BLOCKHEAD|FORMAL|ARG_TYPES|FORDECL)
 
 /* parsing table initialisation... */
 static int32 illtypecombination[NUM_OF_TYPES];
+
+/* for tracking constraints on inline definitions */
+static DeclRhsList *syn_mod_static;
+static Binder *syn_internal_ref;
+
+void syn_inline_constraints(Symstr **intref, Symstr **modstatic)
+{   *intref = syn_internal_ref ? bindsym_(syn_internal_ref) : 0;
+    *modstatic = syn_mod_static ? syn_mod_static->declname : 0;
+}
 
 static int bind_scope;           /* TOPLEVEL, GLOBALSCOPE, or LOCALSCOPE */
 
@@ -234,16 +260,36 @@ static void initpriovec(void)
     illtypecombination[shiftoftype_(s_unsigned)] =
         ~(bitoftype_(s_int) | bitoftype_(s_char) | bitoftype_(s_longlong) |
           bitoftype_(s_long) | bitoftype_(s_short) |
-          bitoftype_(s_const) | bitoftype_(s_volatile));
+          bitoftype_(s_const) | bitoftype_(s_volatile) | bitoftype_(s_restrict));
     illtypecombination[shiftoftype_(s_long)] =
         ~(bitoftype_(s_int) | bitoftype_(s_signed) | bitoftype_(s_unsigned) |
           bitoftype_(s_double) | bitoftype_(s_float) |
-          bitoftype_(s_const) | bitoftype_(s_volatile));
+          bitoftype_(s_const) | bitoftype_(s_volatile) | bitoftype_(s_restrict));
+    illtypecombination[shiftoftype_(s_longlong)] =
     illtypecombination[shiftoftype_(s_short)] =
         ~(bitoftype_(s_int) | bitoftype_(s_signed) | bitoftype_(s_unsigned) |
-          bitoftype_(s_const) | bitoftype_(s_volatile));
-    illtypecombination[shiftoftype_(s_const)] = bitoftype_(s_const);
-    illtypecombination[shiftoftype_(s_volatile)] = bitoftype_(s_volatile);
+          bitoftype_(s_const) | bitoftype_(s_volatile) | bitoftype_(s_restrict));
+    illtypecombination[shiftoftype_(s_bool)] =
+        ~(bitoftype_(s_const) | bitoftype_(s_volatile) | bitoftype_(s_restrict));
+#ifdef C99_COMPLEX
+    illtypecombination[shiftoftype_(s_complex)] =
+    illtypecombination[shiftoftype_(s_imaginary)] =
+        ~(bitoftype_(s_float) | bitoftype_(s_double) | bitoftype_(s_long));
+#endif
+#ifndef CPLUSPLUS
+    if (language_flavour >= FLAVOUR_C99)
+    {
+        illtypecombination[shiftoftype_(s_long)] &= ~bitoftype_(s_long);
+        illtypecombination[shiftoftype_(s_const)] =
+        illtypecombination[shiftoftype_(s_volatile)] =
+        illtypecombination[shiftoftype_(s_restrict)] = 0;
+    }
+    else
+#endif
+    {
+        illtypecombination[shiftoftype_(s_const)] = bitoftype_(s_const);
+        illtypecombination[shiftoftype_(s_volatile)] = bitoftype_(s_volatile);
+    }
     /* now symmetrise: */
     for (s = s_char; istypestarter_(s); s++)
       for (t = s_char; istypestarter_(t); t++)
@@ -322,13 +368,18 @@ static TypeExpr *check_bittype(TypeExpr *t)
                           bitoftype_(s_char)|bitoftype_(s_short)| \
                           bitoftype_(s_enum)|bitoftype_(s_long)|  \
                           bitoftype_(s_unsigned)|bitoftype_(s_signed)| \
-                          bitoftype_(s_const)|bitoftype_(s_volatile))
+                          bitoftype_(s_const)|bitoftype_(s_volatile)| \
+                          bitoftype_(s_bool))
     if (h0_(t) != s_typespec || typespecmap_(t) & ~OKbittypes)
     {   cc_err(syn_rerr_bitfield, h0_(t)!=s_typespec ? t :
                         /* ensure nice message (probably OK anyway) */
                         primtype_(typespecmap_(t) & ~OKbittypes));
         t = te_int;
     }
+    if ((typespecmap_(t) & ~TQBITS) ==
+            (bitoftype_(s_char)|bitoftype_(s_unsigned)|bitoftype_(s_bool)))
+        t = te_uintbool;
+    else
     if (!(feature & FEATURE_PCC) && h0_(t) == s_typespec &&
           typespecmap_(t) & (bitoftype_(s_char)|bitoftype_(s_short)|
                              bitoftype_(s_enum)|bitoftype_(s_long)))
@@ -365,6 +416,7 @@ static char *ctxtofdeclflag(int f)
    if (f & FORMAL)         return errname_formalarg;
    if (f & ARG_TYPES)      return errname_formaltype;
    if (f & BLOCKHEAD)      return errname_blockhead;
+   if (f & FORDECL)        return errname_for;
    if (f & TYPENAME)       return errname_typename;
 #ifdef CPLUSPLUS
    if (f & SIMPLETYPE)     return "<simple type>";         /* /* */
@@ -386,35 +438,44 @@ static AEop peepsym()
 static void checkfor_ket(AEop s)
 {
 /* The next lines are a long-stop against loops in error recovery */
-    if (++errs_on_this_sym > 4)
+    if (errs_on_this_sym >= 4)
     {   cc_err(syn_err_expecteda, s);
         nextsym();
     }
     else if (curlex.sym == s) nextsym();
-    else cc_err(syn_err_expected, s);
+    else
+    {   cc_err(syn_err_expected, s);
+        ++errs_on_this_sym;
+    }
 }
 
 static void checkfor_delimiter_ket(AEop s, char *more)
                             /* as checkfor_ket but less read-ahead */
 {
 /* The next lines are a long-stop against loops in error recovery */
-    if (++errs_on_this_sym > 4)
+    if (errs_on_this_sym >= 4)
     {   cc_err(syn_err_expected1a, s, more);
         nextsym();
     }
     else if (curlex.sym == s) curlex.sym = s_nothing;
-    else cc_err(syn_err_expected1, s, more);
+    else
+    {   cc_err(syn_err_expected1, s, more);
+        ++errs_on_this_sym;
+    }
 }
 
 static void checkfor_2ket(AEop s, AEop t)
 {
 /* The next lines are a long-stop against loops in error recovery */
-    if (++errs_on_this_sym > 4)
+    if (errs_on_this_sym >= 4)
     {   cc_err(syn_err_expected2a, s, t);
         nextsym();
     }
     else if (curlex.sym == s) nextsym();
-    else cc_rerr(syn_err_expected2, s, t, s);
+    else
+    {    cc_rerr(syn_err_expected2, s, t, s);
+         ++errs_on_this_sym;
+    }
 }
 
 static void checkfor_delimiter_2ket(AEop s, AEop t)
@@ -475,7 +536,7 @@ static ExprList *rd_exprlist_opt(void)
 /* SynScope duplicates some of the functionality in bind.c, but         */
 /* currently it is simpler to use an alternative structure.             */
 static SynScope *synscope;
-static int32 *synscopeid;
+static int32 synscopeid;
 static bool elselast;   /* private to rd_command(), cleared by valof.   */
 static Cmd *cur_switchcmd;
 static SynScope *cur_loopscope, *cur_switchscope;
@@ -730,6 +791,9 @@ static bool isexprstarter(AEop op)
         case s_times: case s_plus: case s_minus:
         case s_plusplus: case s_minusminus:
         case s_bitnot: case s_boolnot: case s_sizeof:
+#ifdef C99_COMPLEX
+        case s_cimag: case s_creal:
+#endif
                  return 1;
     }
 }
@@ -819,7 +883,9 @@ static Expr *rd_idexpr(int labelhack)
     if (b == NULL)
     {   AEop peek = peepsym();
         if (peek == s_lpar)
-        {   if (warn_implicit_fns)
+        {   if (language_flavour >= FLAVOUR_C99)
+                cc_rerr(syn_rerr_invent_extern, symname_(sv));
+            else if (warn_implicit_fns)
                 cc_warn(syn_warn_invent_extern, symname_(sv));
             else xwarncount++;
         }
@@ -861,6 +927,11 @@ static Expr *rd_idexpr(int labelhack)
     else
     {   /* use current 'variable' binding */
         if (bindstg_(b) & b_pseudonym) b = realbinder_(b);
+        /* Eurch - constraint enforcement for inline definitions */
+        if (bindstg_(b) & bitofstg_(s_static) &&
+            !syn_internal_ref &&
+            bind_global_(bindsym_(b)) == b)
+            syn_internal_ref = b;
         a = (Expr *)b;
     }
     if (b && h0_(b) == s_binder) binduses_(b) |= u_referenced;
@@ -918,6 +989,10 @@ case s_lpar:
                 return mk_expr_valof(s_valof, t, c);
             }
             else
+#else
+            if (curlex.sym == s_lbrace && language_flavour >= FLAVOUR_C99)
+                return rd_compound_literal(t);
+            else
 #endif
             return mkcast(s_cast, rd_prefixexp(NOLABEL), t);
         }
@@ -960,9 +1035,9 @@ case s_floatcon:
         nextsym();
         break;
 case s_integer:            /* invent some more te_xxx for the next line? */
-        a = mkintconst((curlex.a2.flag == bitoftype_(s_int) ? te_int :
+        a = mkintconst64((curlex.a2.flag == bitoftype_(s_int) ? te_int :
                                           primtype_(curlex.a2.flag)),
-                       curlex.a1.i, 0);
+                         curlex.a1.i, 0);
         nextsym();
         break;
     }
@@ -1049,13 +1124,34 @@ case s_typespec:
         {   SET_BITMAP m = typespecmap_(x);
 /* Hack round the C++ in aeops.h, map struct/class to same number,      */
 /* preserving the magic numbers in <stdarg.h>                           */
-            m = (m & (bitoftype_(s_class)-1)) |
+            /* bits: 0=char
+                     1=double
+                     2=enum
+                     3=float (redundant: float = short double)
+                     4=int
+                     5=struct
+                     6=union
+                     7=void
+                     8=typedef
+                     9=long
+                    10=short
+                    11=signed
+                    12=unsigned
+                    13=long long
+                    14=bool (_Bool = bool unsigned char)
+                    15=complex
+                    16=imaginary */
+            m = (m & (bitoftype_(s_bool)-1)) | /* move bool up 1 */
+                (m & -bitoftype_(s_bool)) << 1;
+            if (islonglong_(m)) m |= 1u<<15, m &= ~bitoftype_(s_short);
+            m = (m & (bitoftype_(s_longlong)-1)) |  /* remove long long, rest down 1 */
+                (m & -bitoftype_(s_typedefname)) >> 1;
+            m = (m & (bitoftype_(s_class)-1)) |  /* class->struct, rest moved down 1 */
                 (m & -bitoftype_(s_class)) >> 1;
-            m = (m & (bitoftype_(s_longlong)-1)) |
-                (m & -bitoftype_(s_longlong)) >> 1;
             return m;
         }
 case t_ref:
+case t_vla:
 case t_content:
 case t_subscript:
         return 0x10000000;
@@ -1067,17 +1163,30 @@ default:
     }
 }
 
+#if 0
 static int32 cpp_sizeoftype(TypeExpr *t)
 {
-#ifdef CPLUSPLUS
+//#ifdef CPLUSPLUS
     t = princtype(t);   /* elide typedef's maybe losing qualifiers.     */
     /* There are no refs of refs, but the following code looks neater.. */
-    while (h0_(t) == t_ref) t = princtype(typearg_(t));
-#endif
+    while (h0_(t) == t_ref|| h0_(t) == t_vla) t = princtype(typearg_(t));
+//#endif
     return sizeoftype(t);
+}
+#endif
+
+static Expr *cpp_sizeoftypeasexpr(TypeExpr *t)
+{
+//#ifdef CPLUSPLUS
+    t = princtype(t);   /* elide typedef's maybe losing qualifiers.     */
+    /* There are no refs of refs, but the following code looks neater.. */
+    while (h0_(t) == t_ref || h0_(t) == t_vla) t = princtype(typearg_(t));
+//#endif
+    return sizeoftypeasexpr(t);
 }
 
 #define te_size_t (feature & FEATURE_PCC ? te_int : te_uint)
+#define te_size_t_const (feature & FEATURE_PCC ? te_intconst : te_uintconst)
 
 static Expr *rd_prefixexp(int labelhack)
 {   AEop op;
@@ -1109,23 +1218,37 @@ case s_sizeof:
                 if (curlex.sym == s_typestartsym) nextsym();
                 t = rd_typename(TYPENAME);
                 checkfor_ket(s_rpar);
+#ifdef CPLUSPLUS
                 return mkintconst(
                     te_size_t,
                     op == s_sizeof ? cpp_sizeoftype(t) : codeoftype(t),
                     (Expr *)syn_list2(op == s_sizeof ? s_sizeoftype :
                                                        s_typeoftype,    t));
+#else
+                return op == s_sizeof ?
+                   cpp_sizeoftypeasexpr(t) :
+                   mkintconst(te_int, codeoftype(t),
+                                      (Expr *)syn_list2(s_typeofexpr, t));
+#endif
             }
             a = rd_expr(PASTCOMMA);
             checkfor_ket(s_rpar);
             a = rd_postfix(a);   /* for sizeof (f)() etc */
         }
         else a = rd_prefixexp(NOLABEL);
+#ifdef CPLUSPLUS
         return mkintconst(
             te_size_t,
             op == s_sizeof ? cpp_sizeoftype(typeofexpr(a)) :
                              codeoftype(typeofexpr(a)),
             (Expr *)syn_list2(op == s_sizeof ? s_sizeofexpr :
                                                s_typeofexpr,   a));
+#else
+        return op == s_sizeof ?
+                   cpp_sizeoftypeasexpr(typeofexpr(a)) :
+                   mkintconst(te_int, codeoftype(typeofexpr(a)),
+                                      (Expr *)syn_list2(s_typeofexpr, a));
+#endif
 #ifdef CPLUSPLUS
 /* @@@ following are only here temporarily...                           */
 /* Maybe not, now we can lookahead.  However, we should rejig the       */
@@ -1140,6 +1263,12 @@ case s_throw:
         a = isexprstarter(curlex.sym) ? rd_prefixexp(NOLABEL) : 0;
         return mkthrow(
             (Binder *)syn_binderofname(sym_insert_id("__throw"), 0), a);
+#endif
+#ifdef C99_COMPLEX
+case s_creal:
+case s_cimag:
+        nextsym();
+        return mkcomplexconv(op, rd_prefixexp(NOLABEL));
 #endif
 default:
         return rd_postfix(rd_primaryexp(labelhack));
@@ -1238,7 +1367,9 @@ bool syn_hashif()
 static Expr *rd_condition(AEop op)
 {
     Expr *e;
-    if (curlex.sym == s_lpar)
+    if (op == s_for)
+        e = rd_expr(PASTCOMMA);
+    else if (curlex.sym == s_lpar)
     {   nextsym();
         e = rd_expr(PASTCOMMA);
         checkfor_ket(s_rpar);
@@ -1247,7 +1378,9 @@ static Expr *rd_condition(AEop op)
     {   cc_rerr(syn_rerr_insert_parens, op);
         e = rd_expr(PASTCOMMA);
     }
-    return (op == s_switch ? mkintegral(op,e) : mktest(op,e));
+    if (h0_(e) != s_error)
+        e = optimise0(op == s_switch ? mkintegral(op,e) : mktest(op,e));
+    return e;
 }
 
 /* the next routine rd_init() has a coroutine-like linkage with vargen.c */
@@ -1323,7 +1456,9 @@ Expr *syn_rdinit(TypeExpr *t, Binder *whole, int32 flag)
         if (flag != 1) syn_initpeek = 0;
         e = syn_initcast(e, whole, t);
     }
-    else if (syn_initdepth < 0 || curlex.sym == s_rbrace)
+    else if (syn_initdepth < 0 || curlex.sym == s_rbrace ||
+                    ((curlex.sym == s_dot || curlex.sym == s_lbracket) &&
+                            language_flavour >= FLAVOUR_C99))
         return 0;
     else if (curlex.sym == s_lbrace)  /* nasty ANSI optional "int x = {1}" */
     {   if (flag == 1) return 0;      /* treat x[] = {"abc"} as illegal    */
@@ -1347,7 +1482,10 @@ Expr *syn_rdinit(TypeExpr *t, Binder *whole, int32 flag)
 
 bool syn_canrdinit(void)
 {  if (syn_initpeek) return 1;
-   if (syn_initdepth < 0 || curlex.sym == s_rbrace) return 0;
+   if (syn_initdepth < 0 || curlex.sym == s_rbrace ||
+                    ((curlex.sym == s_dot || curlex.sym == s_lbracket) &&
+                            language_flavour >= FLAVOUR_C99))
+       return 0;
 #ifndef CPLUSPLUS
 /*
  * The next test is intended to make recovery from
@@ -1364,7 +1502,84 @@ bool syn_canrdinit(void)
    return 1;
 }
 
+/* Ensure we're not missing an initialiser */
+void syn_ensure_init(bool desigok)
+{   if (syn_initpeek) return;
+    if (curlex.sym == s_rbrace ||
+        !desigok && (curlex.sym == s_dot || curlex.sym == s_lbracket))
+        cc_pccwarn(syn_err_initialisers2);
+}
+
+AEop syn_rddesignator(TypeExpr *reqtype, Designator *result)
+{   AEop ret = curlex.sym;
+    if (language_flavour < FLAVOUR_C99) return s_nothing;
+    if (curlex.sym == s_dot)
+    {   nextsym();
+        if (curlex.sym == s_identifier)
+        {   ClassMember *member = (ClassMember *)curlex.a1.sv;
+            //printf("got identifier\n");
+            nextsym();
+            if (reqtype != NULL && !isclasstype_(reqtype))
+            {   cc_err("illegal '.' designator");
+                return s_nothing;
+            }
+            if (result)
+                result->member = member;
+            return s_dot;
+        }
+        else
+            cc_err(syn_err_expected_member);
+    }
+    else if (curlex.sym == s_lbracket)
+    {   unsigned32 n;
+        nextsym();
+        n = evaluate(rd_expr(PASTCOMMA));
+        //printf("[%u]\n", n);
+        checkfor_ket(s_rbracket);
+        if (reqtype != NULL && h0_(reqtype) != t_subscript)
+        {   cc_err("illegal [] designator");
+            ret = s_nothing;
+        }
+        if (result)
+            result->index = n;
+        return s_subscript;
+    }
+    return s_nothing;
+}
+
+void syn_enddesignator(void)
+{
+    checkfor_ket(s_assign);
+}
+
 /* command reading routines... */
+
+////static SynBindList *mkSynBindList_from_Decl(DeclRhsList *d, SynBindList *r, bool VLAs)
+//static void mkSynBindList_from_Decl(DeclRhsList *d, SynBindList **rp, SynBindList **vp)
+//{   /* re-use DeclRhsList store to make a (reversed) SynBindList...     */
+//    SynBindList *r = *rp, *v = 0;
+//    if (vp == rp) vp = 0;
+//    if (vp) v = *vp;
+//    while (d != 0)
+//    {   SynBindList *t = (SynBindList *)d;
+//        Binder *b = d->declbind;
+//        AEop type = h0_(d->decltype);
+//        d = d->declcdr;
+//        t->bindlistcar = b;
+//        t->bindlistdtor = 0;
+//
+//        if (type == t_vla && vp)
+//        {   t->bindlistcdr = v;
+//            v = t;
+//        }
+//        else
+//        {   t->bindlistcdr = r;
+//            r = t;
+//        }
+//    }
+//    *rp = r; if (vp) *vp = v;
+//    //return r;
+//}
 
 static SynBindList *mkSynBindList_from_Decl(DeclRhsList *d, SynBindList *r)
 {   /* re-use DeclRhsList store to make a (reversed) SynBindList...     */
@@ -1379,6 +1594,7 @@ static SynBindList *mkSynBindList_from_Decl(DeclRhsList *d, SynBindList *r)
     }
     return r;
 }
+
 
 #ifdef CPLUSPLUS
 /* @@@ move to a different file?                                        */
@@ -1416,6 +1632,10 @@ static Cmd *syn_embed_if(CmdList *cl)
 }
 #endif
 
+/* KJB - synscope is still a linked list of block scopes, including implicit ones,      */
+/* but blockscope is set up to point to the innermost non-implicit one, which automatic */
+/* objects (other than VLAs) are attached to. VLAs are attached always to the innermost */
+
 static Cmd *rd_block(enum blk_flavour f)
 {   DeclRhsList *d,*dp;
     CmdList *c = NULL;
@@ -1424,12 +1644,18 @@ static Cmd *rd_block(enum blk_flavour f)
     FileLine fl;
 #ifdef CPLUSPLUS
     CmdList *cstat = 0;
-    Expr *edtor;
 #endif
+    Expr *edtor;
     NoteCurrentFileLine(&fl);
     if (f != blk_IMPLICIT) nextsym();        /* skip '{' if nec.     */
-    if (f == blk_INNER) scope_level = push_scope(0);
+    if (f == blk_INNER || f == blk_SSTMT)
+        scope_level = push_scope(0);
+#ifdef CPLUSPLUS
+    @@@ "What's right here? C++ seems to imply lifetime within real blocks, not implicit"
+#endif
     synscope = mkSynScope(synscope, 0, ++synscopeid);
+    if (f == blk_BODY && language_flavour >= FLAVOUR_C99)
+        funcnamesym->symbind = declare_funcname(funcnamesym, symname_(currentfunction.symstr));
     d = rd_decllist(BLOCKHEAD);
 #ifdef CPLUSPLUS
     for (dp = d; dp != 0; dp = dp->declcdr)  /* add dynamic inits    */
@@ -1460,12 +1686,17 @@ static Cmd *rd_block(enum blk_flavour f)
 /* Hmm, we would prefer genreftemp()s and DeclRhsList vars interleaved. */
     synscope->car = mkSynBindList_from_Decl(d, synscope->car);
     while (curlex.sym != s_rbrace && curlex.sym != s_eof)
-    {   c = mkCmdList(c, rd_command(1));
+    {   c = mkCmdList(c, rd_command(language_flavour >= FLAVOUR_C99 && f != blk_SSTMT));
         if (curlex.sym == s_nothing) nextsym();
     }
     if (f != blk_IMPLICIT) checkfor_delimiter_ket(s_rbrace, "");
-    if (f == blk_INNER) pop_scope(scope_level);
+    if (f == blk_INNER || f == blk_SSTMT) pop_scope(scope_level);
+
     dd = synscope->car; synscope = synscope->cdr;
+    edtor = mkvlafree_v_list(dd);
+    if (edtor)
+        c = mkCmdList(c, mk_cmd_e(s_semicolon, fl, optimise0(edtor)));
+
 #ifdef CPLUSPLUS
     edtor = mkdtor_v_list(dd);
     if (edtor)
@@ -1473,6 +1704,15 @@ static Cmd *rd_block(enum blk_flavour f)
         c = mkCmdList(c, mk_cmd_e(s_semicolon, fl, optimise0(edtor)));
     }
 #endif
+
+    if (f == blk_IMPLICIT)
+    {   /* Need to extract the VLAs only, bind them to our block, and attach */
+        /* the non-VLAs to the outer (new) block. */
+        SynBindList *vb = reverse_SynBindList_VLAs(dd);
+        synscope->car = merge_SynBindList_nonVLAs(synscope->car, dd);
+        return mk_cmd_block(fl, vb, (CmdList *) dreverse((List *)c));
+    }
+    else
     return mk_cmd_block(fl, reverse_SynBindList(dd),
                             (CmdList *)dreverse((List *)c));
 }
@@ -1536,7 +1776,7 @@ static Cmd *rd_for_2(Expr *e1, FileLine fl)
     else {
          FileLine fl;
          NoteCurrentFileLine(&fl);
-         e2 = addfilelinetoexpr(mktest(s_for, rd_expr(PASTCOMMA)), &fl);
+         e2 = addfilelinetoexpr(rd_condition(s_for), &fl);
     }
     checkfor_ket(s_semicolon);
     if (curlex.sym == s_rpar)
@@ -1571,12 +1811,10 @@ static Cmd *rd_compound_statement(AEop op)
 
 static Cmd *rd_command(bool declposs)
 {
-#ifdef CPLUSPLUS
   rd_scope_or_typedef(0, ALLSCOPES);
   if (declposs && isdeclstarter3_(curlex))
       return rd_block(blk_IMPLICIT);
   else
-#endif
   {
     AEop op;
     Cmd *c;
@@ -1588,6 +1826,9 @@ static Cmd *rd_command(bool declposs)
 case s_default:
         nextsym();
         checkfor_ket(s_colon);
+        #ifndef CPLUSPLUS
+        declposs = 0;
+        #endif
         if ((c = adddefault(fl)) == 0)
             return rd_command(declposs); /* error */
 /* The next line is currently just for errors as case/default branch    */
@@ -1601,6 +1842,9 @@ case s_case:
         e = optimise0(
             mkcast(s_case, rd_expr(PASTCOMMA), cur_switchtype));
         checkfor_ket(s_colon);
+        #ifndef CPLUSPLUS
+        declposs = 0;
+        #endif
         if (e==0 || (c = addcase(e,fl)) == 0)
             return rd_command(declposs); /* error */
 /* The next line is currently just for errors as case/default branch    */
@@ -1621,6 +1865,9 @@ default:
         {   Symstr *a = (Symstr *)type_(e);
             LabBind *lab = label_define(a);
             nextsym();                      /* not previously done */
+            #ifndef CPLUSPLUS
+            declposs = 0;
+            #endif
             if (lab == 0)
                 return rd_command(declposs);  /* duplicate    */
             syn_setlab(lab, synscope);
@@ -1660,6 +1907,13 @@ case s_do:
         cmd2e_(c) = e;
         break;
 case s_while:
+        if (language_flavour >= FLAVOUR_C99)
+        {   curlex.sym |= s_qualified;
+            ungetsym();
+            return rd_block((!declposs) ? blk_SSTMT : blk_INNER);
+        }
+        /* else fall through */
+case s_while|s_qualified:
         nextsym();
         {   FileLine fl;
             NoteCurrentFileLine(&fl);
@@ -1671,26 +1925,63 @@ case s_while:
             cur_break = s_break; cur_loopscope = synscope;
             cmd4c_(c) = rd_command(0);
             cur_loopscope = oldloop; cur_break = oldbreak;
+            if (language_flavour >= FLAVOUR_C99)
+            {   if (curlex.sym != s_nothing) ungetsym();
+                curlex.sym = s_rbrace;
+            }
             return c;
         }
 case s_for:
+        if (language_flavour >= FLAVOUR_C99)
+        {   curlex.sym |= s_qualified;
+            ungetsym();
+            return rd_block((!declposs) ? blk_SSTMT : blk_INNER);
+        }
+        /* else fall through */
+case s_for|s_qualified:
         nextsym();
         checkfor_ket(s_lpar);
-#ifdef CPLUSPLUS
-        rd_scope_or_typedef(0, ALLSCOPES);
-        if (isdeclstarter2_(curlex))
-            return rd_cplusplus_for(fl);
-        else
-#endif
-        {   e = ((curlex.sym == s_semicolon) ? 0 :
-                optimise0(mkcast(s_for,rd_expr(PASTCOMMA),te_void)));
-            checkfor_ket(s_semicolon);
-            return rd_for_2(e, fl);
+        if (language_flavour >= FLAVOUR_C99)
+        {   rd_scope_or_typedef(0, ALLSCOPES);
+            if(isdeclstarter2_(curlex))
+            {   DeclRhsList *d = rd_decl2(FORDECL, 0), *dp;
+                e = 0;
+                for (dp = d; dp != 0; dp = dp->declcdr)
+                {   Expr *einit = declinit_(dp);       /* add dynamic inits */
+                    if (einit)
+                        e = e ? mkbinary(s_comma, e, einit) : einit;
+                }
+                e = e ? optimise0(mkcast(s_for, e, te_void)) : 0;
+                synscope->car = mkSynBindList_from_Decl(d, synscope->car);
+                if (curlex.sym == s_nothing) nextsym();
+                goto afterInit;
+            }
         }
+        e = ((curlex.sym == s_semicolon) ? 0 :
+                optimise0(mkcast(s_for,rd_expr(PASTCOMMA),te_void)));
+        checkfor_ket(s_semicolon);
+afterInit:
+#ifdef CPLUSPLUS
+        if ((edtor = killexprtemp()) != 0)
+            e = mkbinary(s_comma, e, edtor);
+#endif
+        c = rd_for_2(e, fl);
+        if (language_flavour >= FLAVOUR_C99)
+        {   if (curlex.sym != s_nothing) ungetsym();
+            curlex.sym = s_rbrace;
+        }
+        return c;
 case s_if:
+        if (language_flavour >= FLAVOUR_C99)
+        {   curlex.sym |= s_qualified;
+            ungetsym();
+            return rd_block((!declposs) ? blk_SSTMT : blk_INNER);
+        }
+        /* else fall through */
+case s_if|s_qualified:
         nextsym();
 /* Why does 'case s_while:' have a fileline but not case s_if:'?        */
-        e = optimise0(rd_condition(op));
+        e = rd_condition(op);
         if (e == 0) e = mkintconst(te_int,0,0); /* error => if(0).    */
         c = rd_command(0);
         if (curlex.sym == s_nothing) nextsym();
@@ -1714,13 +2005,24 @@ case s_if:
                     curlex.fl.l = temp;
                 }
             }
+            if (language_flavour >= FLAVOUR_C99)
+            {   if (curlex.sym != s_nothing) ungetsym();
+                curlex.sym = s_rbrace;
+            }
             return mk_cmd_if(fl, e, c, c2);
         }
 case s_else:
         cc_err(syn_err_else);
         nextsym();
         return rd_command(0);
-case s_switch:
+/*case s_switch:
+        if (language_flavour >= FLAVOUR_C99)
+        {   curlex.sym |= s_qualified;
+            ungetsym();
+            return rd_block(blk_INNER);
+        }*/
+        /* else fall through */
+case s_switch/*|s_qualified*/:
         nextsym();
 /* Why does 'case s_while:' have a fileline but not case s_if:'?        */
         e = rd_condition(op);
@@ -1759,6 +2061,10 @@ case s_switch:
             cur_switchcmd = oldswitchcmd; cur_break = oldbreak;
             cur_switchscope = oldswitchscope;
             cur_switchtype = oldswitchtype;
+            /*if (language_flavour >= FLAVOUR_C99)
+            {   if (curlex.sym != s_nothing) ungetsym();
+                curlex.sym = s_rbrace;
+            }*/
             return c;
         }
 case s_return:
@@ -1778,7 +2084,7 @@ case s_return:
                          te_void) :
 #endif
                 mkcast(s_return, e, cur_restype);
-#ifndef CPLUSPLUS
+#ifndef NO_RETURN_EXPRESSIONS
         /* Make return ALSO into an *EXPR* tree node.  Maybe this is   */
         /* dying in the advent of CPLUSPLUS changes in simplify.c.     */
             e = h0_(e) == s_error ? errornode :
@@ -1793,10 +2099,30 @@ case s_return:
             /* do also the implicit return case too in cg/flowgraph.    */
             cc_rerr(syn_warn_void_return);
 #else
-        if (e == 0 && !implicit_return_ok && !equivtype(cur_restype, te_void))
+        if (e == 0 && !equivtype(cur_restype, te_void) && language_flavour >= FLAVOUR_C99)
+            cc_rerr(syn_warn_void_return);
+        else if (e == 0 && !implicit_return_ok && !equivtype(cur_restype, te_void))
             cc_warn(syn_warn_void_return);
 #endif
-        c = cmd_rescope(0, synscope, mk_cmd_e(op, fl, e==0 ? e : optimise0(e)));
+        #define killexprtemp() 0
+        if (e && (h0_(e) != s_error))
+        {   Expr *edtor = 0;
+            /* may change type (in a harmless way) and loses s_return   */
+            e = optimise0(e);
+            if ((edtor = killexprtemp()) != 0)
+            {   if (cur_structresult != 0)
+                    e = mkbinary(s_comma, e, mkcast(s_return, edtor, te_void));
+                else
+                {   TypeExpr *t = typeofexpr(e);
+                    Binder *b = gentempbinder(t);
+                    e = mkbinary(s_init, (Expr *)b, e);
+                    e = mkbinary(s_comma, e, edtor);
+                    e = mkbinary(s_comma, e, (Expr *) b);
+                    e = mk_exprlet(s_let, t, mkSynBindList(0, b), e);
+                }
+            }
+        }
+        c = cmd_rescope(0, synscope, mk_cmd_e(op, fl, (e && h0_(e) != s_error) ? e : 0));
         break;
 #ifdef EXTENSION_VALOF
 case s_resultis:
@@ -1856,7 +2182,7 @@ case s_catch:
   }
 }
 
-static Cmd *rd_body(TypeExpr *t)
+static Cmd *rd_body(TypeExpr *t, TypeExpr *fntype)
 {   synscope = 0;
     synscopeid = 0;
     cur_switchscope = 0;
@@ -1866,7 +2192,7 @@ static Cmd *rd_body(TypeExpr *t)
     cur_restype = t;
     cur_switchtype = te_lint;
     cur_structresult = 0;
-    if ((mcrepoftype(t) >> MCR_SORT_SHIFT) == 3)
+    if ((mcrepoftype(t) >> MCR_SORT_SHIFT) == 3 && !returnsstructinregs_t(fntype))
     {   Symstr *structresultsym = sym_insert_id("__struct_result");
         /* debugger-visible name moving to builtin.c.                   */
         cur_structresult =
@@ -1898,8 +2224,9 @@ typedef struct DeclSpec {
 #define B_DECLMADE   1
 #define B_TYPESEEN   2
 #define B_STGSEEN    4
-#define B_LINKAGE    8  /* C++ extern "x" ... (incl. extern "x" { ...)  */
-#define B_LINKBRACE 16  /* C++ extern "x" { ... special case            */
+#define B_TQSEEN     8
+#define B_LINKAGE   16  /* C++ extern "x" ... (incl. extern "x" { ...)  */
+#define B_LINKBRACE 32  /* C++ extern "x" { ... special case            */
     int synflags;
 } DeclSpec;
 
@@ -1972,13 +2299,15 @@ static DeclSpec rd_declspec(int declflag, TagBinder *xscope)
                   bitofstg_(s_extern)|bitofstg_(s_weak)) :
              declflag & BLOCKHEAD ?
                  (bitofstg_(s_virtual)|bitofstg_(s_friend)) :
+             declflag & FORDECL ?
+                 (STGBITS & ~(bitofstg_(s_register)|bitofstg_(s_auto))) :
              declflag & (FORMAL|ARG_TYPES|CATCHER) ?
                  (STGBITS & ~bitofstg_(s_register)) : STGBITS;
     for (;;)
     {   AEop s = curlex.sym;
         if (!isdeclstarter_(s))
         {   /* A typedef may be possible, else break from loop...       */
-            if (typesseen & ~CVBITS) break;
+            if (typesseen & ~TQBITS) break;
             rd_scope_or_typedef(xscope, FB_TYPEDEF+ALLSCOPES);
             if (!((curlex.sym & ~s_qualified) == s_identifier &&
                   curlex_typedef != 0)) break;
@@ -1993,13 +2322,22 @@ static DeclSpec rd_declspec(int declflag, TagBinder *xscope)
             if (stgbit & illstg)
                 cc_err(syn_err_stgclass, /* storage class illegal here */
                         s, ctxtofdeclflag(declflag));
-            else if (stgbit & stgseen ||
+            else if (
+#ifdef CPLUSPLUS
+/* C99 lets you have multiple inline - and we don't care about friend, */
+/* virtual or weak. */
+                     stgbit & stgseen ||
+#endif
                        stgbit & (PRINCSTGBITS|bitofstg_(s_register)) &&
                        stgseen & (PRINCSTGBITS|bitofstg_(s_register)))
                 cc_err(syn_err_stgclass1, /* storage class incompatible */
                          s, stgseen);
             else
-            {   stgseen |= stgbit;
+            {   if ((typesseen || stgseen & ~(PRINCSTGBITS|bitofstg_(s_register))) &&
+                    (stgbit & (PRINCSTGBITS|bitofstg_(s_register))) &&
+                     language_flavour >= FLAVOUR_C99)
+                    cc_warn("Deprecated declaration - place $s first", s);
+                stgseen |= stgbit;
                 if (s == s_weak) stgseen |= bitofstg_(s_extern);
 /* @@@ beware -- this leads to 'extern incompatible with extern'.       */
 /* we should do this defaulting later, but to disallow '__weak auto'    */
@@ -2023,11 +2361,23 @@ static DeclSpec rd_declspec(int declflag, TagBinder *xscope)
                 checkfor_ket(s_rpar);
             }
         } else {
-            SET_BITMAP typebit = bitoftype_(s);
-            bool trouble = (illtype & typebit) != 0;
+            SET_BITMAP typebit;
+            bool trouble;
+            if (language_flavour >= FLAVOUR_C99 &&
+                s == s_long && typesseen & bitoftype_(s_long))
+            {   s = s_longlong;
+                if (!(illtype & bitoftype_(s_long)))
+                {   typesseen &=~ bitoftype_(s_long);
+                    illtype &=~ bitoftype_(s_longlong);
+                }
+            }
+            typebit = bitoftype_(s);
+            trouble = (illtype & typebit) != 0;
             if (trouble)
             {   /* this code relies that for type symbols x,y, "x y" is
                    legal iff "y x" is. */
+//                printf("s=%d, typesseen = %x, illtype = %x, illtypecombination = %x\n",
+//                       s, typesseen, illtype, illtypecombination[shiftoftype_(s)]);
                 cc_err(syn_err_typeclash, s,
                        typesseen & illtypecombination[shiftoftype_(s)]);
 /* New error recovery: ignore previous types/stgclass and retry.        */
@@ -2041,11 +2391,15 @@ static DeclSpec rd_declspec(int declflag, TagBinder *xscope)
             {
 #ifdef CPLUSPLUS /*/* LDS 27-Oct-92 Review here - also for C ?? */
                 if (declflag & SIMPLETYPE && (typesseen || typebit &
-                      (CVBITS|ENUMORCLASSBITS)))
+                      (TQBITS|ENUMORCLASSBITS)))
                     cc_err("illegal <simple type>: $m", typesseen | typebit);
 #endif
                 typesseen |= typebit;
                 illtype |= illtypecombination[shiftoftype_(s)];
+                /* Special code to rule out second long after, say, long double */
+                if (typesseen & bitoftype_(s_long) &&
+                    (typesseen &~ bitoftype_(s_long)) & illtypecombination[shiftoftype_(s_longlong)])
+                    illtype |= bitoftype_(s_long);
             }
             nextsym();
             if (typebit & ENUMORCLASSBITS)
@@ -2135,13 +2489,35 @@ static DeclSpec rd_declspec(int declflag, TagBinder *xscope)
         }
     }
 #endif
-    if (typedefquals & typesseen)
+    if ((typedefquals & typesseen) && language_flavour < FLAVOUR_C99)
         cc_rerr(syn_rerr_qualified_typedef(b, typedefquals & typesseen));
+    if (typesseen & bitoftype_(s_restrict))
+    {   //printf("Had restrict: typesseen = %x\n", typesseen);
+        /* illtypecombination lets restrict through, because it is always */
+        /* syntactically valid. We catch illegal cases politely here.     */
+        if (!(b && h0_(princtype(bindtype_(b))) == t_content)) {
+            typesseen &=~ bitoftype_(s_restrict);
+            if (b)
+                cc_rerr(syn_err_typeclash1, s_restrict, b);
+            else
+                cc_rerr(syn_err_typeclash, s_restrict, (typesseen & NONQUALTYPEBITS));
+        }
+    }
     /* could warn here in C (not C++) for undefined const <fntypedef>.  */
+#ifndef CPLUSPLUS
+    if (language_flavour >= FLAVOUR_C99)
+    {   if (typesseen &~ TQBITS) synflags |= B_TYPESEEN;
+        if (typesseen & TQBITS) synflags |= B_TQSEEN;
+    }
+    else
+#endif
     if (typesseen) synflags |= B_TYPESEEN;
     if (stgseen) synflags |= B_STGSEEN;
-    if ((declflag & TYPE_NEEDED) && typesseen == 0)
+    if ((declflag & TYPE_NEEDED) && !(synflags & B_TYPESEEN))
         cc_rerr(syn_rerr_missing_type), synflags |= B_TYPESEEN;
+
+    if (typesseen & bitoftype_(s_bool))
+        typesseen |= bitoftype_(s_char)|bitoftype_(s_unsigned);
 
     if ((typesseen & NONQUALTYPEBITS) == 0)
     {   if ((typesseen|stgseen) != 0 || !(declflag & FORMAL))
@@ -2165,7 +2541,8 @@ static DeclSpec rd_declspec(int declflag, TagBinder *xscope)
     if (typesseen & bitoftype_(s_longlong)) /* normalise for rest of system */
     {   /* map type "long long" into "long short"...                    */
         /* Storing types as bit-maps must be up for review.             */
-        typesseen ^= bitoftype_(s_longlong) ^ bitoftype_(s_int) ^
+        typesseen |= bitoftype_(s_int);
+        typesseen ^= bitoftype_(s_longlong) ^
                      (bitoftype_(s_long) | bitoftype_(s_short));
     }
 
@@ -2212,7 +2589,11 @@ static SET_BITMAP rd_onceonlyquals(SET_BITMAP allowed)
         if (!isdeclstarter_(s)) break;
         q = bitoftype_(s);
         if (!(q & allowed)) break;
-        if (q & qseen) cc_err(syn_err_typeclash, s, q);
+        if (q & qseen
+#ifndef CPLUSPLUS
+             && language_flavour < FLAVOUR_C99
+#endif
+           ) cc_err(syn_err_typeclash, s, q);
         qseen |= q;
         nextsym();
     }
@@ -2238,9 +2619,25 @@ typedef TypeExpr Declarator;   /* funny inside-out Expr */
 
 static Declarator *rd_formals_1(Declarator *a, const DeclFnAux *fnaux);
 
+static SET_BITMAP rd_arraytypequals(int declflag, bool outermost)
+{   SET_BITMAP quals = 0;
+    while (istypequalifier_(curlex.sym))
+    {
+        if (!outermost)
+            cc_rerr(syn_err_arrayqual1, curlex.sym);
+        else if (!(declflag & (FORMAL|ARG_TYPES)))
+            cc_rerr(syn_err_arrayqual, curlex.sym, ctxtofdeclflag(declflag));
+        else
+            quals |= bitoftype_(curlex.sym);
+        nextsym();
+    }
+    return quals;
+}
+
 static Declarator *rd_declarator_postfix(Declarator *a,
             int declflag, const DeclFnAux *fnaux, bool inner)
-{   for (;;) switch (curlex.sym)
+{   bool outermost = YES;
+    for (;;) switch (curlex.sym)
     {
 case s_lpar:
         if (declflag & (NEW_TYPENAME|CONVERSIONTYPE)) return a;
@@ -2275,15 +2672,45 @@ case s_lbracket:
         if (declflag & CONVERSIONTYPE) return a;
         nextsym();
         {   Expr *e = 0;
-            if (curlex.sym != s_rbracket)
+            bool had_static = NO;
+            SET_BITMAP quals = 0;
+            if (language_flavour >= FLAVOUR_C99)
+            {   quals = rd_arraytypequals(declflag, outermost);
+                if (curlex.sym == s_static)
+                {   if (!outermost)
+                        cc_rerr(syn_err_arrayqual1, s_static);
+                    else if (!(declflag & (FORMAL|ARG_TYPES)))
+                        cc_rerr(syn_err_arrayqual, s_static, ctxtofdeclflag(declflag));
+                    else
+                        had_static = YES;
+                    nextsym();
+                    if (quals == 0) quals = rd_arraytypequals(declflag, outermost);
+                }
+                if (!had_static && curlex.sym == s_times && peepsym() == s_rbracket)
+                {   if (!(declflag & FORMAL))
+                    {   cc_err(syn_err_arraystar);
+                        e = globalize_int(1);
+                    }
+                    else
+                        e = arraystarnode;
+                    nextsym();
+                }
+            }
+            if (had_static || curlex.sym != s_rbracket)
             {   e = mkintegral(s_subscript, rd_expr(PASTCOMMA));
+                if (!(language_flavour >= FLAVOUR_C99 && declflag & (BLOCKSCOPE|TYPENAME)))
 /* The next line allows  new(int [n][6])  with 'n' a variable for C++.  */
                 if (!(declflag & (NEW_TYPENAME|FLEX_TYPENAME) &&
                       h0_(a) == s_nothing)) e = check_arraysize(e);
             }
-            a = mk_typeexpr1(t_subscript, a, e);
+//            if (language_flavour >= FLAVOUR_C99)
+//                a = fault_incomplete_type_object((TypeExpr *)a, 0, 0, 0, 0);
+            a = mk_typeexprsubscript(a, e, quals);
+            /*if (quals)
+                a = mk_typeexpr1(*/
         }
         checkfor_ket(s_rbracket);
+        outermost = NO;
         break;
 default:
         return a;
@@ -2294,6 +2721,11 @@ default:
 static int32 syn_minformals, syn_maxformals;
 static bool syn_oldeformals;     /* @@@ use in rd_decl? */
                        /* set by rd_formals, read by rd_declarator_1() */
+static bool syn_fillinforfndef;
+static SynBindList *syn_narrowformals, *syn_wideformals, *syn_allformals;
+static DeclRhsList *syn_auxiliaries;
+static Expr *syn_arginit;
+                       /* set by rd_formals, read by rd_fndef          */
 static Symstr *declarator_name;
                        /* set by rd_declarator: 0 or Symstr *          */
 static Binder *declarator_mbinder;
@@ -2407,7 +2839,9 @@ case s_and:
 #endif
             SET_BITMAP quals;
             nextsym();
-            quals = rd_onceonlyquals(CVBITS);
+            quals = rd_onceonlyquals(TQBITS);
+            //if (quals & bitoftype_(s_restrict))
+            //  printf("Had restrict as pointer qualifier\n");
             a = rd_declarator_1(declflag, mem_scope, fnaux, inner);
             if (h0_(a) == s_error) return a;
 #ifdef CPLUSPLUS
@@ -2425,8 +2859,11 @@ case s_and:
     return rd_declarator_postfix(a, declflag, fnaux, inner);
 }
 
+enum ident_type { ident_OBJECT, ident_MEMBER, ident_ELEMENT };
+
 static TypeExpr *fault_incomplete_type_object(TypeExpr *tt, Symstr *name,
-                                              bool member, SET_BITMAP stg)
+                                              enum ident_type type,
+                                              SET_BITMAP stg, bool openarrayok)
 {   /* Fault attempts to declare an object (or member) of               */
     /* 'incomplete type' or function type.  Members are constraint      */
     /* violations, objects are unclear, maybe just undefined.           */
@@ -2435,10 +2872,10 @@ static TypeExpr *fault_incomplete_type_object(TypeExpr *tt, Symstr *name,
     /* Note also that member <==> (stg & PRINCSTGBITS) == 0.            */
 #endif
     TypeExpr *t = princtype(tt);
-    if (h0_(t) == s_subscript)
-    { /* Might be an array of self - find actual type */
-      t = typearg_(t);
-    }
+    //if (h0_(t) == s_subscript)
+    //{ /* Might be an array of self - find actual type */
+    //  t = typearg_(t);
+    //}
     if (h0_(t) == s_typespec)
     {   SET_BITMAP m = typespecmap_(t);
         if (m & CLASSBITS)
@@ -2447,15 +2884,15 @@ static TypeExpr *fault_incomplete_type_object(TypeExpr *tt, Symstr *name,
             /* Much of the compiler can support undefined structs until */
             /* first essential use, but ANSI ban.                       */
 #ifdef CPLUSPLUS
-            if (!(member && stg & bitofstg_(s_static)
+            if (!(type == ident_MEMBER && stg & bitofstg_(s_static)
                          && attr & TB_BEINGDEFD))
 #endif
             {   if (attr & TB_BEINGDEFD)
-                {   cc_err(syn_err_selfdef_struct(member,b,name));
+                {   cc_err(syn_err_selfdef_struct(type,b,name));
                     goto fixup;
                 }
                 if (!(attr & TB_DEFD) && !(stg & bitofstg_(s_extern)))
-                {   cc_err(syn_err_undef_struct(member,b,name));
+                {   cc_err(syn_err_undef_struct(type,b,name));
                     goto fixup;
                 }
 #ifdef CPLUSPLUS
@@ -2465,37 +2902,41 @@ static TypeExpr *fault_incomplete_type_object(TypeExpr *tt, Symstr *name,
 #define syn_rerr_abstract_class(_m,_b,_s) \
         "abstract class $c %s: $r", _b, errs_membobj(_m), _s
                 if (attr & TB_ABSTRACT)
-                {   cc_rerr(syn_rerr_abstract_class(member,b,name));
+                {   cc_rerr(syn_rerr_abstract_class(type,b,name));
                     /* fixup is just to allow it */
                 }
 #endif
             }
         }
         if (m & bitoftype_(s_void))
-        {   cc_err(syn_err_void_object(member,name));
+        {   cc_err(syn_err_void_object(type,name));
             goto fixup;
         }
     }
     /* @@@ pick up more [] cases (like auto, but not extern) below?     */
-    if (h0_(t) == t_subscript && typesubsize_(t) == 0 && member)
+    if (h0_(t) == t_subscript && typesubsize_(t) == 0 &&
+        ((type == ident_MEMBER && !openarrayok) ||
+          type == ident_ELEMENT ||
+         (stg & bitofstg_(s_auto)))
+       )
     {   if (!(suppress & D_ZEROARRAY)) {
             if (suppress & D_MPWCOMPATIBLE)
-                cc_warn(syn_rerr_open_member, name);
+                cc_warn(syn_rerr_open_member(type,name));
             else
-                cc_pccwarn(syn_rerr_open_member, name);
+                cc_pccwarn(syn_rerr_open_member(type,name));
         }
         /* ANSI ban open array members, pcc treats as [0].              */
         typesubsize_(t) = globalize_int(0);
     }
     if (h0_(t) == t_fnap && (
 #ifdef CPLUSPLUS
-            !member &&
+            type != MEMBER &&
 #else
-            member ||
+            type == MEMBER ||
 #endif
             !(stg & (bitofstg_(s_extern)|bitofstg_(s_static)))))
     {   /* Beware: next line was syn_pccwarn, but AM sees PCC error.    */
-        cc_rerr(syn_rerr_fn_ptr(member,name));
+        cc_rerr(syn_rerr_fn_ptr(type,name));
         /* Check non-typedef formals have types before fixup.           */
         if (h0_(tt) == t_fnap) ensure_formals_typed(typefnargs1_(tt), 1);
         goto fixup;
@@ -2530,7 +2971,16 @@ static void fault_incomplete_formals(DeclRhsList *p, bool defn)
         IGNORE(defn);   /* only called with defn == 0.                  */
 #endif
         p->decltype = fault_incomplete_type_object(
-                        p->decltype, p->declname, 0, bitofstg_(s_auto));
+                        p->decltype, p->declname, ident_OBJECT, bitofstg_(s_auto), NO);
+    }
+}
+
+static void fault_incomplete_members(TagBinder *b)
+{   ClassMember *l;
+    for (l = tagbindmems_(b); l != NULL; l = memcdr_(l))
+    {
+        memtype_(l) = fault_incomplete_type_object(
+                        memtype_(l), memsv_(l), ident_MEMBER, bindstg_(l), memcdr_(l) == 0);
     }
 }
 
@@ -2572,6 +3022,10 @@ static TypeExpr *fault_odd_fn_array(TypeExpr *t)
     {   /* array of fn/void => array of ptrs to fn/void.                */
         cc_rerr(syn_rerr_array_elttype, pa);
         goto addptr;
+    }
+    if (h0_(t) == t_subscript && language_flavour >= FLAVOUR_C99)
+    {
+        typearg_(t) = fault_incomplete_type_object(a, 0, ident_ELEMENT, 0, NO);
     }
     return t;
 addptr:
@@ -2738,7 +3192,7 @@ static void defaultstorageclass(DeclRhsList *d, int declflag)
         TypeExpr *t = d->decltype;
         if (debugging(DEBUG_BIND))
             cc_msg("defaultstg $r[%lx]%x\n", d->declname, (long)s, declflag);
-        if (declflag & (BLOCKHEAD|FORMAL|ARG_TYPES|CATCHER))
+        if (declflag & (BLOCKHEAD|FORMAL|ARG_TYPES|CATCHER|FORDECL))
             /* of course, by now there are no arg fns (mapped to ptrs). */
             s |= isfntype(t) ? bitofstg_(s_extern)
                              : bitofstg_(s_auto);
@@ -2746,6 +3200,8 @@ static void defaultstorageclass(DeclRhsList *d, int declflag)
             s |= isfntype(t) ?
 #ifdef CPLUSPLUS
                      s & bitofstg_(s_inline) ? bitofstg_(s_static) :
+#else
+                     s & bitofstg_(s_inline) ? bitofstg_(s_extern)|b_maybeinline :
 #endif
                      bitofstg_(s_extern) :
 #ifdef CPLUSPLUS
@@ -2765,14 +3221,18 @@ static void ensure_formals_typed(DeclRhsList *d, bool proto)
     {   TypeExpr *t = d->decltype;
         if (is_untyped_(t))
         {   if (proto)
-                /* @@@ ensure that f(,) error has not got this far */
+            {   /* @@@ ensure that f(,) error has not got this far */
                 cc_rerr(syn_rerr_missing_type2, d->declname);
+                d->decltype = te_int;
+            }
             else
-              if (!(feature & FEATURE_PCC))
-                  /* God knows why ANSI do not consider this an error */
-                  cc_warn(syn_warn_undeclared_parm, d->declname);
-
-            d->decltype = te_int;
+            {   if (language_flavour >= FLAVOUR_C99)
+                    cc_rerr(syn_rerr_missing_type4, d->declname);
+                else if (language_flavour >= FLAVOUR_C90)
+                    /* God knows why ANSI do not consider this an error */
+                    cc_warn(syn_warn_undeclared_parm, d->declname);
+                merge_formal_decl(d, mkDeclRhsList(d->declname, te_int, d->declstg));
+            }
         }
     }
 }
@@ -2790,6 +3250,8 @@ static bool is_proto_arglist(DeclRhsList *d, int map)
     return map & 1;
 }
 
+static TypeExpr *syn_fntype;
+
 static void merge_formal_decl(DeclRhsList *d, DeclRhsList *dnew)
 {
 /* Here I have a formal parameter (d) which is now being given an        */
@@ -2799,6 +3261,50 @@ static void merge_formal_decl(DeclRhsList *d, DeclRhsList *dnew)
         cc_err(syn_err_duplicate_type, d->declname);
     d->declstg = dnew->declstg;
     d->decltype = dnew->decltype;
+    /* KJB - need to do declaration now (see rd_formals_2) */
+    {   TypeExpr *at = d->decltype, *wt = widen_formaltype(at);
+        Binder *ab, *wb;
+        if (wt == at ||  /* pointer equality is fine here */
+            (typefnaux_(syn_fntype).flags & bitoffnaux_(s_callernarrow))) /* KJB */
+            ab = wb = instate_declaration(d, FORMAL);
+        else
+        {   Expr *e;
+            DeclRhsList *narrowedformal = mkDeclRhsList(d->declname, at,
+                                  d->declstg);
+            DeclRhsList *wideformal = mkDeclRhsList(d->declname, wt,
+                                  d->declstg);
+            /* do the original binder second so it gets seen first */
+            wb = instate_declaration(wideformal, FORMAL);
+            ab = instate_declaration(narrowedformal, FORMAL|DUPL_OK);
+            binduses_(wb) |= u_referenced;
+            e = mkbinary(s_init, (Expr *)ab,  /* do the narrowing */
+                                 mkcast(s_cast, (Expr *)wb, bindtype_(ab)));
+            syn_narrowformals = mkSynBindList(syn_narrowformals, ab);
+            syn_arginit = syn_arginit ? mkbinary(s_comma, syn_arginit, e) : e;
+        }
+        if (usrdbg(DBG_VAR))
+            syn_allformals = mkSynBindList(syn_allformals, ab);
+        #ifdef CPLUSPLUS
+        if (p == 0 && bindstg_(fnbind) & bitofstg_(s_virtual))
+            /* Flag 'this' used in virtual member fn (implicit use).    */
+            binduses_(ab) |= u_referenced;
+        #else
+        if (!(feature & FEATURE_PREDECLARE))
+            /* preclude any whinge about unused fn args */
+            /* Allow whinges in C++ since formal names are omittable.   */
+            binduses_(ab) |= u_referenced;
+        #endif
+        if (syn_wideformals == 0)
+        {   instate_alias(first_arg_sym, wb);
+            syn_wideformals = mkSynBindList(0, wb);
+        }
+        else
+        {   SynBindList *p;
+            for (p = syn_wideformals; p->bindlistcdr!=0; p=p->bindlistcdr)
+                ;
+            p->bindlistcdr = mkSynBindList(0,wb);
+        }
+    }
 }
 
 #ifdef CPLUSPLUS
@@ -2908,6 +3414,43 @@ static void attempt_constdata(DeclRhsList *d)
 # define archaic_init(s) ((s) == s_lbrace)
 #endif
 
+static Expr *rd_compound_literal(TypeExpr *t)
+{   DeclRhsList *d;
+    Binder *b;
+    Expr *e;
+    int32 temp_depth;
+    Expr *temp_peek;
+    d = mkDeclRhsList(0, 0, synscope ? bitofstg_(s_auto)
+                                     : bitofstg_(s_static));
+    d->declbind = b = mk_binder(gensymval(synscope==0), d->declstg, t);
+    d->decltype = t;
+    NoteCurrentFileLine(&d->fileline);
+    datap = &data;              /* @@@ too unstructured.                */
+    temp_depth = syn_initdepth; temp_peek = syn_initpeek;
+    syn_initdepth = 0;
+    syn_initpeek = 0;
+    e = declinit_(d) = genstaticparts(d, synscope == 0, NO, 0, YES);
+    syn_initdepth = temp_depth; syn_initpeek = temp_peek;
+    e = mk_expr2(s_cmplit, d->decltype, e, (Expr *) d->declbind);
+    if (d->declstg & bitofstg_(s_auto))
+       synscope->car = mkSynBindList_from_Decl(d, synscope->car);
+    return e;
+}
+
+static TypeExpr *modify_vla_declaration(DeclRhsList *d)
+{   if (!(d->declstg & bitofstg_(s_typedef)))
+    {
+        TypeExpr *t1 = princtype(d->decltype);
+        switch (h0_(t1))
+        {   case t_subscript:
+                if (sizeoftypeconstant(t1))
+                    break;
+                return mk_typeexpr1(t_vla, d->decltype, 0);
+        }
+    }
+    return d->decltype;
+}
+
 static void rd_declrhs_exec(DeclRhsList *d, int declflag,
                             bool cppinit, Binder *mbind)
 {   int initflag = 0;
@@ -2952,7 +3495,14 @@ static void rd_declrhs_exec(DeclRhsList *d, int declflag,
        is no initialiser to read. instate_declaration removes for local
        statics not going in bss.
      */
+    d->decltype = modify_vla_declaration(d);
     d->declbind = instate_declaration(d, declflag);
+    /* Track constraint on inline definitions */
+    if (declflag & (BLOCKHEAD|FORDECL) &&
+        d->declstg & bitofstg_(s_static) &&
+        !syn_mod_static &&
+        !(qualifiersoftype(d->decltype) & bitoftype_(s_const)))
+        syn_mod_static = d;
 #ifdef CPLUSPLUS
 /* We need to look in mbind (the member binder) instead of d->declbind: */
 /* static members have latter a toplevel b_pseudonym with NULL parent.  */
@@ -2988,13 +3538,14 @@ static void rd_declrhs_exec(DeclRhsList *d, int declflag,
     else
 #endif
     if (curlex.sym == s_assign || archaic_init(curlex.sym))
-    {   if (d->declstg & (bitofstg_(s_auto)|bitofstg_(s_static)) ||
-             (d->declstg & (bitofstg_(s_extern)|b_undef)) ==
-                              (bitofstg_(s_extern)))
+    {   initflag = 2;
+        if (h0_(d->decltype) == t_vla)
+            cc_err(syn_err_cant_init_vla);
+        else if (d->declstg & (bitofstg_(s_auto)|bitofstg_(s_static)) ||
+                 (d->declstg & (bitofstg_(s_extern)|b_undef)) == bitofstg_(s_extern))
             initflag = 1;
         else
-            cc_err(syn_err_cant_init, d->declstg),
-            initflag = 2;
+            cc_err(syn_err_cant_init, d->declstg);
 
         if (archaic_init(curlex.sym))
             cc_pccwarn(syn_rerr_archaic_init);
@@ -3004,9 +3555,12 @@ static void rd_declrhs_exec(DeclRhsList *d, int declflag,
     if (initflag == 2) (void)syn_rdinit(0,0,4);
     syn_initdepth = (initflag == 1) ? 0 : -1;
     syn_initpeek = 0;
-    declinit_(d) =
-        genstaticparts(d, (declflag & TOPLEVEL) != 0, initflag != 1,
-                       dyninit);
+    if (h0_(d->decltype) == t_vla)
+        declinit_(d) = make_vla_initialisation(d);
+    else
+        declinit_(d) =
+            genstaticparts(d, (declflag & TOPLEVEL) != 0, initflag != 1,
+                           dyninit, NO);
     if (declinit_(d)) attributes_(d->declbind) |= A_DYNINIT;
     /* The positioning of the next line is subject to some debate */
     /* -- I put it here so that the line number is exact, but     */
@@ -3014,7 +3568,7 @@ static void rd_declrhs_exec(DeclRhsList *d, int declflag,
     /* (b) LOCAL vars BLOCKHEAD|FORMAL are not yet complete in    */
     /* that we have not yet decided on their eventual storage;    */
     /* this is done by dbg_scope().  See other dbg_locvar() call. */
-    if (usrdbg(DBG_VAR) && (declflag & BLOCKHEAD))
+    if (usrdbg(DBG_VAR) && (declflag & (BLOCKHEAD|FORDECL)))
         dbg_locvar(d->declbind, d->fileline);
 #ifdef CPLUSPLUS
     pop_scope(scope_level);
@@ -3022,6 +3576,24 @@ static void rd_declrhs_exec(DeclRhsList *d, int declflag,
 #else
     IGNORE(scope_level); IGNORE(cppinit); IGNORE(mbind);
 #endif
+}
+
+/* patch up for special treatment of types of formal parameters at defn */
+static TypeExpr *modify_formaltype(TypeExpr *t, Symstr *name)
+{   TypeExpr *t1 = princtype(t);
+    IGNORE(name);
+    switch (h0_(t1))
+    {   case t_fnap:       /* turn f() to (*f)() */
+            return ptrtotype_(t);
+        case t_subscript:  /* turn a[qual] to * qual a     */
+            //if (typesubsize_(t) == arraystarnode) cc_err(syn_err_arraystar);
+            /* We also turn a const array (only via typedef) into a     */
+            /* pointer to const components.  Beware, ANSI is unclear.   */
+            return mkqualifiedtype(qualifiedptrtotype_(typearg_(t1), typesubqual_(t1)),
+                                   typedef_qualifiers(t));
+        default:
+            return t;
+    }
 }
 
 /* but for its size rd_declrhslist() would be part of rd_decl()
@@ -3072,20 +3644,35 @@ if (h0_(temp->decltype) == t_coloncolon) syserr("rd_declarator(::)");
             temp->declname = declarator_name;          /* 2nd result */
         }
         if (declflag & (FORMAL|ARG_TYPES|CATCHER))
-            temp->decltype = modify_formaltype(temp->decltype);
+            temp->decltype = modify_formaltype(temp->decltype, temp->declname);
             /* transform f() -> (*f)() and a[] -> *a    */
             /* these get seen by all - even the CG.     */
+        /* ANSI bans anything other than extern (and inline)            */
+        /* in block-scope function idents. Other code already ensures   */
+        /* only extern,static,inline in non-member case.                */
+        if (declflag & BLOCKSCOPE &&
+            temp->declstg & bitofstg_(s_static) &&
+            isfntype(temp->decltype))
+        {   temp->declstg &=~ bitofstg_(s_static);
+            cc_err(syn_err_stgclass, s_static, ctxtofdeclflag(declflag));
+        }
         defaultstorageclass(temp,declflag);
+        /* AWOOGA */
+        if (qualifiersoftype(temp->decltype) & bitoftype_(s_restrict))
+        {
+            temp->declstg |= b_noalias;
+            //printf("Uh-oh: noalias\n");
+        }
 /* AM: because f(void) is OK, but not f(void, int), checks on the       */
 /* use of 'void' in parameter lists are postponed to rd_formals().      */
 /* Other incomplete types (like struct t) are done there too.           */
 /* However, it might be nice for early reporting to fault some cases    */
 /* here (e.g. named void parameters).  See fault_incomplete_formals().  */
-        if (!(declflag & FORMAL) &&
+        /*if (!(declflag & (MEMBER|FORMAL)) &&
             !(temp->declstg & bitofstg_(s_typedef)))
             temp->decltype = fault_incomplete_type_object(
                  temp->decltype, temp->declname,
-                 (declflag & MEMBER) != 0, temp->declstg);
+                 (declflag & MEMBER) != 0, temp->declstg, NO);*/
         if (h0_(temp->decltype) == t_fnap)       /* but NOT via typedef */
         {   /* see if the fn declaration is a fn definition, we have    */
             /* already (in rd_formals()) changed f(void) to f()         */
@@ -3159,8 +3746,33 @@ if (h0_(temp->decltype) == t_coloncolon) syserr("rd_declarator(::)");
                 }
             if (p==0) cc_err(syn_err_not_a_formal, sv);
         }
-        if (declflag & (TOPLEVEL|BLOCKHEAD))
+        if (declflag & (TOPLEVEL|BLOCKHEAD|FORDECL|ARG_TYPES))
+        {   DeclRhsList *v = make_vla_decls(temp);
+            if (v)
+            {   if (declflag & ARG_TYPES)
+                {   DeclRhsList *vv;
+                    for (vv=v; vv->declcdr; v=v->declcdr)
+                        ;
+                    vv->declcdr = syn_auxiliaries;
+                    syn_auxiliaries = v;
+                }
+                else
+                {   if (p == 0) p = q = v;
+                    else q->declcdr = v;
+                    while (q->declcdr) q=q->declcdr;
+                }
+            }
+        }
+        if (declflag & (TOPLEVEL|BLOCKHEAD|FORDECL))
             rd_declrhs_exec(temp, declflag, cppinit, mbind);
+        if (!(declflag & (MEMBER|FORMAL)) &&
+            !(temp->declstg & b_undef) &&
+            !(temp->declstg & bitofstg_(s_typedef)))
+            temp->decltype = fault_incomplete_type_object(
+                 temp->declbind ? bindtype_(temp->declbind) : temp->decltype,
+                 temp->declname,
+                 (declflag & MEMBER) ? ident_MEMBER : ident_OBJECT, temp->declstg,
+                 NO);
 #ifdef CPLUSPLUS
         if (declflag & MEMBER && curlex.sym == s_assign)
         {   Expr *e;            /* parse "virtual f() = 0;"             */
@@ -3267,8 +3879,10 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
 {   TypeExpr *fntype = d->decltype;        /* known to be fn type */
     Binder *fnbind; Cmd *body;
     DeclRhsList *fpdecllist = typefnargs1_(fntype), *fpe;
-    SynBindList *lambdap = 0, *lambdaq = 0;
+    SynBindList *lambdap = 0;
     SynBindList *narrowformals = 0; Expr *arginit = 0;
+    Expr *initstuff = 0; SynBindList *initbind = 0;
+
     currentfunction.symstr = d->declname;
     if (debugging(DEBUG_FNAMES))
         cc_msg("Start of function $r\n", currentfunction.symstr);
@@ -3289,6 +3903,7 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
     bind_scope = GLOBALSCOPE;              /* local scope for any structs! */
     {   /* syn_formals is examined by rd_declrhslist if ARG_TYPE is set */
         syn_formals = fpdecllist;
+        syn_fntype = fntype;
         (void) rd_decllist(ARG_TYPES);
     }
 #ifdef CPLUSPLUS
@@ -3316,6 +3931,7 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
         }
     }
     ensure_formals_typed(fpdecllist, 0);
+    ensure_no_vla_stars(fpdecllist);
 /* do the declaration of the function - this will copy the types just
  * updated in fpdecllist as part of globalize_ing the type of d.
  */
@@ -3326,22 +3942,17 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
     obinduses = binduses_(fnbind);
 #ifdef CPLUSPLUS
     if (declflag & TEMPLATE) attributes_(fnbind) |= A_TEMPLATE;
-/* @@@ There is a nastiness in that currentfunction was never intended  */
-/* for general use (especially as it is a C 'string'), it was just      */
-/* intended for internal compiler progress messages.  Unfortunately     */
-/* arm/gen.c uses it to get back at what AM presumes is fnbind above.   */
-/* The is needed for C++ because d->declname can be updated by the      */
-/* ovld_instance_name code.  Rationalise soon?                          */
-/* Sep 92: now being rationalised...                                            */
     currentfunction.symstr = d->declname;
-/* @@@ the next line doesn't work for memfns -- it uses the b_impl      */
-/* Binder, note the member fn one.                                      */
     set_access_context(0, fnbind);
                                   /* complete the friend access context */
+    if (bindstg_(fnbind) & b_impl) fnbind = realbinder_(fnbind);
+    currentfunction.symstr = bindsym_(fnbind);
 #endif
-    if (usrdbg(DBG_PROC+DBG_VAR))
+    if (usrdbg(DBG_PROC+DBG_VAR) && !(bindstg_(fnbind) & b_maybeinline))
         dbg_proc(bindsym_(fnbind), bindtype_(fnbind),
                  (bindstg_(fnbind) & bitofstg_(s_extern)) != 0, fl);
+#if 0
+/* KJB - moved to rd_formals_2 */
 /* @@@ The following comment about re-using store is now a lie.         */
 /* Now, instate_declaration above globalize_d the d->decltype field (since
  * all fns are TOPLEVEL beasties).  This leaves us free to construct a
@@ -3398,11 +4009,34 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
         if (lambdap == 0) lambdap = lambdaq = mkSynBindList(0,wb);
         else lambdaq = lambdaq->bindlistcdr = mkSynBindList(0,wb);
     }
+#else
+    /* KJB - new code, as rd_formals_2's done the work */
+    lambdap = syn_wideformals;
+    narrowformals = syn_narrowformals;
+    arginit = syn_arginit;
+    if (usrdbg(DBG_VAR) && !(bindstg_(fnbind) & b_maybeinline))
+    {   SynBindList *n;
+        for (n = reverse_SynBindList(syn_allformals); n; n = n->bindlistcdr)
+            dbg_locvar(n->bindlistcar, fl);
+    }
+    /* Create initialisation expression for auxiliary (VM argument) declarations. */
+    /* Note reversal of order, as declaration list is backwards */
+    for (fpe = syn_auxiliaries; fpe != 0; fpe = fpe->declcdr)
+    {   Expr *e = declinit_(fpe);
+        if (e != 0)
+        {   initstuff = initstuff ? mkbinary(s_comma, e, initstuff) : e;
+        }
+    }
+    //mkSynBindList_from_Decl(syn_auxiliaries, &initbind, 0);
+    initbind = mkSynBindList_from_Decl(syn_auxiliaries, 0);
+#endif
 #ifdef CPLUSPLUS
     if (syn_reftemps != 0) syserr("syn_reftemps/rd_fndef");
 #endif
     {   Cmd *argstuff = narrowformals==0 ? 0 :
             mk_cmd_e(s_semicolon, syn_invented_fl, optimise0(arginit));
+        Cmd *initcmd = initstuff==0 ? 0 :
+            mk_cmd_e(s_semicolon, syn_invented_fl, optimise0(initstuff));
 #ifdef CPLUSPLUS
 /* @@@ we should pass 0 to rd_meminit if not a ctor (bit in bindstg_).  */
         TypeExpr *arg1t = bindstg_(fnbind) & b_memfna && lambdap ?
@@ -3421,7 +4055,7 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
         syn_reftemps = 0;
 #endif
         bind_scope = LOCALSCOPE;
-        body = rd_body(typearg_(fntype));
+        body = rd_body(typearg_(fntype), fntype);
         bind_scope = TOPLEVEL;
 #ifdef CPLUSPLUS
         if (meminit)
@@ -3434,15 +4068,27 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
                                 mk_cmd_e(s_semicolon, fl, optimise0(edtor))),
                                 body));
 #endif
+        if (initbind)
+            body = mk_cmd_block(syn_invented_fl, initbind,
+                                mkCmdList(mkCmdList(0,body), initcmd));
         if (argstuff)
             body = mk_cmd_block(syn_invented_fl, narrowformals,
                                 mkCmdList(mkCmdList(0,body), argstuff));
     }
     label_resolve();
+    if (language_flavour >= FLAVOUR_C99)
+    {   Binder *b = funcnamesym->symbind;
+        if (binduses_(b) & u_referenced)
+            genstaticstring(b, symname_(currentfunction.symstr));
+        else
+            binduses_(b) |= u_referenced;
+    }
     pop_scope(0);
+    funcnamesym->symbind = NULL;
 /* Remove recursive references.  One day improve to consider the whole   */
 /* of the call graph so unreferenced mutually recursion is warned of.    */
     binduses_(fnbind) &= ~(~obinduses & u_referenced);
+
 /* h4_(result) is a flag to indicate the presence of an ellipsis in      */
 /* the list of formal arguments for this function.                       */
     return mkTopDeclFnDef(s_fndef, fnbind, lambdap, body,
@@ -3452,7 +4098,12 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
          * code in cg.c which checks whether the address of ANY of the
          * args has been taken.  If so all args go to stack !!!
          */
-        (fntypeisvariadic(fntype) || (lambdap!=0) && (feature&FEATURE_PCC)));
+#ifdef TARGET_HAS_SPECIAL_VARARGS
+        fntypeisvariadic(fntype)
+#else
+        (fntypeisvariadic(fntype) || (lambdap!=0) && (feature&FEATURE_PCC))
+#endif
+        );
   }
 }
 
@@ -3468,6 +4119,115 @@ static bool cpp_special_member(DeclRhsList *d)
 #else
 #  define cpp_special_member(d) 0
 #endif
+
+static Expr *make_vla_initialisation(DeclRhsList *d)
+{   if (d->declstg & (bitofstg_(s_auto)))
+    {   TypeExpr *t = typearg_(d->decltype);
+        Expr *e = mkvlaalloc(sizeoftypeasexpr(t));
+        return optimise0(mkbinary(s_init, (Expr *) d->declbind, e));
+    }
+    else if (!(d->declstg & (bitofstg_(s_typedef)|bitofstg_(s_extern))))
+        /* don't error for extern, as caught more generally in add_vla_decls_for_type */
+        cc_err(syn_err_vla_storage, d->declstg);
+    return 0;
+}
+
+static bool is_variably_modified_type(TypeExpr *t)
+{   t = princtype(t);
+    switch (h0_(t))
+    {
+        case t_vla:
+            return YES;
+        case t_subscript:
+        {   Expr *a = typesubsize_(t);
+            if (a && h0_(a) != s_integer)
+                return YES;
+            /* fall through */
+        }
+        case t_content:
+        case t_ref:
+            return is_variably_modified_type(typearg_(t));
+        default:
+            return NO;
+    }
+
+}
+
+static DeclRhsList *add_vla_decls_for_type(DeclRhsList *d, SET_BITMAP stg, TypeExpr *t)
+{   t = princtype(t);
+    switch (h0_(t))
+    {
+        case t_subscript:
+        {   Expr *a = typesubsize_(t);
+            if (a && h0_(a) != s_integer)
+            {   /* The size variable */
+                DeclRhsList *temp = mkDeclRhsList(0, 0, bitofstg_(s_auto));
+                temp->declname = gensymval(1);
+                temp->decltype = te_size_t_const;
+                temp->declbind = instate_declaration(temp, LOCALSCOPE);
+                if (usrdbg(DBG_VAR))
+                {   /* Debugger wants maximum index, so store that. Inefficient. */
+                    Expr *one = mkintconst(te_size_t,1,0);
+                    typesubsize_(t) = mkbinary(s_plus, (Expr *) temp->declbind, one);
+                    declinit_(temp) = optimise0(mkbinary(s_init, (Expr *) temp->declbind,
+                                                       mkbinary(s_minus, a, one)));
+                }
+                else
+                {   typesubsize_(t) = (Expr *) temp->declbind;
+                    /* a is known to be integral */
+                    declinit_(temp) = optimise0(mkbinary(s_init, (Expr *) temp->declbind, a));
+                }
+                if (stg & bitofstg_(s_extern))
+                    cc_err(syn_err_vm_storage, stg);
+                if (d == 0)
+                    d = temp;
+                else
+                {   DeclRhsList *p;
+                    for (p = d; p->declcdr; p=p->declcdr)
+                        ;
+                    p->declcdr = temp;
+                }
+            }
+            /* fall through */
+        }
+        case t_content:
+        case t_ref:
+        case t_vla:
+            return add_vla_decls_for_type(d, stg, typearg_(t));
+        default:
+            return d;
+    }
+}
+
+static DeclRhsList *make_vla_decls(DeclRhsList *d)
+{   DeclRhsList *v = 0;
+    for (; d; d = d->declcdr)
+        v = add_vla_decls_for_type(v, d->declstg, d->decltype);
+    return v;
+}
+
+static void ensure_no_vla_stars(const DeclRhsList *d)
+{   for (; d; d = d->declcdr)
+    {   const TypeExpr *t = d->decltype;
+        for (;;)
+        {
+            switch (h0_(t))
+            {   case t_subscript:
+                    if (typesubsize_(t) == arraystarnode)
+                    {   cc_err(syn_err_arraystar);
+                        typesubsize_(t) = globalize_int(1);
+                    }
+                    /* fall through */
+                case t_content:
+                case t_ref:
+                case t_vla:
+                    t = typearg_(t);
+                    continue;
+            }
+            break;
+        }
+    }
+}
 
 /* rd_decl reads a possibly top-level decl, see also rd_decl2()       */
 static TopDecl *rd_decl(int declflag, SET_BITMAP accbits, TagBinder *xscope)
@@ -3538,7 +4298,7 @@ static TopDecl *rd_decl(int declflag, SET_BITMAP accbits, TagBinder *xscope)
                 cc_err("'friend <type>;' needs elaborated-type-specifier");
                 /* (and not 'enum foo' either, but let's not say this!) */
         }
-        else if (declflag & (MEMBER|BLOCKHEAD|TOPLEVEL) &&
+        else if (declflag & (MEMBER|BLOCKHEAD|TOPLEVEL|FORDECL) &&
                  !(ds.stg & bitofstg_(s_typedef)) &&
                  isprimtype_(t, s_union) &&
                  isgensym(bindsym_(typespectagbind_(t))) &&
@@ -3576,9 +4336,17 @@ static TopDecl *rd_decl(int declflag, SET_BITMAP accbits, TagBinder *xscope)
 #ifdef CPLUSPLUS
 anonu:      /* what a horrible place to put a label!                    */
 #endif
-    {   syn_formaltags = 0;             /* overzealous safety           */
+    {   if (declflag & TOPLEVEL) syn_fillinforfndef = 1, syn_formaltags = 0;
         d = rd_declrhslist(&ds, declflag);
         if (d != 0) d->fileline = fl;
+#ifndef CPLUSPLUS
+        if (d != 0 && !(declsynflags & B_TYPESEEN) &&
+                      !(declflag & FORMAL) &&
+                      language_flavour >= FLAVOUR_C99)
+        {   cc_rerr(syn_rerr_missing_type4, d->declname);
+            declsynflags |= B_TYPESEEN;
+        }
+#endif
         if (topfnflag)
         {   /* NB. it is vital that when topfnflag is set on return     */
             /* from rd_declrhslist we must soon pop_varenv/tagenv.      */
@@ -3627,8 +4395,20 @@ anonu:      /* what a horrible place to put a label!                    */
         }
 /* ANSI C requires a complaint at top level for "*x;", but not "*f(){}" */
 /* This message is a little late, but cannot occur 'on time'.           */
+#ifndef CPLUSPLUS
+        if (language_flavour >= FLAVOUR_C99)
+        {   /* In C99, need a type specifier, unless we have a lone
+               identifier in a formal parameter list. */
+            if (!(declsynflags & B_TYPESEEN))
+                if (!(declflag & FORMAL &&
+                        !(declsynflags & (B_STGSEEN|B_TQSEEN))))
+                    if (d != 0)
+                        cc_rerr(syn_rerr_missing_type4, d->declname);
+        }
+        else
+#endif
         if (!(declsynflags & (B_TYPESEEN|B_STGSEEN)) &&
-                    !(declflag & FORMAL) && !(feature & FEATURE_PCC))
+              !(declflag & FORMAL) && language_flavour >= FLAVOUR_C90)
         {   DeclRhsList *x = d;
 #ifdef CPLUSPLUS
 /* Don't moan about missing type for ctors/dtors/conversion functions.  */
@@ -3651,6 +4431,14 @@ anonu:      /* what a horrible place to put a label!                    */
         checkfor_delimiter_2ket(s_semicolon, s_comma);
     }
   }
+#ifndef CPLUSPLUS
+    if (declflag & TOPLEVEL)
+    {   DeclRhsList *x;
+        for (x = d; x; x = x->declcdr)
+            if (isfntype(x->decltype) && !(x->declstg & b_maybeinline))
+                Inline_MakeExternalDefinition(x->declname);
+    }
+#endif
     return (TopDecl *) syn_list2(s_decl, d);
 }
 
@@ -3691,8 +4479,17 @@ static int32 syn_count_minargs(DeclRhsList *d)
 /* very much like rd_decllist, but different concrete syntax.           */
 /* It copes with both ANSI and olde-style formals (and now C++).        */
 /* @@@ sort out the 999/1999 confusion.                                 */
-static DeclRhsList *rd_formals_2(void)
+static DeclRhsList *rd_formals_2(const DeclFnAux *fnaux)
 {   DeclRhsList *p,*q,*temp;
+    Expr *arginit = 0;
+    SynBindList *narrowformals = 0, *lambdap = 0, *lambdaq = 0;
+    bool toplevfn = syn_fillinforfndef;
+
+    if (toplevfn)
+    {   syn_allformals = 0;
+        syn_auxiliaries = 0;
+        syn_fillinforfndef = NO;
+    }
     if (curlex.sym == s_rpar)
     {
 #ifdef CPLUSPLUS
@@ -3700,6 +4497,10 @@ static DeclRhsList *rd_formals_2(void)
 #else
        syn_minformals = 0, syn_maxformals = 999, syn_oldeformals = 1;
 #endif
+       if (toplevfn)
+       {   syn_arginit = 0;
+           syn_narrowformals = syn_wideformals = 0;
+       }
        return 0;
     }
     for (p = q = 0;;)
@@ -3715,6 +4516,12 @@ static DeclRhsList *rd_formals_2(void)
             syn_minformals = syn_count_minargs(p);
             syn_maxformals = 1999;      /* @@@ remove the 999/1999 hack */
             syn_oldeformals = !is_proto_arglist(p,1);
+            if (toplevfn)
+            {   syn_arginit = arginit;
+                syn_narrowformals = narrowformals;
+                syn_wideformals = lambdap;
+            }
+            if (lambdaq) instate_alias(last_arg_sym, lambdaq->bindlistcar);
             return p;    /* to checkfor_ket(s_rpar) */
         }
         temp = rd_decl2(FORMAL, 0);
@@ -3722,6 +4529,58 @@ static DeclRhsList *rd_formals_2(void)
         for (; temp != 0; temp = temp->declcdr)
         {   if (debugging(DEBUG_BIND))
                 cc_msg(" Formal: $r\n", temp->declname);
+
+            /* KJB - new bits. Need to do declaration as we go through  */
+            /* the list - actually always has been true, but now        */
+            /* required for VLAs "(int n, char a[n])"                   */
+            /* Code moved from rd_fndef                                 */
+            if (temp->declname && !is_untyped_(temp->decltype))
+            {   TypeExpr *at = temp->decltype, *wt = widen_formaltype(at);
+                Binder *ab, *wb;
+                if (wt == at ||  /* pointer equality is fine here */
+                    (fnaux->flags & bitoffnaux_(s_callernarrow))) /* KJB */
+                    ab = wb = instate_declaration(temp, FORMAL);
+                else
+                {   Expr *e;
+                    DeclRhsList *narrowedformal = mkDeclRhsList(temp->declname, at,
+                                          temp->declstg);
+                    DeclRhsList *wideformal = mkDeclRhsList(temp->declname, wt,
+                                          temp->declstg);
+                    /* do the original binder second so it gets seen first */
+                    wb = instate_declaration(wideformal, FORMAL);
+                    ab = instate_declaration(narrowedformal, FORMAL|DUPL_OK);
+                    binduses_(wb) |= u_referenced;
+                    e = mkbinary(s_init, (Expr *)ab,  /* do the narrowing */
+                                         mkcast(s_cast, (Expr *)wb, bindtype_(ab)));
+                    narrowformals = mkSynBindList(narrowformals, ab);
+                    arginit = arginit ? mkbinary(s_comma, arginit, e) : e;
+                }
+                if (usrdbg(DBG_VAR) && toplevfn)
+                    syn_allformals = mkSynBindList(syn_allformals, ab);
+#ifdef CPLUSPLUS
+                if (p == 0 && bindstg_(fnbind) & bitofstg_(s_virtual))
+                    /* Flag 'this' used in virtual member fn (implicit use).    */
+                    binduses_(ab) |= u_referenced;
+#else
+                if (!(feature & FEATURE_PREDECLARE))
+                    /* preclude any whinge about unused fn args */
+                    /* Allow whinges in C++ since formal names are omittable.   */
+                    binduses_(ab) |= u_referenced;
+#endif
+                if (p == 0) instate_alias(first_arg_sym, wb);
+                if (lambdap == 0) lambdap = lambdaq = mkSynBindList(0,wb);
+                else lambdaq = lambdaq->bindlistcdr = mkSynBindList(0,wb);
+                if (toplevfn)
+                {   DeclRhsList *v = make_vla_decls(temp);
+                    if (v)
+                    {   DeclRhsList *p;
+                        for (p=v; p->declcdr; p=p->declcdr)
+                            ;
+                        p->declcdr = syn_auxiliaries;
+                        syn_auxiliaries = v;
+                    }
+                }
+            }
             if (p == 0) p = q = temp; else q->declcdr = temp, q = temp;
         }
 #ifdef CPLUSPLUS
@@ -3747,6 +4606,12 @@ static DeclRhsList *rd_formals_2(void)
             syn_maxformals = length((List *)p);
             syn_minformals = syn_count_minargs(p);
             syn_oldeformals = !b;
+            if (toplevfn)
+            {   syn_arginit = arginit;
+                syn_narrowformals = narrowformals;
+                syn_wideformals = lambdap;
+            }
+            if (lambdaq) instate_alias(last_arg_sym, lambdaq->bindlistcar);
             return p;
         }
         nextsym();
@@ -3759,16 +4624,17 @@ static Declarator *rd_formals_1(Declarator *a, const DeclFnAux *fnaux)
     SET_BITMAP quals = 0;
     DeclRhsList *f;
     TypeExprFnAux s;
+    ScopeSaver ss;
+    bool toplevfn = syn_fillinforfndef;
     if (bind_scope == TOPLEVEL) bind_scope = GLOBALSCOPE;    /* @@@ nasty */
-    f = rd_formals_2();
+    f = rd_formals_2(fnaux);
     bind_scope = old_bind_scope;
-/* @@@ beware: this gets tags from the wrong scope in things like       */
-/* void (*f(struct a { } x))(struct b { } y);   Banned in C++ anyway.   */
-    syn_formaltags = pop_scope_no_check(scope_level);
+    ss = pop_scope_no_check(scope_level);
+    if (toplevfn) syn_formaltags = ss;
     checkfor_2ket(s_rpar, s_comma);
 #ifdef CPLUSPLUS
 /* careful with C++ archaism: int f(x) const int *x; { ... }            */
-    if (!syn_oldeformals) quals = rd_onceonlyquals(CVBITS);
+    if (!syn_oldeformals) quals = rd_onceonlyquals(TQBITS);
 #endif
 /* @@@ beware that ANSI disallow the use of pragma's which change         */
 /* semantics -- those for printf requesting extra warnings are ok, but    */
@@ -3928,6 +4794,7 @@ static void rd_strdecl(TagBinder *b, ClassMember *bb)
         }
         else break;
     }
+    fault_incomplete_members(b);
 #ifdef CPLUSPLUS
     syn_add_copyctor(b);
 #endif
@@ -4019,7 +4886,11 @@ static void rd_enumdecl(TagBinder *tb)
         nextsym();
         if (curlex.sym == s_rbrace)
         {   if (feature & FEATURE_CFRONT_OR_PCC) cc_warn(syn_warn_extra_comma);
-            else cc_rerr(syn_warn_extra_comma);
+            else
+#ifndef CPLUSPLUS
+                 if (language_flavour < FLAVOUR_C99)
+#endif
+                cc_rerr(syn_warn_extra_comma);
             break;
         }
     }
@@ -4101,7 +4972,7 @@ case s_rbrace:  syn_pop_linkage(); nextsym();
                                  /* @@@ and especially for C++ linkage! */
     {   cc_err(syn_err_misplaced_brace);
         (void)push_scope(0);        /* helps recovery */
-        (void)rd_body(te_int);      /* this will also skip initialisers */
+        (void)rd_body(te_int, NULL);/* this will also skip initialisers */
         label_resolve();            /* tidy up in case declarations */
         pop_scope(0);
 #ifdef CPLUSPLUS
@@ -4109,6 +4980,8 @@ case s_rbrace:  syn_pop_linkage(); nextsym();
 #endif
         return (TopDecl *)errornode;
     }
+    /* for inline constraint checking */
+    syn_mod_static = 0; syn_internal_ref = 0;
     d = rd_decl(TOPLEVEL, 0, NULL);
 #ifdef CPLUSPLUS
     set_access_context(old_access_context, NULL);
@@ -4134,5 +5007,7 @@ void syn_init(void)
     set_access_context(NULL, NULL);             /* no access context yet... */
 #endif
 }
+
+#include "synx.c"
 
 /* End of cfe/syn.c */

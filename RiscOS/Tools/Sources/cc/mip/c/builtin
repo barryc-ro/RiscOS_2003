@@ -50,10 +50,16 @@ FPConst fc_minusone;     /*                          -1.0  */
 
 TypeExpr *te_int;    /* = (global)primtype_(bitoftype_(s_int)) */
 TypeExpr *te_uint, *te_lint, *te_ulint;  /* and friends */
+TypeExpr *te_intbool, *te_uintbool; /* boolean qualified ints */
+TypeExpr *te_lintbool, *te_ulintbool; /* and long ints */
+TypeExpr *te_intconst, *te_uintconst; /* const qualified ints */
+TypeExpr *te_llint, *te_ullint; /* long long ints */
 TypeExpr *te_double; /* = (global)primtype_(bitoftype_(s_double)) */
 TypeExpr *te_float;  /* its short friend */
 TypeExpr *te_ldble;  /* and its long one */
 TypeExpr *te_void;   /* = (global)primtype_(bitoftype_(s_void)) */
+
+static TypeExpr *te_doublesw; /* "software" double - ie struct */
 
 /* since no-one looks inside datasegment and code segment perhaps they
    should be Symstr's */
@@ -62,7 +68,7 @@ Binder *datasegment, *codesegment, *constdatasegment;
 Binder *bsssegment;
 #endif
 Symstr *mainsym, *setjmpsym, *assertsym, *first_arg_sym, *last_arg_sym;
-Symstr *thissym, *ctorsym, *dtorsym, *vtabsym;
+Symstr *thissym, *ctorsym, *dtorsym, *vtabsym, *funcnamesym;
 Symstr *libentrypoint, *stackoverflow, *stack1overflow,
        *countroutine, *count1routine;
 
@@ -99,6 +105,7 @@ Symstr *targeterrno;
 #else
 #define PUREBIT   bitoffnaux_(s_pure)
 #endif
+#define SOFTFPBIT bitoffnaux_(s_softfp)
 
 op_simulation sim;
 
@@ -127,7 +134,7 @@ static Expr *library_function(char *name, int minf, int maxf,
                         b);
 }
 
-#ifdef CPLUSPLUS
+//#ifdef CPLUSPLUS
 static TypeExpr *te_fntype(TypeExpr *res, TypeExpr *a1, TypeExpr *a2,
                                           TypeExpr *a3, TypeExpr *a4)
 {   TypeExprFnAux s;
@@ -152,7 +159,7 @@ static Binder *toplevel_function(char *name, TypeExpr *t)
     /* instate_declaration() returns the unwanted INSTANCE Binder.      */
     return bind_global_(sv);
 }
-#endif
+//#endif
 
 #ifdef SOFTWARE_FLOATING_POINT
 static Expr *floating_function(int nargs, TypeExpr *result,
@@ -165,10 +172,32 @@ static Expr *floating_function(int nargs, TypeExpr *result,
     FormTypeList *a = g_mkFormTypeList(0, a_name, a1, 0);
     TypeExprFnAux s;
     int32 fl =
-#ifdef TARGET_IS_ARM
+#ifdef SOFTWARE_FLOATING_POINT_RETURNS_DOUBLES_IN_REGISTERS
                (result == te_double) ? bitoffnaux_(s_structreg) :
 #endif
                                        0;
+    if (nargs != 1) a->ftcdr = g_mkFormTypeList(0, b_name, a2, 0);
+    b = global_mk_binder(0,
+                         w,
+                         bitofstg_(s_extern) | b_undef | b_fnconst,
+                         g_mkTypeExprfn(t_fnap, result, 0, a,
+                            packTypeExprFnAux(s, nargs, nargs, 0, 0, fl)));
+    return (Expr *)b;
+}
+#endif
+
+#ifdef SOFTWARE_LONG_LONG
+static Expr *longlong_function(int nargs, TypeExpr *result,
+                               TypeExpr *a1, TypeExpr *a2, char *name)
+{
+    Symstr *w = sym_insert_id(name),
+           *a_name = sym_insert_id("a"),
+           *b_name = sym_insert_id("b");
+    Binder *b;
+    FormTypeList *a = g_mkFormTypeList(0, a_name, a1, 0);
+    TypeExprFnAux s;
+    /* CSE can't handle pure functions that return in regs... | PUREBIT */
+    int32 fl = SOFTFPBIT;
     if (nargs != 1) a->ftcdr = g_mkFormTypeList(0, b_name, a2, 0);
     b = global_mk_binder(0,
                          w,
@@ -227,10 +256,37 @@ void builtin_init(void)
     te_lint = initprimtype_(bitoftype_(s_int)|bitoftype_(s_long));
     te_ulint = initprimtype_(bitoftype_(s_int)|bitoftype_(s_long)|
                              bitoftype_(s_unsigned));
+    te_intbool = initprimtype_(bitoftype_(s_int)|bitoftype_(s_bool));
+    te_uintbool = initprimtype_(bitoftype_(s_int)|bitoftype_(s_unsigned)|
+                                bitoftype_(s_bool));
+    te_lintbool = initprimtype_(bitoftype_(s_int)|bitoftype_(s_long)|
+                                bitoftype_(s_bool));
+    te_ulintbool = initprimtype_(bitoftype_(s_int)|bitoftype_(s_long)|
+                                 bitoftype_(s_unsigned)|bitoftype_(s_bool));
+    te_intconst = initprimtype_(bitoftype_(s_int)|bitoftype_(s_const));
+    te_uintconst = initprimtype_(bitoftype_(s_int)|bitoftype_(s_unsigned)|
+                                 bitoftype_(s_const));
+    te_llint = initprimtype_(bitoftype_(s_int)|bitoftype_(s_long)|
+                             bitoftype_(s_short));
+    te_ullint = initprimtype_(bitoftype_(s_int)|bitoftype_(s_long)|
+                              bitoftype_(s_short)|bitoftype_(s_unsigned));
     te_double = initprimtype_(bitoftype_(s_double));
     te_float = initprimtype_(bitoftype_(s_double)|bitoftype_(s_short));
     te_ldble = initprimtype_(bitoftype_(s_double)|bitoftype_(s_long));
     te_void = initprimtype_(bitoftype_(s_void));
+    /* Synthesise a "software" double - just a struct containing a double */
+    te_doublesw = initprimtype_(bitoftype_(s_struct));
+    {   TagBinder *tb = global_mk_tagbinder(0, 0, s_struct);
+        ClassMember *m = (ClassMember *)GlobAlloc(SU_Type, SIZEOF_CLASSMEMBER);
+        typespecbind_(te_doublesw) = (Binder *) tb;
+        tagbindmems_(tb) = m;
+        attributes_(tb) |= TB_DEFD;
+        h0_(m) = s_member;
+        memcdr_(m) = 0;
+        memtype_(m) = te_double;
+        bindstg_(m) = 0;
+        attributes_(m) = 0;
+    }
 
 #if defined(TARGET_IS_UNIX) && !defined(TARGET_IS_SPARC) && !defined(TARGET_IS_ALPHA)
     sim.mulfn = library_function("x$mul", 2, 2, PUREBIT);
@@ -255,9 +311,9 @@ void builtin_init(void)
 /* the 'obsolete's below refer to the ARM only.                         */
     sim.mulfn = library_function("x$multiply", 2, 2, PUREBIT);  /* obsolete */
 #if defined(TARGET_IS_ARM) && !defined(OBSOLETE_ARM_NAMES)
-    sim.divfn = library_function("__rt_sdiv", 2, 2, PUREBIT);
-    sim.udivfn = library_function("__rt_udiv", 2, 2, PUREBIT);
-    sim.divtestfn = library_function("__rt_divtest", 1, 1, PUREBIT);
+    sim.divfn = library_function(TARGET_PREFIX("__rt_sdiv"), 2, 2, PUREBIT);
+    sim.udivfn = library_function(TARGET_PREFIX("__rt_udiv"), 2, 2, PUREBIT);
+    sim.divtestfn = library_function(TARGET_PREFIX("__rt_divtest"), 1, 1, PUREBIT);
 #else
     sim.divfn = library_function("x$divide", 2, 2, PUREBIT);
     sim.udivfn = library_function("x$udivide", 2, 2, PUREBIT);
@@ -271,8 +327,8 @@ void builtin_init(void)
 #endif
 #ifdef TARGET_HAS_DIV_10_FUNCTION
 #if defined(TARGET_IS_ARM) && !defined(OBSOLETE_ARM_NAMES)
-    sim.div10fn = library_function("__rt_sdiv10", 1, 1, PUREBIT);
-    sim.udiv10fn = library_function("__rt_udiv10", 1, 1, PUREBIT);
+    sim.div10fn = library_function(TARGET_PREFIX("__rt_sdiv10"), 1, 1, PUREBIT);
+    sim.udiv10fn = library_function(TARGET_PREFIX("__rt_udiv10"), 1, 1, PUREBIT);
 #else
     sim.div10fn = library_function("_kernel_sdiv10", 1, 1, PUREBIT);
     sim.udiv10fn = library_function("_kernel_udiv10", 1, 1, PUREBIT);
@@ -289,40 +345,105 @@ void builtin_init(void)
     sim.ysprintf = sym_insert_id("sprintf");
     sim.ysnprintf = sym_insert_id("snprintf");
 #ifdef SOFTWARE_FLOATING_POINT
-    sim.dadd = floating_function(2,te_double,te_double,te_double,"_dadd");
-    sim.dsubtract = floating_function(2,te_double,te_double,te_double,"_dsub");
-    sim.dmultiply = floating_function(2,te_double,te_double,te_double,"_dmul");
-    sim.ddivide = floating_function(2,te_double,te_double,te_double,"_ddiv");
-    sim.dnegate = floating_function(1,te_double,te_double,NULL,"_dneg");
-    sim.dgreater = floating_function(2,te_int,te_double,te_double,"_dgr");
-    sim.dgeq = floating_function(2,te_int,te_double,te_double,"_dgeq");
-    sim.dless = floating_function(2,te_int,te_double,te_double,"_dls");
-    sim.dleq = floating_function(2,te_int,te_double,te_double,"_dleq");
-    sim.dequal = floating_function(2,te_int,te_double,te_double,"_deq");
-    sim.dneq = floating_function(2,te_int,te_double,te_double,"_dneq");
-    sim.dfloat = floating_function(1,te_double,te_int,NULL,"_dflt");
-    sim.dfloatu = floating_function(1,te_double,te_uint,NULL,"_dfltu");
-    sim.dfix = floating_function(1,te_int,te_double,NULL,"_dfix");
-    sim.dfixu = floating_function(1,te_uint,te_double,NULL,"_dfixu");
+    sim.dadd = floating_function(2,te_double,te_double,te_double,TARGET_PREFIX("_dadd"));
+    sim.dsubtract = floating_function(2,te_double,te_double,te_double,TARGET_PREFIX("_dsub"));
+    sim.dmultiply = floating_function(2,te_double,te_double,te_double,TARGET_PREFIX("_dmul"));
+    sim.ddivide = floating_function(2,te_double,te_double,te_double,TARGET_PREFIX("_ddiv"));
+    sim.dnegate = floating_function(1,te_double,te_double,NULL,TARGET_PREFIX("_dneg"));
+    sim.dgreater = floating_function(2,te_int,te_double,te_double,TARGET_PREFIX("_dgr"));
+    sim.dgeq = floating_function(2,te_int,te_double,te_double,TARGET_PREFIX("_dgeq"));
+    sim.dless = floating_function(2,te_int,te_double,te_double,TARGET_PREFIX("_dls"));
+    sim.dleq = floating_function(2,te_int,te_double,te_double,TARGET_PREFIX("_dleq"));
+    sim.dequal = floating_function(2,te_int,te_double,te_double,TARGET_PREFIX("_deq"));
+    sim.dneq = floating_function(2,te_int,te_double,te_double,TARGET_PREFIX("_dneq"));
+    sim.dfloat = floating_function(1,te_double,te_int,NULL,TARGET_PREFIX("_dflt"));
+    sim.dfloatu = floating_function(1,te_double,te_uint,NULL,TARGET_PREFIX("_dfltu"));
+    sim.dfix = floating_function(1,te_int,te_double,NULL,TARGET_PREFIX("_dfix"));
+    sim.dfixu = floating_function(1,te_uint,te_double,NULL,TARGET_PREFIX("_dfixu"));
 
-    sim.fadd = floating_function(2,te_float,te_int,te_int,"_fadd");
-    sim.fsubtract = floating_function(2,te_float,te_int,te_int,"_fsub");
-    sim.fmultiply = floating_function(2,te_float,te_int,te_int,"_fmul");
-    sim.fdivide = floating_function(2,te_float,te_int,te_int,"_fdiv");
-    sim.fnegate = floating_function(1,te_float,te_int,NULL,"_fneg");
-    sim.fgreater = floating_function(2,te_int,te_int,te_int,"_fgr");
-    sim.fgeq = floating_function(2,te_int,te_int,te_int,"_fgeq");
-    sim.fless = floating_function(2,te_int,te_int,te_int,"_fls");
-    sim.fleq = floating_function(2,te_int,te_int,te_int,"_fleq");
-    sim.fequal = floating_function(2,te_int,te_int,te_int,"_feq");
-    sim.fneq = floating_function(2,te_int,te_int,te_int,"_fneq");
-    sim.ffloat = floating_function(1,te_float,te_int,NULL,"_fflt");
-    sim.ffloatu = floating_function(1,te_float,te_uint,NULL,"_ffltu");
-    sim.ffix = floating_function(1,te_int,te_int,NULL,"_ffix");
-    sim.ffixu = floating_function(1,te_uint,te_int,NULL,"_ffixu");
+    sim.fadd = floating_function(2,te_float,te_int,te_int,TARGET_PREFIX("_fadd"));
+    sim.fsubtract = floating_function(2,te_float,te_int,te_int,TARGET_PREFIX("_fsub"));
+    sim.fmultiply = floating_function(2,te_float,te_int,te_int,TARGET_PREFIX("_fmul"));
+    sim.fdivide = floating_function(2,te_float,te_int,te_int,TARGET_PREFIX("_fdiv"));
+    sim.fnegate = floating_function(1,te_float,te_int,NULL,TARGET_PREFIX("_fneg"));
+    sim.fgreater = floating_function(2,te_int,te_int,te_int,TARGET_PREFIX("_fgr"));
+    sim.fgeq = floating_function(2,te_int,te_int,te_int,TARGET_PREFIX("_fgeq"));
+    sim.fless = floating_function(2,te_int,te_int,te_int,TARGET_PREFIX("_fls"));
+    sim.fleq = floating_function(2,te_int,te_int,te_int,TARGET_PREFIX("_fleq"));
+    sim.fequal = floating_function(2,te_int,te_int,te_int,TARGET_PREFIX("_feq"));
+    sim.fneq = floating_function(2,te_int,te_int,te_int,TARGET_PREFIX("_fneq"));
+    sim.ffloat = floating_function(1,te_float,te_int,NULL,TARGET_PREFIX("_fflt"));
+    sim.ffloatu = floating_function(1,te_float,te_uint,NULL,TARGET_PREFIX("_ffltu"));
+    sim.ffix = floating_function(1,te_int,te_int,NULL,TARGET_PREFIX("_ffix"));
+    sim.ffixu = floating_function(1,te_uint,te_int,NULL,TARGET_PREFIX("_ffixu"));
 
-    sim.fnarrow = floating_function(1,te_float,te_double,NULL,"_d2f");
-    sim.dwiden = floating_function(1,te_double,te_float,NULL,"_f2d");
+    sim.fnarrow = floating_function(1,te_float,te_double,NULL,TARGET_PREFIX("_d2f"));
+    sim.dwiden = floating_function(1,te_double,te_float,NULL,TARGET_PREFIX("_f2d"));
+
+#ifdef TARGET_SOFTFP_SUPPORT_INCLUDES_REVERSE_OPS
+    sim.drsb = floating_function(2,te_double,te_double,te_double,TARGET_PREFIX("_drsb"));
+    sim.drdiv = floating_function(2,te_double,te_double,te_double,TARGET_PREFIX("_drdiv"));
+    sim.frsb = floating_function(2,te_float,te_int,te_int,TARGET_PREFIX("_frsb"));
+    sim.frdiv = floating_function(2,te_float,te_int,te_int,TARGET_PREFIX("_frdiv"));
+#endif
+
+#ifdef SOFTWARE_LONG_LONG
+    sim.lladd = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_add"));
+    sim.lladduu = longlong_function(2,te_llint,te_ulint,te_ulint,TARGET_PREFIX("_ll_adduu"));
+    sim.lladdss = longlong_function(2,te_llint,te_lint,te_lint,TARGET_PREFIX("_ll_addss"));
+    sim.lladdlu = longlong_function(2,te_llint,te_llint,te_ulint,TARGET_PREFIX("_ll_addlu"));
+    sim.lladdls = longlong_function(2,te_llint,te_llint,te_lint,TARGET_PREFIX("_ll_addls"));
+    sim.llsub = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_sub"));
+    sim.llsubuu = longlong_function(2,te_llint,te_ulint,te_ulint,TARGET_PREFIX("_ll_subuu"));
+    sim.llsubss = longlong_function(2,te_llint,te_lint,te_lint,TARGET_PREFIX("_ll_subss"));
+    sim.llsublu = longlong_function(2,te_llint,te_llint,te_ulint,TARGET_PREFIX("_ll_sublu"));
+    sim.llsubls = longlong_function(2,te_llint,te_llint,te_lint,TARGET_PREFIX("_ll_subls"));
+    sim.llrsb = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_rsb"));
+    sim.llrsbuu = longlong_function(2,te_llint,te_ulint,te_ulint,TARGET_PREFIX("_ll_rsbuu"));
+    sim.llrsbss = longlong_function(2,te_llint,te_lint,te_lint,TARGET_PREFIX("_ll_rsbss"));
+    sim.llrsblu = longlong_function(2,te_llint,te_llint,te_ulint,TARGET_PREFIX("_ll_rsblu"));
+    sim.llrsbls = longlong_function(2,te_llint,te_llint,te_lint,TARGET_PREFIX("_ll_rsbls"));
+    sim.llmul = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_mul"));
+    sim.llmuluu = longlong_function(2,te_llint,te_ulint,te_ulint,TARGET_PREFIX("_ll_muluu"));
+    sim.llmulss = longlong_function(2,te_llint,te_lint,te_lint,TARGET_PREFIX("_ll_mulss"));
+    sim.llmullu = longlong_function(2,te_llint,te_llint,te_ulint,TARGET_PREFIX("_ll_mullu"));
+    sim.llmulls = longlong_function(2,te_llint,te_llint,te_lint,TARGET_PREFIX("_ll_mulls"));
+    sim.llsdiv = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_sdiv"));
+    sim.lludiv = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_udiv"));
+    sim.llsrdv = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_srdv"));
+    sim.llurdv = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_urdv"));
+    sim.llsdiv10 = longlong_function(1,te_llint,te_llint,NULL,TARGET_PREFIX("_ll_sdiv10"));
+    sim.lludiv10 = longlong_function(1,te_llint,te_llint,NULL,TARGET_PREFIX("_ll_udiv10"));
+    sim.llsrem = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_srem"));
+    sim.llurem = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_urem"));
+    sim.llsrrem = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_srrem"));
+    sim.llurrem = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_urrem"));
+    sim.llsrem10 = longlong_function(1,te_llint,te_llint,NULL,TARGET_PREFIX("_ll_srem10"));
+    sim.llurem10 = longlong_function(1,te_llint,te_llint,NULL,TARGET_PREFIX("_ll_urem10"));
+    sim.lland = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_and"));
+    sim.lleor = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_eor"));
+    sim.llor = longlong_function(2,te_llint,te_llint,te_llint,TARGET_PREFIX("_ll_or"));
+    sim.llshl = longlong_function(2,te_llint,te_llint,te_int,TARGET_PREFIX("_ll_shift_l"));
+    sim.llsshr = longlong_function(2,te_llint,te_llint,te_int,TARGET_PREFIX("_ll_sshift_r"));
+    sim.llushr = longlong_function(2,te_llint,te_llint,te_int,TARGET_PREFIX("_ll_ushift_r"));
+    sim.llneg = longlong_function(1,te_llint,te_llint,NULL,TARGET_PREFIX("_ll_neg"));
+    sim.llnot = longlong_function(1,te_llint,te_llint,NULL,TARGET_PREFIX("_ll_not"));
+    sim.llfroml = longlong_function(1,te_llint,te_lint,NULL,TARGET_PREFIX("_ll_from_l"));
+    sim.llfromu = longlong_function(1,te_llint,te_ulint,NULL,TARGET_PREFIX("_ll_from_u"));
+    sim.lltol = longlong_function(1,te_lint,te_llint,NULL,TARGET_PREFIX("_ll_to_l"));
+    sim.llutof = longlong_function(1,te_float,te_ullint,NULL,TARGET_PREFIX("_ll_uto_f"));
+    sim.llstof = longlong_function(1,te_float,te_llint,NULL,TARGET_PREFIX("_ll_sto_f"));
+    sim.llutod = longlong_function(1,te_double,te_ullint,NULL,TARGET_PREFIX("_ll_uto_d"));
+    sim.llstod = longlong_function(1,te_double,te_llint,NULL,TARGET_PREFIX("_ll_sto_d"));
+    sim.llufromf = longlong_function(1,te_ullint,te_float,NULL,TARGET_PREFIX("_ll_ufrom_f"));
+    sim.llsfromf = longlong_function(1,te_llint,te_float,NULL,TARGET_PREFIX("_ll_sfrom_f"));
+    sim.llufromd = longlong_function(1,te_ullint,te_double,NULL,TARGET_PREFIX("_ll_ufrom_d"));
+    sim.llsfromd = longlong_function(1,te_llint,te_double,NULL,TARGET_PREFIX("_ll_sfrom_d"));
+    sim.llcmpu = library_function(TARGET_PREFIX("_ll_cmpu"),2,2,0);
+    sim.llcmpge = library_function(TARGET_PREFIX("_ll_cmpge"),2,2,0);
+    sim.llcmple = library_function(TARGET_PREFIX("_ll_cmple"),2,2,0);
+#endif
+
 #endif
 #if defined(TARGET_IS_ARM) && !defined(OBSOLETE_ARM_NAMES)
     sim.readcheck1 = library_function("__rt_rd1chk", 1, 1, PUREBIT);
@@ -347,7 +468,6 @@ void builtin_init(void)
     sim.memsetfn = library_function("_memset", 3, 3, 0L);
     sim.realmemcpyfn = library_function("memcpy", 3, 3, 0L);
     sim.realmemsetfn = library_function("memset", 3, 3, 0L);
-
     sim.strcpysym = sym_insert_id("strcpy");
     mallocsym = sym_insert_id("malloc");
     callocsym = sym_insert_id("calloc");
@@ -426,6 +546,8 @@ void builtin_init(void)
 #endif
                 bitofstg_(s_static)|u_constdata,
                 te_int);
+    funcnamesym = sym_insert_id("__func__");
+#define te_size_t te_uint
 #ifdef CPLUSPLUS
     thissym = sym_insert_id("___this");         /* CPLUSPLUS            */
 /* The next 2 lines have these exact names to match [ES] and overload.c */
@@ -433,7 +555,6 @@ void builtin_init(void)
     dtorsym = sym_insert_id("__dt");            /* CPLUSPLUS            */
     vtabsym = sym_insert_id("__VTABLE");        /* CPLUSPLUS            */
 /* Maybe we need __vtp (pointer member) and __vt (static table?)        */
-#define te_size_t te_uint
 /* Arguable we should just parse appropriate strings instead of this.   */
   { TypeExpr *Pv = ptrtotype_(te_void);
     TypeExpr *FPv_v = te_fntype(te_void,Pv,0,0,0);
@@ -447,6 +568,11 @@ void builtin_init(void)
         te_fntype(te_void, Pv, te_size_t, ptrtotype_(FPv_v), 0)));
   }
 #endif
+    //sim.autoallocfn = library_function("__rt_allocauto", 1, 1, 0L);
+    sim.autoallocfn = bindsym_(toplevel_function("__rt_allocauto",
+                         te_fntype(ptrtotype_(te_void), te_size_t, 0, 0, 0)));
+    sim.autofreefn = bindsym_(toplevel_function("__rt_freeauto",
+                         te_fntype(te_void, ptrtotype_(te_void), 0, 0, 0)));
     mainsym = sym_insert_id("main");
     setjmpsym = sym_insert_id("setjmp");
     assertsym = sym_insert_id("___assert");

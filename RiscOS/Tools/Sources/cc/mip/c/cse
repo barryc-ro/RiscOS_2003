@@ -243,7 +243,7 @@ static Icode *replaceicode(ExprnUse *ref, CSEDef *def)
     J_OPCODE op = target->op;
     VRegnum r1 = target->r1.r;
     if (debugging(DEBUG_CSE))  {
-        print_jopcode_1(op, target->r1, target->r2, target->m);
+        print_jopcode_1(op, target->r1, target->r2, target->m, target->r4);
         cc_msg("     %ld/%ld\n", (long)blklabname_(b), (long)icoden_(ref));
     }
 #if 0
@@ -289,14 +289,8 @@ static Binder *addcsebinder(J_OPCODE op, BindList **bl, VRegnum r)
 /* /* The following line is a hack to fix things up now that vregsort() */
 /* faults r == GAP.  Fix properly soon.                                 */
 /* It is manifested by f(n) { if (n>1023) g(); if (n>1023) h(); }       */
-    switch (r == GAP ? INTREG : vregsort(r)) {
-        case FLTREG: bnew = gentempvar(te_float, vregister(FLTREG)); break;
-        case DBLREG: bnew = gentempvar(te_double, vregister(DBLREG)); break;
-#ifdef ADDRESS_REG_STUFF
-        case ADDRREG:bnew = gentempvar(te_int, vregister(ADDRREG)); break;
-#endif
-        default:     bnew = gentempvar(te_int, vregister(INTREG)); break;
-    }
+    bnew = gentempvarofsort(r == GAP ? INTREG : vregsort(r));
+
     /* Two lists of binders introduced by CSE are required: one for computing
        stack frame offsets (to add to lists present before CSE in block heads
        and SETSPENVs), and one to determine binder spill order.  These are not
@@ -373,7 +367,8 @@ static bool worthreplacement(Exprn *ex)
       return YES;
     }
     return exop_(ex) != J_STRING && exop_(ex) != J_ADCONV &&
-           exop_(ex) != J_ADCONF && exop_(ex) != J_ADCOND;
+           exop_(ex) != J_ADCONF && exop_(ex) != J_ADCOND &&
+           exop_(ex) != J_ADCONLL;
 }
 
 bool addlocalcse(Exprn *node, int valno, BlockHead *b)
@@ -483,6 +478,8 @@ static bool containsloadr(Exprn *p)
     switch (extype_(p)) {
     case E_LOADR:
         return YES;
+/*    case E_TERNARY:
+        if (containsloadr(e3_(p))) return YES;*/
     case E_BINARY:
         if (containsloadr(e2_(p))) return YES;
     case E_BINARYK:
@@ -557,7 +554,7 @@ bool cse_AddPredecessor(LabelNumber *lab, BlockHead *p)
       return NO;
 }
 
-static void PruneDominatorSets() {
+static void PruneDominatorSets(void) {
     BlockHead *p;
     bool changed;
     do {
@@ -744,31 +741,6 @@ static void AddLoop(BlockHead *p, LabelNumber *q)
                     }
                     b = pred->blklstcar;
                 }
-#if 0
-            if (b != NULL && dominates(b, header) &&
-                ExSetsOverlap(blk_cmp_(b), blk_cmp_(header)) &&
-                (blkflags_(b) & Q_MASK) == Q_NEGATE(blkflags_(p) & Q_MASK) &&
-                blknext1_(b) == blknext_(p)) {
-                LabelNumber *l1 = blknext_(b), *l2 = blknext1_(b);
-                BlockHead *newb = cse_InsertBlockBetween(b, header);
-                blknext_(newb) = l1; blknext1_(newb) = l2;
-                blklength_(b)--;
-                blkcode_(newb) = &blkcode_(b)[blklength_(b)];
-                blklength_(newb) = 1;
-                blkflags_(newb) |= (blkflags_(b) & Q_MASK) | BLK2EXIT;
-                blkflags_(b) &= ~(BLK2EXIT | Q_MASK);
-                ExSet_TransferExprnsInSet(&blk_available_(b), &blk_available_(newb), blk_cmp_(b));
-                blk_cmp_(b) = NULL;
-                members = mkCSEBlockList(members, newb);
-                if (l1 == blklab_(header)) l1 = l2;
-                if (!is_exit_label(l1))
-                    ReplaceInBlockList(blk_pred_(l1->block), b, newb);
-                header = newb;
-            }
-#else
-            /* new code from HMeekings: should fix all of the "insertblockbetween" fatal internal
-               error bugs: ref bug AQU-01290
-             */
             if (b != NULL && dominates(b, header) &&
                 ExSetsOverlap(blk_cmp_(b), blk_cmp_(header)) &&
                 (blkflags_(b) & Q_MASK) == Q_NEGATE(blkflags_(p) & Q_MASK) &&
@@ -804,7 +776,6 @@ static void AddLoop(BlockHead *p, LabelNumber *q)
                                 l->members = mkCSEBlockList(l->members, newb);
                 }
             }
-#endif
         }
         {   LoopListList **ll = &looplists;
             for (ll = &looplists; (l = *ll) != NULL; ll = &cdr_(l))
@@ -1122,7 +1093,7 @@ static void MakeSubdef(CSEDef *sub, CSEDef *super)
     if (sub->super != NULL) {
         CSEDef *p, **pp = &sub->super->subdefs;
         for (; (p = *pp) != sub; pp = &p->nextsub)
-            if (p == NULL) syserr("MakeSubDef");
+            if (p == NULL) syserr(syserr_cse_makesubdef);
         *pp = sub->nextsub;
     }
     sub->super = super;
@@ -1297,6 +1268,9 @@ static bool safetolift(Exprn *ex)
     switch (extype_(ex)) {
     case E_UNARYK:
         return YES;
+/*    case E_TERNARY:
+        return (safetolift(e3_(ex)) &&
+                safetolift(e2_(ex)) && safetolift(e1_(ex)));*/
     case E_BINARY:
         switch (op)
         {
@@ -1322,7 +1296,7 @@ static bool safetolift(Exprn *ex)
 
     default:
     case E_MISC:
-        syserr(syserr_safetolift);
+        syserr(syserr_cse_safetolift);
 
     case E_CALL:
     case E_LOADR:
@@ -1508,12 +1482,13 @@ struct CopyCSE {
 
 static CopyCSE *addeddefs;
 
-static CopyList *copylist(
-    CopyList *cl, Exprn *exprn, J_OPCODE op, VRegnum r1, VRegnum r2, VRegInt m)
+static CopyList *copylist(CopyList *cl, Exprn *exprn, J_OPCODE op,
+                          VRegnum r1, VRegnum r2, VRegInt m)
 {
     CopyList *q = (CopyList *)CSEAlloc(sizeof(CopyList));
     cdr_(q) = cl; q->cse = NULL; q->exprn = exprn;
-    q->icode.op = op; q->icode.r1.r = r1; q->icode.r2.r = r2; q->icode.m = m;
+    q->icode.op = op;
+    q->icode.r1.r = r1; q->icode.r2.r = r2; q->icode.m = m;
     return q;
 }
 
@@ -1570,6 +1545,7 @@ static CopyList *AddExprnsBelow(
         VRegnum r1 = r1sort == GAP ? GAP : vregister(r1sort);
         VRegnum r2 = GAP;
         VRegInt m; m.i = 0;
+        VRegInt r4; r4.i = 0;
         switch (extype_(exprn)) {
         case E_UNARYK:
             m.i = e1k_(exprn);
@@ -1585,6 +1561,9 @@ static CopyList *AddExprnsBelow(
             r2 = aeb_argumentreg(&cl, e1_(exprn), callcount, 0);
             m.i = e2k_(exprn);
             break;
+/*        case E_TERNARY:
+            r4.r = aeb_argumentreg(&cl, e3_(exprn), callcount, 0);*/
+            /* fall through */
         case E_BINARY:
             r2 = aeb_argumentreg(&cl, e1_(exprn), callcount, 0);
             m.r = aeb_argumentreg(&cl, e2_(exprn), callcount, 0);
@@ -1817,7 +1796,7 @@ static BindList *ReferenceCSEDefs(BindList *bl, CSEDef *def)
                 J_OPCODE op = exop_(def->exprn);
                 VRegnum r1;
                 CSERef *realref = FindRealRef(def);
-                if (realref == NULL) syserr("ReferenceCSEDefs");
+                if (realref == NULL) syserr(syserr_referencecsedefs);
                 r1 = useicode_(refuse_(realref)).r1.r;
                 CSEBind_(def) = addcsebinder(op, &bl, r1);
                 if (debugging(DEBUG_CSE))
@@ -1843,6 +1822,19 @@ static BindList *ReferenceCSEDefs(BindList *bl, CSEDef *def)
         }
     }
     return bl;
+}
+
+static CSERef *FindAnyRef(CSEDef *sub) {
+    CSEDef *p;
+    for (p = sub; p != NULL; p = p->nextsub)
+        if (p->refs != NULL)
+            return p->refs;
+    for (p = sub; p != NULL; p = p->nextsub)
+        if (p->subdefs != NULL) {
+            CSERef *ref = FindAnyRef(p->subdefs);
+            if (ref != NULL) return ref;
+        }
+    return NULL;  /* should never happen */
 }
 
 static void AddCSEDefsToBlock(CSEDef *def)
@@ -1874,6 +1866,7 @@ static void AddCSEDefsToBlock(CSEDef *def)
                     cseset_intersection(d, blk_dominators_(sub->block));
                     if (anyref == NULL) anyref = sub->refs;
                 }
+                if (anyref == NULL) anyref = FindAnyRef(def->subdefs);
                 for (;;) {
                     bool dummy;
                     for (b = top_block; b != NULL; b = blkdown_(b))
@@ -1885,12 +1878,10 @@ static void AddCSEDefsToBlock(CSEDef *def)
                     /* Don't lift code which alters condition codes
                        into a block which relies on their setting on entry.
                      */
-                    if ((blkflags_(b) & BLKCCLIVE) && anyref && alterscc(&useicode_(refuse_(anyref)))) {
-                      cseset_delete(blklabname_(b), d, &dummy);
-                    }
-                    else {
-                      break;
-                    }
+                    if (!(blkflags_(b) & BLKCCLIVE) ||
+                        !alterscc(&useicode_(refuse_(anyref))))
+                        break;
+                    cseset_delete(blklabname_(b), d, &dummy);
                 }
                 {  /* if the block to which we've decided to lift the
                       expression contains a reference, it's not a lifted CSE.
@@ -1970,8 +1961,13 @@ static void AddCSEDefsToBlock(CSEDef *def)
 static bool CantMarkCCLive(LabelNumber *from, BlockHead *to) {
     BlockHead *p;
     LabelNumber *lab;
+    VRegSetP visited = NULL;
     for (lab = from; ; lab = blknext_(p)) {
+        bool already;
         if (is_exit_label(lab))
+            return YES;
+        cseset_insert(lab_name_(lab), visited, &already);
+        if (already)
             return YES;
         p = lab->block;
         if (p == to)
@@ -1983,6 +1979,7 @@ static bool CantMarkCCLive(LabelNumber *from, BlockHead *to) {
         blkflags_(p) |= BLKCCLIVE;
         if (p == to) break;
     }
+    cseset_discard(visited);
     return NO;
 }
 #endif
@@ -2016,8 +2013,8 @@ static BindList *modifycode(void)
                     /* nb MarkCCLive applied to both paths from the defining block */
                     if (CantMarkCCLive(blknext_(defblock), refblock) &
                         CantMarkCCLive(blknext1_(defblock), refblock))
-                        syserr(syserr_modifycode_2, (long)blklabname_(refblock),
-                                                    (long)blklabname_(defblock));
+                        syserr(syserr_cse_modifycode_2, (long)blklabname_(refblock),
+                                                        (long)blklabname_(defblock));
                 }
             }
         }
@@ -2120,8 +2117,8 @@ static BindList *modifycode(void)
                 if ((newic - blkcode_(b)) != blklength_(b)) {
                     Icode *ic = blkcode_(b);
                     for (; ic != newic; ic++)
-                       print_jopcode(ic->op, ic->r1, ic->r2, ic->m);
-                    syserr(syserr_modifycode, (long)blklabname_(b),
+                       print_jopcode(ic->op, ic->r1, ic->r2, ic->m, ic->r4);
+                    syserr(syserr_cse_modifycode, (long)blklabname_(b),
                               (long)(newic - blkcode_(b)), (long)blklength_(b));
                 }
             }
@@ -2145,14 +2142,14 @@ static BindList *modifycode(void)
 
 static clock_t csetime;
 
-static void cse_setup()
+static void cse_setup(void)
 {   csespillbinders = NULL;
     setsplist = NULL;
     vregset_init();
     cselist = NULL; localcsedefs = NULL;
 }
 
-static BindList *cse_eliminate_i()
+static BindList *cse_eliminate_i(void)
 {   BlockHead *p;
     BindList *bl = NULL;
     clock_t t0 = clock();
@@ -2318,7 +2315,7 @@ extern BindList *cse_eliminate(void)
     BindList *bl = cse_eliminate_i();
     if (debugging(DEBUG_CG) ||
         (debugging(DEBUG_CSE) && CSEDebugLevel(1)))
-        flowgraf_print("CSE transforms to:");
+        flowgraf_print("CSE transforms to:", NO);
     return bl;
 }
 

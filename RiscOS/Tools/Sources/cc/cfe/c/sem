@@ -43,6 +43,7 @@
 #include "store.h"
 #include "errors.h"
 #include "util.h"     /* for padsize */
+#include "simplify.h"
 
 #ifdef PASCAL /*ECN*/
 #include "syn.h"      /* No comments please, its already under the axe */
@@ -52,7 +53,7 @@
 
 #else
 
-#define te_boolean te_int
+#define te_boolean te_intbool
 
 #endif
 
@@ -76,6 +77,8 @@
           (feature & FEATURE_SIGNED_CHAR && !((m) & bitoftype_(s_unsigned))))
 
 Expr *errornode;
+Expr *arraystarnode;
+Expr *vlaallocfunc;
 #ifdef CPLUSPLUS
 static Expr *mkctor_r(TypeExpr *t, Expr *e);
 #endif
@@ -99,8 +102,8 @@ static Expr *mkaddr(Expr *a);
 static Expr *mkincdec(AEop op, Expr *a);
 static Expr *bitfieldvalue(Expr *ebf, SET_BITMAP m, Expr *ewd);
 #ifdef CPLUSPLUS
-static ClassMember *class_has_conversion(TagBinder *b, TypeExpr *t);
 static TypeExpr *lvalue_type(Expr *x);  /* isaddressablelvalue??        */
+static ClassMember *class_has_conversion(TagBinder *b, TypeExpr *t);
 #define exprdotmemfn_(p) arg2_(p)
 static Binder *ovld_resolve_addr(Expr *e, BindList *bl)
 {   Binder *bspecific;
@@ -132,6 +135,7 @@ static Binder *ovld_resolve_addr(Expr *e, BindList *bl)
 #define INTEGRALTYPEBITS (bitoftype_(s_char)|bitoftype_(s_int)| \
                           bitoftype_(s_enum))
 
+
 /* type-like things... */
 
 extern void typeclash(AEop op)
@@ -141,7 +145,7 @@ extern void typeclash(AEop op)
 /* Type manipulation -- these are becoming more of an abstract type.    */
 /* Exact routine partition in flux.                                     */
 
-#define QUALIFIER_MASK (bitoftype_(s_const)|bitoftype_(s_volatile))
+#define QUALIFIER_MASK (bitoftype_(s_const)|bitoftype_(s_volatile)|bitoftype_(s_restrict))
 
 TypeExpr *princtype(TypeExpr *t)
 /* Remove 'typedef's from top of type.  Ignore any qualifiers on the    */
@@ -155,7 +159,7 @@ TypeExpr *princtype(TypeExpr *t)
     return t;
 }
 
-static SET_BITMAP typedef_qualifiers(TypeExpr *x)
+SET_BITMAP typedef_qualifiers(TypeExpr *x)
 {   SET_BITMAP q = 0;
     while (isprimtype_(x, s_typedefname))
     {   Binder *b = typespecbind_(x);
@@ -174,8 +178,8 @@ SET_BITMAP qualifiersoftype(TypeExpr *x)
 /* AM would like to put typespecmap_ and typeptrmap_ in same place.     */
     return q | QUALIFIER_MASK &
         (h0_(x) == s_typespec ? typespecmap_(x) :
-         h0_(x) == t_content || h0_(x) == t_ref
-                             || h0_(x) == t_fnap ? typeptrmap_(x) : 0);
+         h0_(x) == t_content || h0_(x) == t_ref ||
+         h0_(x) == t_vla     || h0_(x) == t_fnap ? typeptrmap_(x) : 0);
 }
 
 static bool qualifier_subset(TypeExpr *t1, TypeExpr *t2)
@@ -206,6 +210,7 @@ case s_typespec:
             typespecmap_(q) |= qualifiers; return r;
 case t_content:
 case t_ref:
+case t_vla:
 case t_fnap:            /* C++ const (member) functions */
             typeptrmap_(q) |= qualifiers;  return r;
 case t_subscript:
@@ -228,11 +233,16 @@ bool isvolatile_type(TypeExpr *x)
 {   return (qualifiersoftype(x) & bitoftype_(s_volatile)) != 0;
 }
 
+bool isrestrict_type(TypeExpr *x)
+{   return (qualifiersoftype(x) & bitoftype_(s_restrict)) != 0;
+}
+
 bool pointerfree_type(TypeExpr *t) {
     t = princtype(t);
     switch (h0_(t))
     {
 case t_content:
+case t_vla:
 case t_ref:       return NO;
 case t_subscript: return pointerfree_type(typearg_(t));
 case s_typespec:  if (typespecmap_(t) & CLASSBITS)
@@ -270,7 +280,8 @@ TypeExpr *unbitfield_type(TypeExpr *t)
             return primtype2_(m & ~BITFIELD, typespectagbind_(t));
 #endif
             return m & bitoftype_(s_enum) ?
-                primtype2_(m & ~BITFIELD, typespectagbind_(t)) : te_int;
+                primtype2_(m & ~BITFIELD, typespectagbind_(t)) :
+                m & bitoftype_(s_bool) ? te_intbool: te_int;
     }
     syserr(syserr_unbitfield, t);
     return te_int;
@@ -283,6 +294,7 @@ static TypeExpr *bf_promotedtype(TypeExpr *t, int32 size)
     /* Maybe long bit fields (in C++) should promote to long.           */
     if (h0_(t) == s_typespec)
     {   SET_BITMAP m = typespecmap_(t);
+        /* Don't promote _Bool bitfields to intbool - makes worse code */
         if (typeisbitfield_(m))
             return (m & bitoftype_(s_enum)) ?
                 primtype2_(m & ~BITFIELD, typespectagbind_(t)) :
@@ -302,6 +314,23 @@ TagBinder *isclassorref_type(TypeExpr *t)
 }
 #endif
 
+#if 0
+static bool isarray_type(TypeExpr *t)
+{   t = princtype(t);
+    return h0_(t) == t_subscript;
+}
+#endif
+
+static bool isbooltype(TypeExpr *t)
+{   t = princtype(t);
+    return (h0_(t) == s_typespec && (typespecmap_(t) & bitoftype_(s_bool)));
+}
+
+bool islonglong_type(TypeExpr *t)
+{   t = princtype(t);
+    return (h0_(t) == s_typespec && (islonglong_(typespecmap_(t))));
+}
+
 static bool isvoidtype(TypeExpr *t)
 {   t = princtype(t);
     return (h0_(t) == s_typespec && (typespecmap_(t) & bitoftype_(s_void)));
@@ -319,7 +348,7 @@ static bool indexable(TypeExpr *t)
 
 /* For the two following functions/macros, t must satisfy indexable()   */
 #define indexee(t) (typearg_(princtype(t)))
-#define strideofindexee(t) (sizeoftype(indexee(t)))
+#define strideofindexee(t) (sizeoftypeasexpr(indexee(t)))
 
 static bool indexer(TypeExpr *t)
 {   /* the type reading routine 'or's the 'int' bit
@@ -369,8 +398,8 @@ TypeExpr *typeofexpr(Expr *x)
                     mkintconst(te_int, 1, 0),
                     mkintconst(te_int, n, 0)), b_packed);
 #else
-            t = mk_typeexpr1(t_subscript, primtype_(bitoftype_(s_char)),
-                             mkintconst(te_int,n+1,0));
+            t = mk_typeexprsubscript(primtype_(bitoftype_(s_char)),
+                                     mkintconst(te_int,n+1,0), 0);
 #endif
           } break;
 #ifdef EXTENSION_UNSIGNED_STRINGS
@@ -378,21 +407,24 @@ TypeExpr *typeofexpr(Expr *x)
           { int32 n = 0; StringSegList *p;
             for (p = ((String *)x)->strseg; p != 0; p = p->strsegcdr)
                 n += p->strseglen;
-            t = mk_typeexpr1(t_subscript, primtype_(bitoftype_(s_char)|bitoftype_(s_unsigned)),
-                             mkintconst(te_int,n+1,0));
+            t = mk_typeexprsubscript(primtype_(bitoftype_(s_char)|bitoftype_(s_unsigned)),
+                                     mkintconst(te_int,n+1,0), 0);
           } break;
 #endif
         case s_wstring:
           { int32 n = 0; StringSegList *p;
             for (p = ((String *)x)->strseg; p != 0; p = p->strsegcdr)
                 n += p->strseglen;
-            t = mk_typeexpr1(t_subscript, te_wchar,
-                             mkintconst(te_int, n/sizeof_wchar + 1, 0));
+            t = mk_typeexprsubscript(te_wchar,
+                                     mkintconst(te_int, n/sizeof_wchar + 1, 0), 0);
           } break;
         case s_error:            /* @@@ remove soon? */
             t = te_int; break;   /* for sizeof() or sizeof(1.0%2.0) */
 #ifdef PASCAL /*ECN*/
         case s_set:
+#endif
+#ifdef C99_COMPLEX
+        case s_complex:
 #endif
         case s_integer:
             t = type_(x); break;
@@ -487,6 +519,7 @@ default:
         syserr(syserr_alignoftype, (long)h0_(x), (long)typespecmap_(x));
 case t_content:
 case t_ref:
+case t_vla:
         return alignof_ptr;
 case t_subscript:
         return alignoftype(typearg_(x));
@@ -594,7 +627,14 @@ bool structfield(ClassMember *l, int32 sort, StructPos *p)
         }
 #endif
         p->woffset = n, p->boffset = 0, p->bsize = 0;
-        p->typesize = sizeoftype(memtype_(l));
+        if (sort != bitoftype_(s_union) &&
+            memcdr_(l) == NULL &&
+            h0_(princtype(memtype_(l))) == t_subscript &&
+            typesubsize_(princtype(memtype_(l))) == 0)
+            /* Flexible array member */
+            p->typesize = 0;
+        else
+            p->typesize = sizeoftype(memtype_(l));
         if (sort != bitoftype_(s_union)) n += p->typesize;
     }
     p->n = n, p->bitoff = bitoff;
@@ -624,6 +664,11 @@ case s_typespec:
                 cc_rerr(sem_rerr_sizeof_bitfield);
             return sizeof_int;
     case bitoftype_(s_double):
+#ifdef C99_COMPLEX
+            if (m & bitoftype_(s_complex))
+                return (m & bitoftype_(s_short)) ? 2*sizeof_float :
+                       (m & bitoftype_(s_long)) ? 2*sizeof_ldble : 2*sizeof_double;
+#endif
             return (m & bitoftype_(s_short)) ? sizeof_float :
                    (m & bitoftype_(s_long)) ? sizeof_ldble : sizeof_double;
     case bitoftype_(s_struct):
@@ -707,7 +752,50 @@ case t_fnap:
         /* drop through */
 case t_content:
 case t_ref:
+case t_vla:
         return sizeof_ptr;
+    }
+}
+
+#define te_size_t (feature & FEATURE_PCC ? te_int : te_uint)
+
+bool sizeoftypeconstant(TypeExpr *x)
+{   switch (h0_(x))
+    {   SET_BITMAP m;
+case s_typespec:
+        m = typespecmap_(x);
+        if ((m & -m) == bitoftype_(s_typedefname))
+            return sizeoftypeconstant(bindtype_(typespecbind_(x)));
+        /* fall through */
+default:
+        return YES;
+case t_subscript:
+        {   Expr *s = typesubsize_(x);
+            if (s && h0_(s) != s_integer)
+                return NO;
+            return sizeoftypeconstant(typearg_(x));
+        }
+    }
+}
+
+Expr *sizeoftypeasexpr(TypeExpr *x)
+{   switch (h0_(x))
+    {
+        SET_BITMAP m;
+case s_typespec:
+        m = typespecmap_(x);
+        if ((m & -m) == bitoftype_(s_typedefname))
+            return sizeoftypeasexpr(bindtype_(typespecbind_(x)));
+        /* fall through */
+default:
+        return mkintconst(te_size_t, sizeoftype(x), (Expr *)syn_list2(s_sizeofexpr, x));
+case t_subscript:
+        {   Expr *n = sizeoftypeasexpr(typearg_(x));
+            if (typesubsize_(x)) n = mkbinary(s_times, n, typesubsize_(x));
+            else typesubsize_(x) = globalize_int(1),
+                 cc_rerr(sem_rerr_sizeof_array);
+            return n;
+        }
     }
 }
 
@@ -744,6 +832,7 @@ bool sizeoftypelegal(TypeExpr *x)
             break;
         case t_content:
         case t_ref:
+        case t_vla:
             return YES;
     }
     return NO;
@@ -788,6 +877,7 @@ static bool equivtype_4(TypeExpr *t1, TypeExpr *t2,
             continue;         /* now check elt types, with qualifiers */
     case t_content:
     case t_ref:
+    case t_vla:
                 /* two pointers match if they have the same const/volatile  */
                 /* attribute and point to compatible types.  Ditto refs.    */
 #ifdef PASCAL /*ECN*/
@@ -798,12 +888,10 @@ static bool equivtype_4(TypeExpr *t1, TypeExpr *t2,
                 continue;
     case t_subscript:                /* should check sizes (if any) match   */
             {   Expr *e1 = typesubsize_(t1), *e2 = typesubsize_(t2);
-                if (e1 != 0 && e2 != 0)
+                if (e1 != 0 && e2 != 0 && h0_(e1) == s_integer && h0_(e2) == s_integer)
                 {   if (evaluate(e1) != evaluate(e2)) return 0;
                 }
-                else
-                {   if (e1 != e2) sofar = 1;
-                }
+                if (e1 != e2) sofar = 1;
             }
             continue;         /* now check elt types, with qualifiers */
     case t_fnap:
@@ -918,6 +1006,7 @@ case s_typespec:
                 primtype2_(m1, typespecbind_(t1));
     case t_content:
     case t_ref:
+    case t_vla:
             m1 |= typeptrmap_(t1), m2 |= typeptrmap_(t2);
             if (u) m1 |= m2 & QUALIFIER_MASK, m2 |= m1 & QUALIFIER_MASK;
             if (m1 != m2) return 0;
@@ -929,16 +1018,21 @@ case s_typespec:
                    mk_typeexpr1(h0_(t1), typearg_(t1), (Expr *)m1);
     case t_subscript:
           { Expr *e1 = typesubsize_(t1), *e2 = typesubsize_(t2), *e3;
-            if (e1 != 0 && e2 != 0)
+            if (e1 != 0 && e2 != 0 && h0_(e1) == s_integer && h0_(e2) == s_integer)
             {   if (evaluate(e1) != evaluate(e2)) return 0;
             }
-            e3 = e1 ? e1 : e2;
+            if (e1 != 0 && e1 != arraystarnode)
+                e3 = e1;
+            else if (e2 != 0 && e2 != arraystarnode)
+                e3 = e2;
+            else
+                e3 = e1 ? e1 : e2;
             t3 = compositetype_5(typearg_(t1),typearg_(t2),m1,m2,u);
             return t3 == 0 ? 0 :
 #ifdef REUSE
                    t3 == typearg_(t1) && e3 == e1 && m1 == 0 ? t1 :
 #endif
-                 mk_typeexpr1(t_subscript, typearg_(t1), (Expr *)e3);
+                 mk_typeexprsubscript(typearg_(t1), (Expr *)e3, 0);
           }
     case t_fnap:
           { TypeExprFnAux s;
@@ -1004,22 +1098,39 @@ static FormTypeList *compositetypelist(FormTypeList *d1, FormTypeList *d2,
     }
 }
 
+#define isboolean_(op) ((op)==s_andand || (op)==s_oror)
+
 /* lubtype() and friends return a type if OK, or give an error message
    and return 0.  Worry that they are still rather ragged.
    Note that 'the usual unary coercions' omit 'char' and (possibly) float.
    BEWARE: result type is ASSUMED to be princtype'd by caller. Since
    result is an r-value qualifiers are irrelevant.
 */
-static TypeExpr *lubtype(AEop op, TypeExpr *t1, TypeExpr *t2)
+#ifdef C99_COMPLEX
+static TypeExpr *lubtype(AEop op, TypeExpr *t1, TypeExpr *t2, bool isbool, bool *nonreal)
+#else
+static TypeExpr *lubtype(AEop op, TypeExpr *t1, TypeExpr *t2, bool isbool)
+#endif
 /* Take care of 'the usual coercions' for e.g. s_times.
    Relations are done separately, as are the pointer cases of s_plus */
 {   TypeExpr *x1 = princtype(t1), *x2 = princtype(t2);
     SET_BITMAP m1 = typespecmap_(x1), m2 = typespecmap_(x2);
+    #ifdef C99_COMPLEX
+    if (nonreal) *nonreal = NO;
+    #endif
+    if (isboolean_(op)) isbool = YES;
     if (h0_(x1) == s_typespec && h0_(x2) == s_typespec &&
         (m1 & ARITHTYPEBITS) != 0 && (m2 & ARITHTYPEBITS) != 0)
     {   if ((m1 | m2) & bitoftype_(s_double))
         {   if (!floatableop_(op))  /* % << >> etc. */
             {   typeclash(op); return 0; }
+            #ifdef C99_COMPLEX
+            if ((m1 | m2) & (bitoftype_(s_complex)|bitoftype_(s_imaginary)))
+            {   if (nonreal) *nonreal = YES;
+                if (!nonrealop_(op))
+                {   typeclash(op); return 0; }
+            }
+            #endif
             /* The 2 next lines fix a bug in pre-1.60a versions whereby   */
             /* (long)op(double) was incorrectly treated as (long double). */
             if ((m1 & (bitoftype_(s_double) | bitoftype_(s_long))) ==
@@ -1036,15 +1147,36 @@ static TypeExpr *lubtype(AEop op, TypeExpr *t1, TypeExpr *t2)
             return te_float;
         }
         /* the next line is an ANSI special case */
-        if (op == s_leftshift || op == s_rightshift) return x1;
+        /* Take care to remove bool-ness from type */
+        if (op == s_leftshift || op == s_rightshift)
+            return m1 & bitoftype_(s_bool) && !isbool ?
+                           primtype2_(m1&~bitoftype_(s_bool),typespecbind_(t1)) : x1;
         if ((m1 | m2) & bitoftype_(s_long))
-        {   /* @@@ what do longlong ops do? "int_decodelength_"?        */
+        {   if (islonglong_(m1) || islonglong_(m2))
+            {   if ((m1&(bitoftype_(s_unsigned)|bitoftype_(s_long)|bitoftype_(s_short)))==
+                        (bitoftype_(s_unsigned)|bitoftype_(s_long)|bitoftype_(s_short)) ||
+                    (m2&(bitoftype_(s_unsigned)|bitoftype_(s_long)|bitoftype_(s_short)))==
+                        (bitoftype_(s_unsigned)|bitoftype_(s_long)|bitoftype_(s_short)))
+                    /* either unsigned long long gives result            */
+                    return te_ullint;
+                if ((m1^m2) & bitoftype_(s_unsigned))
+                {   /* one unsigned, other signed long long */
+                    if ((m1&m2) & bitoftype_(s_long))
+                        /* one unsigned long, other signed long long */
+                        return sizeof_longlong > sizeof_long ? te_llint : te_ullint;
+                    else
+                        /* one unsigned int, other signed long long */
+                        return sizeof_longlong > sizeof_int ? te_llint : te_ullint;
+                }
+                /* both signed, one long long */
+                return te_llint;
+            }
             if ((m1 & (bitoftype_(s_unsigned)|bitoftype_(s_long))) ==
                       (bitoftype_(s_unsigned)|bitoftype_(s_long)) ||
                 (m2 & (bitoftype_(s_unsigned)|bitoftype_(s_long))) ==
                       (bitoftype_(s_unsigned)|bitoftype_(s_long)))
                 /* either unsigned long gives result                     */
-                return te_ulint;
+                return isbool ? te_ulintbool : te_ulint;
 #ifdef never /* @@@ save for possible later warn on <unsigned>op<signed> */
              /* as recommended to implementers by ANSI.                  */
 >>>>    if ((m1^m2) & bitoftype_(s_unsigned) &&
@@ -1057,36 +1189,22 @@ static TypeExpr *lubtype(AEop op, TypeExpr *t1, TypeExpr *t2)
 #endif
             if ((m1^m2) & bitoftype_(s_unsigned))
                 /* one unsigned, one long: Oct 88 ANSI rule (like pcc?)   */
-                return sizeof_long > sizeof_int ? te_lint : te_ulint;
-            return te_lint;
+                return sizeof_long > sizeof_int ?
+                              ( isbool ? te_lintbool : te_lint) :
+                              ( isbool ? te_ulintbool : te_ulint);
+            return isbool ? te_lintbool : te_lint;
         }
-        if ((m1 | m2) & bitoftype_(s_unsigned)) return te_uint;
-        return te_int;  /* only case left */
+        if ((m1 | m2) & bitoftype_(s_unsigned)) return isbool ? te_uintbool : te_uint;
+        return isbool ? te_intbool : te_int;  /* only case left */
     }
     /* Apr 92: some old error recovery retired here...                  */
     typeclash(op);
     return 0;
 }
 
-/* patch up for special treatment of types of formal parameters at defn */
-TypeExpr *modify_formaltype(TypeExpr *t)
-{   TypeExpr *t1 = princtype(t);
-    switch (h0_(t1))
-    {   case t_fnap:       /* turn f() to (*f)() */
-            return ptrtotype_(t);
-        case t_subscript:  /* turn a[] to *a     */
-            /* We also turn a const array (only via typedef) into a     */
-            /* pointer to const components.  Beware, ANSI is unclear.   */
-            return mkqualifiedtype(ptrtotype_(typearg_(t1)),
-                                   typedef_qualifiers(t));
-        default:
-            return t;
-    }
-}
-
 /* For safety w.r.t. prototype and non-prototype forms, we pass all
    short ints/chars and floats as repectively ints and doubles and
-   do callee narrowing.
+   do callee narrowing. Except _Bool...
 */
 TypeExpr *widen_formaltype(TypeExpr *t)
 {   TypeExpr *t1 = princtype(t);      /* can ignore typedef qualifiers? */
@@ -1094,8 +1212,15 @@ TypeExpr *widen_formaltype(TypeExpr *t)
     {   SET_BITMAP m1 = typespecmap_(t1);
         if (m1 & bitoftype_(s_double))
             /* turn 'float' = 'short double' to 'double'. */
+#ifdef C99_COMPLEX
+            return (m1 & (bitoftype_(s_short)|CXIMBITS)) == bitoftype_(s_short)
+                                            ? te_double : t;
+#else
             return m1 & bitoftype_(s_short) ? te_double : t;
+#endif
 /* Should FEATURE_PCC do anything here re unsigned preserving?          */
+        if (m1 & bitoftype_(s_bool))
+            return t; /* As C99, bools can go in callee-narrowed */
         if (m1 & bitoftype_(s_char))
             /* turn 'char' to 'int'. */
             return te_int;
@@ -1111,7 +1236,7 @@ TypeExpr *widen_formaltype(TypeExpr *t)
 
 /* printf/scanf format checker... (belongs in a separate file?) */
 
-enum fmtsort { FMT_INT, FMT_LINT, FMT_FLT, FMT_PTR };
+enum fmtsort { FMT_INT, FMT_LINT, FMT_FLT, FMT_PTR, FMT_LLINT };
 
 static void fmt1chk(char *buf, int bufp, Expr *arg, enum fmtsort sort)
 {   TypeExpr *t = princtype(typeofexpr(arg));
@@ -1123,7 +1248,8 @@ case t_content:
 case s_typespec:
         {   SET_BITMAP m = typespecmap_(t);
             if ((m & bitoftype_(s_int) &&
-                   sort == (m & bitoftype_(s_long) ? FMT_LINT:FMT_INT)) ||
+                   sort == (islonglong_(m) ? FMT_LLINT :
+                            m & bitoftype_(s_long) ? FMT_LINT:FMT_INT)) ||
 #ifndef CPLUSPLUS
 /* In C enums coerceunary() to ints.  We suppress this, so that C++ is  */
 /* easy (and so that we can warn as ANSI suggest, but we need to allow  */
@@ -1154,14 +1280,14 @@ static void fmtswixchk(int32 flags, ExprList *l)
     char *warn=has_block?sem_warn_swi_lots_few_regs:sem_warn_swi_some_few_regs;
 
     for (r=0; r<10; ++r)
-    {  if (rflags & (1U<<r)) ++nins;
-       if (rflags & ((1U<<31)>>r)) ++nouts;
+    {  if (rflags & (1UL<<r)) ++nins;
+       if (rflags & ((1UL<<31)>>r)) ++nouts;
     }
     if (rflags & (1<<21)) ++nouts;
     if (has_block) ++nins;
 
     for (r=0; r<10; ++r)
-    {  if (rflags & (1U<<r))
+    {  if (rflags & (1UL<<r))
        {  if (has_block && r == reg_block)
           {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
               else cc_warn(sem_warn_swi_block_in_clash, r);
@@ -1186,7 +1312,7 @@ static void fmtswixchk(int32 flags, ExprList *l)
 
     if (totregs != -1)
     for (r=0; r<11; ++r)
-    {  if (rflags & ((1U<<31)>>r))
+    {  if (rflags & ((1UL<<31)>>r))
        {  if (has_block && r != 0 && r == out_reg)
           {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
               else cc_warn(sem_warn_swi_block_out_clash, r);
@@ -1230,7 +1356,9 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
     /* flavour=4 => _swi/_swix - see swis.h pragma - SNB 23/10/98 */
     /* returns TRUE if no floating point will be used & printf case */
     StringSegList *z;
-    int state = 0; int32 nformals = 0, nactuals = 0;
+    enum state { Literal, HadPercent, HadFlag, Had_l, Had_h, HadLength,
+                 NotInScanf=9, GiveUp=99 } state = Literal;
+    int32 nformals = 0, nactuals = 0;
     bool no_fp_conversions = (flavour == 1);
     char buf[20]; int bufp = 1;   /* 0..20 */
     enum fmtsort xint = FMT_INT;
@@ -1243,7 +1371,7 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
 /* The following lines augment printf checks to cover cc_err, syserr &c */
 /* via #pragma -v3 present in mip/globals.h.                            */
 /* #define'ing NO_SELF_CHECKS disables this and saves about 100 bytes.  */
-            if (ch == '$' && flavour == 3 && state == 0)
+            if (ch == '$' && flavour == 3 && state == Literal)
             {   /* the next line is ugly because it assumes string not split */
                 if (char_untranslation(*s) != 'l')   /* 'l' => use curlex */
                 {   nformals++;
@@ -1254,11 +1382,11 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
 #endif
             if (ch == '%')
                 bufp=1, buf[0]=ch,
-                state = state==0 ? 1 : 0,
+                state = state==Literal ? HadPercent : Literal,
                 xint = FMT_INT;
-            else if (state != 0) switch ((bufp<20 ? buf[bufp++] = ch:0), ch)
+            else if (state != Literal) switch ((bufp<20 ? buf[bufp++] = ch:0), ch)
             {   case '*':
-                    if (flavour==2) { state = 9; break; }
+                    if (flavour==2) { state = NotInScanf; break; }
                     nformals++;
                     if (l)
                     {   fmt1chk(buf, bufp, exprcar_(l), FMT_INT);
@@ -1269,21 +1397,28 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
                 case '.':
                     break;
                 case '+': case '-': case ' ': case '#':
-                    state = state==1 ? 2 : 99; break;
+                    state = state < HadFlag ? HadFlag : GiveUp; break;
                 case 'h':
-                    if (state == 6) { state = 5; break; }
-                    state = state < 5 ? 6 : 99;
+                    state = state <= HadFlag ? Had_h : GiveUp;
                     break;
                 case 'l':
-                    xint = FMT_LINT;
+                    if (state <= HadFlag)
+                        xint = FMT_LINT, state = Had_l;
+                    else if (state == Had_l)
+                        xint = FMT_LLINT, state = HadLength;
+                    else
+                        state = GiveUp;
+                    break;
+                case 'j':
+                    if (state <= HadFlag) xint = FMT_LLINT;
                     /* drop through */
-                case 'L': case 'j': case 'z': case 't':
+                case 'L': case 'z': case 't':
                     /* not treated properly yet */
-                    state = state < 5 ? 5 : 99;
+                    state = state <= HadFlag ? HadLength : GiveUp;
                     break;
                 case 'd': case 'i': case 'o': case 'u': case 'x': case 'X':
                 case 'c':
-                    if (state == 9) { state = 0; break; } /* scanf suppressed */
+                    if (state == NotInScanf) { state = Literal; break; }
                     nformals++;
                     if (l)
                     {   fmt1chk(buf, bufp, exprcar_(l), flavour==2 ? FMT_PTR :
@@ -1291,12 +1426,12 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
                         nactuals++;
                         l = cdr_(l);
                     }
-                    state = 0;
+                    state = Literal;
                     break;
                 case 'f': case 'F': case 'e': case 'E':
                 case 'g': case 'G': case 'a': case 'A':
                     no_fp_conversions = 0;
-                    if (state == 9) { state = 0; break; } /* scanf suppressed */
+                    if (state == NotInScanf) { state = Literal; break; }
                     nformals++;
                     if (l)
                     {   fmt1chk(buf, bufp, exprcar_(l),
@@ -1304,20 +1439,20 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
                         nactuals++;
                         l = cdr_(l);
                     }
-                    state = 0;
+                    state = Literal;
                     break;
                 case 's': case 'p': case 'n':
-                    if (state == 9) { state = 0; break; } /* scanf suppressed */
+                    if (state == NotInScanf) { state = Literal; break; }
                     nformals++;
                     if (l)
                     {   fmt1chk(buf, bufp, exprcar_(l), FMT_PTR);
                         nactuals++;
                         l = cdr_(l);
                     }
-                    state = 0;
+                    state = Literal;
                     break;
                 case '[':
-                    if (state == 9) { state = 0; break; } /* scanf suppressed */
+                    if (state == NotInScanf) { state = Literal; break; }
                     if (flavour==2) /* scanf only */
                     {   /* check well-formed one day */
                         nformals++;
@@ -1326,19 +1461,19 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
                             nactuals++;
                             l = cdr_(l);
                         }
-                        state = 0;
+                        state = Literal;
                         break;
                     }
                     /* else drop through */
                 default:
                     if ('0'<=ch && ch<='9') break;
                     cc_warn(sem_warn_bad_format, (int)ch);
-                    state = 0;
+                    state = Literal;
                     break;
             }
         }
     }
-    if (state != 0) cc_warn(sem_warn_incomplete_format);
+    if (state != Literal) cc_warn(sem_warn_incomplete_format);
     nactuals += length(l);
     if (nactuals != nformals)
         cc_warn(sem_warn_format_nargs,
@@ -1551,10 +1686,14 @@ static Expr *RemovePostincs(Expr *e, Expr **incs) {
 /* Expression AE tree node creators and associated functions */
 
 Expr *mkintconst(TypeExpr *te, int32 n, Expr *e)
-{    return mk_expr2(s_integer, te, (Expr *)n, e);
+{    return mk_expr3(s_integer, te, (Expr *)n, e, 0);
 }
 
-static Expr *mkinvisible(TypeExpr *t, Expr *olde, Expr *newe)
+Expr *mkintconst64(TypeExpr *te, int64 n, Expr *e)
+{    return mk_expr3(s_integer, te, (Expr *)n, e, (Expr *)(n >> 32));
+}
+
+Expr *mkinvisible(TypeExpr *t, Expr *olde, Expr *newe)
 /* The purpose of s_invisible nodes in the tree is to compile one thing */
 /* whilst retaining the original expression for error messages.         */
 /* Thus ++x can compile as x=x+1 but produce an error about ++ in &++x. */
@@ -1563,7 +1702,7 @@ static Expr *mkinvisible(TypeExpr *t, Expr *olde, Expr *newe)
     /*          if (h0_(newe) == s_error) return errornode;        */
     /* but we'd have to remove argument 't'.                       */
     /* s_integer nodes have a special invisible representation:    */
-    if (h0_(newe) == s_integer) return mkintconst(t, intval_(newe), olde);
+    if (h0_(newe) == s_integer) return mkintconst64(t, intval64_(newe), olde);
 /* how about:   if (h0_(newe) == h0_(olde)) return newe;   ??           */
     return mk_expr2(s_invisible, t, olde, newe);
 }
@@ -1601,9 +1740,9 @@ static Expr *ensurelvalue(Expr *e, AEop op)
         /* The s_addrof/s_member case is done in mkaddr (q.v.).         */
 #endif
     if (h0_(e) == s_error) return errornode;
-#ifdef CPLUSPLUS
+//#ifdef CPLUSPLUS
     {   TypeExpr *t = princtype(typeofexpr(e));
-        if (h0_(t) == t_ref)
+        if (h0_(t) == t_ref || h0_(t) == t_vla)
         {   TypeExpr *t2 = typearg_(t);
             e = mkinvisible(t2, e, mk_expr1(s_content,t2,e));
             /* map a ref to a implicit content thereby losing t_ref.    */
@@ -1611,7 +1750,7 @@ static Expr *ensurelvalue(Expr *e, AEop op)
             /* @@@ recall [ES,p138,l-1] suggests t2 may be fn/array!    */
         }
     }
-#endif
+//#endif
     {   TypeExpr *t = typeofexpr(e);
 #ifdef CPLUSPLUS
         while (h0_(t) == t_coloncolon) t = typearg_(t);
@@ -1674,6 +1813,7 @@ static Expr *ensurelvalue(Expr *e, AEop op)
         case s_subscript:
         case s_arrow:
         case s_content:
+        case s_cmplit:
             return e;
         case s_dot:
             x = arg1_(x);
@@ -1685,15 +1825,16 @@ static Expr *ensurelvalue(Expr *e, AEop op)
             x = arg1_(x);
             break;
 #endif
-        case s_invisible:
-#ifdef CPLUSPLUS             /* a more general version of s_integer ... */
+        case s_invisible:    /* a more general version of s_integer ... */
             x = orig_(x);    /* ... to replace that idea.               */
+#ifdef CPLUSPLUS
             if (h0_(x) == s_ctor) break;        /* tidy!                */
             /* taking the address of a t_ref behaves like s_content.    */
             /* e.g. 'int &f(); ... return &f(); ...                     */
             if (h0_(princtype(typeofexpr(x))) == t_ref) return e;
 #else
-            return ((h0_(ensurelvalue(orig_(x), op)) == s_error)
+            if (h0_(princtype(typeofexpr(x))) == t_vla) return e;
+            return ((h0_(ensurelvalue(x, op)) == s_error)
                          ? errornode : e);
 #endif
             break;
@@ -1725,15 +1866,21 @@ static Expr *ensurelvalue(Expr *e, AEop op)
     }
 }
 
-#ifdef SOFTWARE_FLOATING_POINT
-static Expr *mk1fnap(Expr *fn, ExprList *args)
+#if defined SOFTWARE_FLOATING_POINT || defined SOFTWARE_LONG_LONG
+static Expr *mk1fnap_1(Expr *fn, ExprList *args, TypeExpr *ta)
 {
    TypeExpr *t = princtype(typeofexpr(fn));  /* typedefs irrelevant */
 /* @@@ someone is also paranoid here about sharing of &sim.fns.         */
 /* No sense in an invisible node when the whole functioon call wasn't   */
 /* what was written.                                                    */
    fn = mk_expr1(s_addrof, ptrtotype_(t), fn);
-   return mk_expr2(s_fnap, typearg_(t), fn, (Expr *)args);
+   return mk_expr2(s_fnap, ta, fn, (Expr *)args);
+}
+
+static Expr *mk1fnap(Expr *fn, ExprList *args)
+{
+   TypeExpr *ta = typearg_(princtype(typeofexpr(fn)));
+   return mk1fnap_1(fn, args, ta);
 }
 #endif
 
@@ -1775,14 +1922,171 @@ static FloatCon *fltrep_from_widest(
     return m;
 }
 
+#ifdef SOFTWARE_LONG_LONG
+enum llitype { NotLong, DontCare, Signed, Unsigned };
+
+static Expr *lfromll(Expr *a, enum llitype *ptype)
+{
+    enum llitype type = NotLong;
+    Expr *e = NULL;
+
+    if (h0_(a) == s_integer)
+    {
+        if (intvalhi_(a) == 0)
+        {   if (intvallo_(a) & 0x80000000)
+                type = Unsigned;
+            else
+                type = DontCare;
+        }
+        else if (intvalhi_(a) == -1)
+        {   if (intvallo_(a) & 0x80000000)
+                type = Signed;
+        }
+        if (type != NotLong)
+            e = mkintconst64(type == Unsigned ? te_ulint : te_lint,
+                             intval64_(a),
+                             intorig_(a)
+                            );
+    }
+    else if (h0_(a) == s_fnap &&
+             h0_(arg1_(a)) == s_addrof)
+    {   if (arg1_(arg1_(a)) == sim.llfroml)
+            type = Signed;
+        else if (arg1_(arg1_(a)) == sim.llfromu)
+            type = Unsigned;
+        if (type != NotLong)
+            e = exprcar_(exprfnargs_(a));
+    }
+    *ptype = type;
+    return e;
+}
+
+static Expr *lldiad(Expr *c, Expr *a, Expr *b, SET_BITMAP flag)
+{  AEop op = h0_(c);
+   Expr *fname, *revfname = NULL;
+   switch (op)
+   {
+      case s_plus:   /* Special handling for +,-,*: we have functions that take 32-bit */
+      case s_minus:  /* arguments.                                                     */
+      case s_times:
+                     {
+                         enum llitype tpa, tpb;
+                         Expr *la = lfromll(a, &tpa), *lb = lfromll(b, &tpb);
+                         fname = NULL; /* shut up compiler */
+                         if (tpa == DontCare && (tpb == Signed || tpb == Unsigned)) tpa = tpb;
+                         else if (tpb == DontCare && (tpa == Signed || tpa == Unsigned)) tpb = tpa;
+                         if (la && lb && tpb == tpa)
+                         {   switch (op)
+                             {   case s_plus:  revfname = fname = tpa == Signed ?
+                                                       sim.lladdss : sim.lladduu; break;
+                                 case s_times: revfname = fname = tpa == Signed ?
+                                                       sim.llmulss : sim.llmuluu; break;
+                                 case s_minus: revfname = tpa == Signed ?
+                                                       sim.llrsbss : sim.llrsbuu;
+                                               fname = tpa == Signed ?
+                                                       sim.llsubss : sim.llsubuu; break;
+                             }
+                             a = la;
+                             b = lb;
+                         }
+                         else if (lb)
+                         {   switch (op)
+                             {   case s_plus:  fname = tpb == Signed ?
+                                                       sim.lladdls : sim.lladdlu; break;
+                                 case s_times: fname = tpb == Signed ?
+                                                       sim.llmulls : sim.llmullu; break;
+                                 case s_minus: fname = tpb == Signed ?
+                                                       sim.llsubls : sim.llsublu; break;
+                             }
+                             b = lb;
+                         }
+                         else if (la)
+                         {   switch (op)
+                             {   case s_plus:  fname = tpa == Signed ?
+                                                       sim.lladdls : sim.lladdlu; break;
+                                 case s_times: fname = tpa == Signed ?
+                                                       sim.llmulls : sim.llmullu; break;
+                                 case s_minus: fname = tpa == Signed ?
+                                                       sim.llrsbls : sim.llrsblu; break;
+                             }
+                             a = b;
+                             b = la;
+                         }
+                         else
+                         {   switch (op)
+                             {   case s_plus:  revfname = fname = sim.lladd; break;
+                                 case s_times: revfname = fname = sim.llmul; break;
+                                 case s_minus: revfname = sim.llrsb;
+                                               fname = sim.llsub; break;
+                             }
+                         }
+                     }
+                         break;
+      case s_div:
+                         #ifdef TARGET_HAS_DIV_10_FUNCTION
+                         /* This handling of / 10 is not as good as for normal integers,
+                          * where it's done by the CSE. */
+                         if (h0_(b) == s_integer && intval64_(b) == 10)
+                         {   b = NULL;
+                             fname = flag & bitoftype_(s_unsigned) ?
+                                     sim.lludiv10 : sim.llsdiv10;
+                             break;
+                         }
+                         #endif
+                         fname = flag & bitoftype_(s_unsigned) ?
+                                 sim.lludiv : sim.llsdiv;
+                         revfname = flag & bitoftype_(s_unsigned) ?
+                                    sim.llurdv : sim.llsrdv;
+                         break;
+      case s_rem:
+                         #ifdef TARGET_HAS_DIV_10_FUNCTION
+                         if (h0_(b) == s_integer && intval64_(b) == 10)
+                         {   b = NULL;
+                             fname = flag & bitoftype_(s_unsigned) ?
+                                     sim.llurem10 : sim.llsrem10; break;
+                             break;
+                         }
+                         #endif
+                         fname = flag & bitoftype_(s_unsigned) ?
+                                 sim.llurem : sim.llsrem;
+                         revfname = flag & bitoftype_(s_unsigned) ?
+                                    sim.llurrem : sim.llsrrem;
+                         break;
+      case s_and:        revfname = fname = sim.lland;    break;
+      case s_or:         revfname = fname = sim.llor;     break;
+      case s_xor:        revfname = fname = sim.lleor;    break;
+      case s_leftshift:  fname = sim.llshl;    break;
+      case s_rightshift: fname = flag & bitoftype_(s_unsigned) ?
+                                 sim.llushr : sim.llsshr; break;
+      case s_less: case s_lessequal:
+      case s_greater: case s_greaterequal:
+      case s_equalequal: case s_notequal:
+                          return c; // ???
+      /* More to come... */
+      default:      syserr(syserr_ll_op, (long)op);
+                    fname = NULL;
+   }
+   if (revfname != NULL && h0_(b) == s_fnap) {
+       /* (invisible nodes have been removed from the head of a and b) */
+       Expr *e = a;
+       a = b; b = e; fname = revfname;
+   }
+   return mk1fnap_1(fname,
+                    mkExprList(b ? mkExprList(0, b) : 0, a),
+                    type_(c)
+                   );
+}
+#endif
+
 #define mk_expr2_ptr(op,t,a,b) trydiadreduce(mk_expr2(op,t,a,b),addrsignmap_)
 
 static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
 { AEop op = h0_(c);
   Expr *a = arg1_(c), *b = arg2_(c);
   if ((op == s_leftshift || op == s_rightshift) && h0_(b) == s_integer)
-  {  int32 n = intval_(b);
-     if ((unsigned32)n >= (unsigned32)(
+  {  int64 n = intval64_(b);
+     if ((unsigned64)n >= (unsigned64)(
+           islonglong_(flag) ? 8*sizeof_longlong :
            (flag & bitoftype_(s_long) ? 8*sizeof_long : 8*sizeof_int)))
         /* see ANSI spec, valid shifts are 0..31 */
         cc_warn(sem_warn_bad_shift(flag, (long)n));
@@ -1791,7 +2095,7 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
        return mkinvisible(type_(c), c, a);
   }
   if ((op == s_div || op == s_rem) && h0_(b) == s_integer)
-  {  int32 n = intval_(b);
+  {  int64 n = intval64_(b);
      if (n == 0)
         cc_warn(sem_warn_divrem_0, op);
   }
@@ -1801,8 +2105,8 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
 /* might exist is WRONG, this n<0, n<=0, n>=0, 0<=n, 0>n, 0>=n will all */
 /* lead to diagnostics here.                                            */
   if (isinequality_(op) && (flag & bitoftype_(s_unsigned)) &&
-       (h0_(b) == s_integer && intval_(b) == 0 && op != s_greater ||
-        h0_(a) == s_integer && intval_(a) == 0 && op != s_less))
+       (h0_(b) == s_integer && intval64_(b) == 0 && op != s_greater ||
+        h0_(a) == s_integer && intval64_(a) == 0 && op != s_less))
      cc_warn(sem_warn_ucomp_0, op);
 /* The following two lines reduce (e.g.) (2 || 1/0) to 1.  Similar code */
 /* exists in mkcond() (q.v.).  @@@ However, it would seem that they can */
@@ -1811,25 +2115,20 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
 /* violation that the comma operator shall not appear in const exprs.   */
 /* Similarly x[2 || f()].  AM thinks the ANSI draft is a mess here.     */
 /* Note: mktest() has transformed (e.g.) (3.4 || e) to (3.4!=0 || e).   */
-  if (op == s_oror && h0_(a) == s_integer && intval_(a))
+  if (op == s_oror && h0_(a) == s_integer && intval64_(a))
       return mkintconst(type_(c),1,c);  /* always has a type_ field */
-  if (op == s_andand  && h0_(a) == s_integer && !intval_(a))
+  if (op == s_andand  && h0_(a) == s_integer && !intval64_(a))
       return mkintconst(type_(c),0,c);  /* always has a type_ field */
 
   if (h0_(a) == s_integer && h0_(b) == s_integer &&
                              (flag & bitoftype_(s_unsigned)))
-  { unsigned32 m = intval_(a), n = intval_(b), r;
+  { unsigned64 m = intval64_(a), n = intval64_(b), r;
     bool ok = YES;
-/*
- * All this is HORRID if I have a 64 bit machine and I happen to have
- * allowed unsigned32 to be a 64 bit datatype.
- */
-    m = just32bits_(m);
-    n = just32bits_(n); /* force to 32 bits if unsigned32 is 64 bits wide */
+    int len;
     switch (op)
-    {   case s_plus:        r = just32bits_(m+n); ok = r>=m && r>=n;  break;
-        case s_minus:       r = just32bits_(m-n); ok = r<=m;          break;
-        case s_times:       r = just32bits_(m*n); ok = m==0 || r/m==n; break;
+    {   case s_plus:        r = m+n; ok = r>=m && r>=n;  break;
+        case s_minus:       r = m-n; ok = r<=m;          break;
+        case s_times:       r = m*n; ok = m==0 || r/m==n; break;
         case s_div:         if (n==0) return c; r = m/n; break;
         case s_rem:         if (n==0) return c; r = m%n; break;
         case s_power:       return c;
@@ -1838,7 +2137,7 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
         case s_xor:         r = m^n;  break;
         case s_andand:      r = m&&n; break;
         case s_oror:        r = m||n; break;
-        case s_leftshift:   r = just32bits_(m<<n); ok = (r>>n) == m; break;
+        case s_leftshift:   r = m<<n; ok = (r>>n) == m; break;
         case s_rightshift:  r = m>>n; break;
         case s_equalequal:  r = m==n; break;
         case s_notequal:    r = m!=n; break;
@@ -1849,37 +2148,33 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
         default: syserr(syserr_trydiadicreduce, (long)op);
                  return c;
     }
-    if (r & 0x80000000) r |= ~0x7fffffff;
-    else r &= 0x7fffffff;    /* Put in normalised state */
-    if (sizeof_int == 2)
-    {   if (!(flag & bitoftype_(s_long)) && (r & 0xffff0000))
-            r &= 0x0000ffff, ok = NO;
-    }
+    len = int_decodelength_(flag, sizeof_short, sizeof_int,
+                                  sizeof_long, sizeof_longlong);
+    if (len == 2 && (unsigned16) r != r)
+       r = (unsigned16) r, ok = NO;
+    else if (len == 4 && (unsigned32) r != r)
+       r = (unsigned32) r, ok = NO;
     if (!ok)
         cc_ansi_warn(sem_rerr_udiad_overflow(op,m,n,r));
-    return mkintconst(type_(c),r,c);  /* always has a type_ field */
+    return mkintconst64(type_(c),r,c);  /* always has a type_ field */
   }
+
   if (h0_(a) == s_integer && h0_(b) == s_integer)
-  { int32 m = intval_(a), n = intval_(b), r;
+  { int64 m = intval64_(a), n = intval64_(b), r;
+    int len;
     bool ok = YES;
 /* @@@ The next lines assume that host 'int' overflow wraps round silently.  */
     switch (op)
     {   case s_plus:        r = m+n;
-             if (r & 0x80000000) r |= ~0x7fffffff;
-             else r &= 0x7fffffff; /* 64-bit secure */
              ok = (m^n) < 0 || (m|n|r) >= 0 || (m&n&r) < 0; break;
         case s_minus:       r = m-n;
-             if (r & 0x80000000) r |= ~0x7fffffff;
-             else r &= 0x7fffffff; /* 64-bit secure */
              ok = (n>=0 ? r<=m : r>m);                      break;
         case s_times:       r = m*n;
-             if (r & 0x80000000) r |= ~0x7fffffff;
-             else r &= 0x7fffffff; /* 64-bit secure */
              ok = m==0 || n==0 || (m^n^r) >= 0 && r/m == n; break;
         case s_div:         if (n==0) return c;
 /* The only case where division can give overflow is when the greatest  */
 /* possible negative number is divided by -1.  I.e. iff n,m,r all -ve.  */
-                            if (m == ~0x7fffffff && n == -1) r = m, ok = 0;
+                            if (m == ~0x7fffffffffffffff && n == -1) r = m, ok = 0;
                             else r = m/n, ok = 1;
                             break;
 /* Interesting ANSI question: what should effect of                     */
@@ -1893,10 +2188,8 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
         case s_andand:      r = m&&n; break;
         case s_oror:        r = m||n; break;
         case s_leftshift:   r = m<<n;
-             if (r & 0x80000000) r |= ~0x7fffffff;
-             else r &= 0x7fffffff; /* 64-bit secure */
-             ok = signed_rightshift_(r,n)==m; break;
-        case s_rightshift:  r = TARGET_RIGHTSHIFT(m,n); break;
+             ok = signed_rightshift64_(r,n)==m; break;
+        case s_rightshift:  r = TARGET_RIGHTSHIFT64(m,n); break;
         case s_equalequal:  r = m==n; break;
         case s_notequal:    r = m!=n; break;
         case s_less:        r = m<n;  break;
@@ -1906,15 +2199,15 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
         default: syserr(syserr_trydiadicreduce1, (long)op);
                  return c;
     }
-    if (r & 0x80000000) r |= ~0x7fffffff;
-    else r &= 0x7fffffff;
-    if (sizeof_int == 2)
-    {   if (!(flag & bitoftype_(s_long)) && r != (int16)r)
-            r = (int16)r, ok = NO;
-    }
+    len = int_decodelength_(flag, sizeof_short, sizeof_int,
+                                  sizeof_long, sizeof_longlong);
+    if (len == 2 && r != (int16) r)
+        r = (int16) r, ok = NO;
+    else if (len == 4 && r != (int32) r)
+        r = (int32) r, ok = NO;
     if (!ok)
         cc_ansi_warn(sem_rerr_diad_overflow(op,m,n,r));
-    return mkintconst(type_(c),r,c);  /* always has a type_ field */
+    return mkintconst64(type_(c),r,c);  /* always has a type_ field */
   }
 
   a = skip_invisible(a);
@@ -1968,44 +2261,55 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
         return mkinvisible(type_(c), c, (Expr *)m);
     }
   }
+
+#ifdef SOFTWARE_LONG_LONG
+  if (islonglong_(flag))
+      return lldiad(c, a, b, flag);
+#endif
+
 #ifdef SOFTWARE_FLOATING_POINT
   if (software_floating_point_enabled && (flag & bitoftype_(s_double)))
-  {  Expr *fname;
+  {  Expr *fname, *revfname;
      if (flag & bitoftype_(s_short)) switch(op)
      {
 /* It may be that raising to a power will be done by a library call
    that will be introduced later, and so I do not need to map it onto
    a function call here... whatever else it seems a bit ugly, but it does
    not make any difference to C, only Fortran */
-        case s_plus:        fname = sim.fadd;           break;
-        case s_minus:       fname = sim.fsubtract;      break;
-        case s_times:       fname = sim.fmultiply;      break;
-        case s_div:         fname = sim.fdivide;        break;
+        case s_plus:        revfname = fname = sim.fadd;                break;
+        case s_minus:       revfname = sim.frsb; fname = sim.fsubtract; break;
+        case s_times:       revfname = fname = sim.fmultiply;           break;
+        case s_div:         revfname = sim.frdiv; fname = sim.fdivide;  break;
         case s_power:       return c;  /* probably wrong */
-        case s_equalequal:  fname = sim.fequal;         break;
-        case s_notequal:    fname = sim.fneq;           break;
-        case s_less:        fname = sim.fless;          break;
-        case s_lessequal:   fname = sim.fleq;           break;
-        case s_greater:     fname = sim.fgreater;       break;
-        case s_greaterequal:fname = sim.fgeq;           break;
+        case s_equalequal:  revfname = fname = sim.fequal;              break;
+        case s_notequal:    revfname = fname = sim.fneq;                break;
+        case s_less:        revfname = sim.fgreater; fname = sim.fless; break;
+        case s_lessequal:   revfname = sim.fgeq; fname = sim.fleq;      break;
+        case s_greater:     revfname = sim.fless; fname = sim.fgreater; break;
+        case s_greaterequal:revfname = sim.fleq; fname = sim.fgeq;      break;
         default:            syserr(syserr_fp_op, (long)op);
-                            fname = NULL;   /* To keep compiler quiet */
+                            revfname = fname = NULL;   /* To keep compiler quiet */
      }
      else switch(op)
      {
-        case s_plus:        fname = sim.dadd;           break;
-        case s_minus:       fname = sim.dsubtract;      break;
-        case s_times:       fname = sim.dmultiply;      break;
-        case s_div:         fname = sim.ddivide;        break;
+        case s_plus:        revfname = fname = sim.dadd;                break;
+        case s_minus:       revfname = sim.drsb; fname = sim.dsubtract; break;
+        case s_times:       revfname = fname = sim.dmultiply;           break;
+        case s_div:         revfname = sim.drdiv; fname = sim.ddivide;  break;
         case s_power:       return c;  /* probably wrong */
-        case s_equalequal:  fname = sim.dequal;         break;
-        case s_notequal:    fname = sim.dneq;           break;
-        case s_less:        fname = sim.dless;          break;
-        case s_lessequal:   fname = sim.dleq;           break;
-        case s_greater:     fname = sim.dgreater;       break;
-        case s_greaterequal:fname = sim.dgeq;           break;
+        case s_equalequal:  revfname = fname = sim.dequal;              break;
+        case s_notequal:    revfname = fname = sim.dneq;                break;
+        case s_less:        revfname = sim.dgreater; fname = sim.dless; break;
+        case s_lessequal:   revfname = sim.dgeq; fname = sim.dleq;      break;
+        case s_greater:     revfname = sim.dless; fname = sim.dgreater; break;
+        case s_greaterequal:revfname = sim.dleq; fname = sim.dgeq;      break;
         default:            syserr(syserr_fp_op, (long)op);
-                            fname = NULL;   /* To keep compiler quiet */
+                            revfname = fname = NULL;   /* To keep compiler quiet */
+     }
+     if (revfname != NULL && h0_(b) == s_fnap) {
+         /* (invisible nodes have been removed from the head of a and b) */
+         Expr *e = a;
+         a = b; b = e; fname = revfname;
      }
      return mk1fnap(fname, mkExprList(mkExprList(0, b), a));
   }
@@ -2015,29 +2319,53 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
 
 static Expr *trymonadreduce(AEop op, Expr *a, Expr *c, SET_BITMAP flag)
 { if (h0_(a) == s_integer)
-  { unsigned32 m = intval_(a), r;
+  { unsigned64 m = intval64_(a), r;
     bool ok = YES;
+    int len;
+    len = int_decodelength_(flag, sizeof_short, sizeof_int,
+                                  sizeof_long, sizeof_longlong);
     switch (op)   /* BEWARE: 2's complement means signed == unsigned */
     {   case s_monplus:  r = m; break;
         case s_neg:      r = -m;
-                         if (!(flag & bitoftype_(s_unsigned)))
-                             ok = (int32)(m&r&0x80000000) == 0;
+                         if (flag & bitoftype_(s_unsigned))
+                         {   if (sizeof_int == 2 && len == 2)
+                                 r &= 0xffff;
+                             else if (len == 4)
+                                 r &= 0xffffffff;
+                         }
+                         else
+                             ok = (int64)(m&r&0x8000000000000000) == 0;
                          break;
-        case s_bitnot:   r = ~m; break;
+        case s_bitnot:   r = ~m;
+                         if (flag & bitoftype_(s_unsigned))
+                         {   if (sizeof_int == 2 && len == 2)
+                                 r &= 0xffff;
+                             else if (len == 4)
+                                 r &= 0xffffffff;
+                         }
+                         break;
         case s_boolnot:  r = !m; break;
         default:         syserr(syserr_trymonadicreduce, (long)op);
         case s_content:  return c;
     }
-    if (r & 0x80000000) r |= ~0x7fffffff;
-    else r &= 0x7fffffff;
-    if (sizeof_int == 2)
+    if (len == 2)
     {   if (flag & bitoftype_(s_unsigned))
-        {   if (!(flag & bitoftype_(s_long)) && (r & 0xffff0000))
-                r &= 0x0000ffff, ok = NO;
+        {   if ((unsigned16) r != r)
+                r = (unsigned16) r, ok = NO;
         }
         else
-        {   if (!(flag & bitoftype_(s_long)) && r != (int16)r)
-                r = (int16)r, ok = NO;
+        {   if ((int16) r != r)
+                r = (int16) r, ok = NO;
+        }
+    }
+    else if (len == 4)
+    {   if (flag & bitoftype_(s_unsigned))
+        {   if ((unsigned32) r != r)
+                r = (unsigned32) r, ok = NO;
+        }
+        else
+        {   if ((int32) r != r)
+                r = (int32) r, ok = NO;
         }
     }
     if (!ok)
@@ -2046,7 +2374,7 @@ static Expr *trymonadreduce(AEop op, Expr *a, Expr *c, SET_BITMAP flag)
         else
             cc_ansi_warn(sem_rerr_monad_overflow(op,m,r));
     }
-    return mkintconst(type_(c),r,c);  /* always has a type_ field */
+    return mkintconst64(type_(c),r,c);  /* always has a type_ field */
   }
   a = skip_invisible(a);
   if (h0_(a) == s_floatcon)
@@ -2069,10 +2397,27 @@ static Expr *trymonadreduce(AEop op, Expr *a, Expr *c, SET_BITMAP flag)
         return mkinvisible(type_(c), c, (Expr *)m);
     }
   }
-#ifdef SOFTWARE_FLOATING_POINT
+#if defined SOFTWARE_FLOATING_POINT || defined SOFTWARE_LONG_LONG
+#ifndef SOFTWARE_LONG_LONG
   if (software_floating_point_enabled)
+#endif
   { TypeExpr *t = princtype(typeofexpr(a));     /* hmm */
     SET_BITMAP m = h0_(t)==s_typespec ? typespecmap_(t) : 0;
+#ifdef SOFTWARE_LONG_LONG
+    if (islonglong_(m))
+    { Expr *fname;
+      switch (op)
+      {
+        case s_monplus: return a;
+        case s_neg:     fname = sim.llneg;    break;
+        case s_bitnot:  fname = sim.llnot;    break;
+        default:        syserr(syserr_ll_op, (long)op);
+                        fname = NULL;
+      }
+      return mkcast(s_cast, mk1fnap(fname, mkExprList(0, a)), typeofexpr(c));
+    }
+    if (software_floating_point_enabled)
+#endif
     if (m & bitoftype_(s_double))
     { Expr *fname;
       if (m & bitoftype_(s_short)) switch (op)
@@ -2095,6 +2440,75 @@ static Expr *trymonadreduce(AEop op, Expr *a, Expr *c, SET_BITMAP flag)
 #endif
   return c;
 }
+
+#ifdef SOFTWARE_LONG_LONG
+static Expr *llcast(Expr *e)
+{
+    /* m1/t1 = target, m2/t2 = source */
+    TypeExpr *t1, *t2;
+    Expr *a = arg1_(e), *fname;
+    SET_BITMAP m1, m2;
+    if (h0_(e) != s_cast) return e;
+    t1 = princtype(type_(e));           /* hmm (SOFTWARE_LONG_LONG)      */
+    t2 = princtype(typeofexpr(a));      /* hmm (SOFTWARE_LONG_LONG)      */
+    switch (h0_(t1))
+    {
+        case s_typespec:
+            m1 = typespecmap_(t1);
+            if (m1 & bitoftype_(s_void))
+                return e;                  /* cast to void: leave alone  */
+            break;
+        case t_content:
+            m1 = addrsignmap_;
+            break;
+        default:
+            return e;
+    }
+    switch (h0_(t2))
+    {
+        case s_typespec:
+            m2 = typespecmap_(t2);
+            break;
+        case t_content:
+            m2 = addrsignmap_;
+            break;
+        default:
+            return e;
+    }
+    if (islonglong_(m1))
+    {   /* this converts something into a long long value                */
+        if (islonglong_(m2))
+        {
+            /* No real change */
+
+            return a;
+        }
+        if (m2 & bitoftype_(s_double))
+        {   if (m2 & bitoftype_(s_short))
+                 fname = (m1 & bitoftype_(s_unsigned)) ? sim.llufromf : sim.llsfromf;
+            else fname = (m1 & bitoftype_(s_unsigned)) ? sim.llufromd : sim.llsfromd;
+        }
+        else
+            fname = (m2 & bitoftype_(s_unsigned)) ? sim.llfromu : sim.llfroml;
+        return mk1fnap_1(fname, mkExprList(0, a), type_(e));
+    }
+    if (islonglong_(m2))
+    {   /* converting a long long into something else                    */
+        if (m1 & bitoftype_(s_double))
+        {   if (m1 & bitoftype_(s_short))
+                 fname = (m2 & bitoftype_(s_unsigned)) ? sim.llutof : sim.llstof;
+            else fname = (m2 & bitoftype_(s_unsigned)) ? sim.llutod : sim.llstod;
+        }
+        else
+            fname = sim.lltol;
+        return mk1fnap_1(fname, mkExprList(0, a), type_(e));
+    }
+/* Otherwise the cast does not involve any long long types.              */
+    return e;
+}
+#else
+#define llcast(e) e
+#endif
 
 #ifdef SOFTWARE_FLOATING_POINT
 Expr *fixflt(Expr *e)
@@ -2121,27 +2535,37 @@ Expr *fixflt(Expr *e)
                 return mk1fnap(sim.dwiden, mkExprList(0, a));
             else return a;
         }
-        if (m1 & bitoftype_(s_short))
+        if (islonglong_(m2))
+        {    if (m1 & bitoftype_(s_short))
+                  fname = (m2 & bitoftype_(s_unsigned)) ? sim.llutof : sim.llstof;
+             else fname = (m2 & bitoftype_(s_unsigned)) ? sim.llutod : sim.llutod;
+        }
+        else if (m1 & bitoftype_(s_short))
             fname = (m2 & bitoftype_(s_unsigned)) ? sim.ffloatu : sim.ffloat;
         else fname = (m2 & bitoftype_(s_unsigned)) ? sim.dfloatu : sim.dfloat;
         return mk1fnap(fname, mkExprList(0, a));
     }
     if (m2 & bitoftype_(s_double))
     {   /* some sort of fixing here                                      */
-        if (m2 & bitoftype_(s_short))
+        if (islonglong_(m1))
+        {   if (m2 & bitoftype_(s_short))
+                 fname = (m1 & bitoftype_(s_unsigned)) ? sim.llufromf : sim.llsfromf;
+            else fname = (m1 & bitoftype_(s_unsigned)) ? sim.llufromd : sim.llsfromd;
+        }
+        else if (m2 & bitoftype_(s_short))
             fname = (m1 & bitoftype_(s_unsigned)) ? sim.ffixu : sim.ffix;
         else fname = (m1 & bitoftype_(s_unsigned)) ? sim.dfixu : sim.dfix;
         return mkcast(s_cast, mk1fnap(fname, mkExprList(0, a)), type_(e));
     }
 /* Otherwise the cast does not involve any FP types.                     */
-    return e;
+    return llcast(e);
 }
 #endif
 
 static Expr *trycastreduce(Expr *a, TypeExpr *tc, Expr *c, bool explicit)
 /* Args somewhat redundant -- c = (s_cast,tc,a)                       */
 { if (h0_(a) == s_integer)
-  { unsigned32 n = intval_(a), r = n;
+  { unsigned64 n = intval64_(a), r = n;
     SET_BITMAP m;
     TypeExpr *x = princtype(tc);        /* type being cast to.        */
                              /* (can ignore typedef qualifiers).      */
@@ -2152,15 +2576,29 @@ case s_typespec:
         switch (m & -m)    /* LSB - unsigned/long etc. are higher */
         {
     case bitoftype_(s_char):
-            r = (issignedchar_(m) && (n & 0x80))
-                ? (n | ~(int32)0xff) : (n & 0xff);
+            if (!issignedchar_(m))
+            {   r = r & 0xff; goto omit_check; }
+            else
+                r = (int8) r;
             break;
     case bitoftype_(s_enum):    /* ansi C says treat like 'int'.        */
     case bitoftype_(s_int):
-            if ((int_isshort_(m) ? sizeof_short :
-                 (m & bitoftype_(s_long)) ? sizeof_long : sizeof_int) == 2)
-                r = (!(m & bitoftype_(s_unsigned)) && (n & 0x8000))
-                    ? (n | ~(int32)0xffff) : (n & 0xffff);
+            {   int len = int_decodelength_(m, sizeof_short, sizeof_int,
+                                        sizeof_long, sizeof_longlong);
+                if (len == 2)
+                {   if (m & bitoftype_(s_unsigned))
+                    {   r = r & 0xffff; goto omit_check; }
+                    else
+                        r = (int16) r;
+                }
+                else if (len == 4)
+                {
+                    if (m & bitoftype_(s_unsigned))
+                    {   r = r & 0xffffffff; goto omit_check; }
+                    else
+                        r = (int32) r;
+                }
+            }
             break;
     case bitoftype_(s_void):
             r = 0;
@@ -2187,7 +2625,7 @@ default:
         return c;     /* should not happen (prev error) */
     }
 omit_check:
-    return mkintconst(tc,r,c);
+    return mkintconst64(tc,r,c);
   }
 
   a = skip_invisible(a);
@@ -2236,7 +2674,7 @@ omit_check:
         {   cc_warn(sem_warn_fix_fail);
             n = 0;
         }
-        return mkintconst(tc,n,c);
+        return mkintconst64(tc,n,c);
     }
     return c;   /* nothing doing */
   }
@@ -2265,13 +2703,15 @@ static void check_index_overflow(Expr *ptr, Expr *disp, int posneg,
                 int32 n = posneg * intval_(disp);
                 if (stride==NULL)
                 {   /* always whinge for n<0 or n>limit...              */
-                    if (n < 0 || bound && n > evaluate(bound))
+                    if (n < 0 ||
+                          bound && h0_(bound) == s_integer && n > evaluate(bound))
                         cc_warn(sem_warn_index_ovfl, n);
                 }
                 else
                 {   /* ... but also if n=limit AND dereferencing.       */
-                    int32 k = sizeoftype(stride);
-                    if (bound && k!=0 && n/k==evaluate(bound))
+                    Expr *ke = sizeoftypeasexpr(stride);
+                    int32 k = h0_(ke)==s_integer ? evaluate(ke) : 0;
+                    if (bound && h0_(bound) == s_integer && k!=0 && n/k==evaluate(bound))
                         cc_warn(sem_warn_index_ovfl, n/k);
                 }
             }
@@ -2358,7 +2798,9 @@ static bool check_narrow_subterm(Expr *e, TypeExpr *te, TypeExpr *tt)
            typespecmap_(tt) & ~typespecmap_(te) & bitoftype_(s_long) ||
          /* moan at (float) short double in other float context */
            typespecmap_(tt) & bitoftype_(s_double) &&
-           typespecmap_(te) & ~typespecmap_(tt) & bitoftype_(s_short)
+           typespecmap_(te) & ~typespecmap_(tt) & bitoftype_(s_short) ||
+         /* moan at non-long long ops in long long context */
+           islonglong_(typespecmap_(tt)) && !islonglong_(typespecmap_(te))
          ))
     {
 retry:  switch h0_(e)
@@ -2431,7 +2873,7 @@ static Expr *coerce2(Expr *e, TypeExpr *t)
 #ifdef SOFTWARE_FLOATING_POINT
     if (software_floating_point_enabled) return fixflt(r);
 #endif
-    return r;
+    return llcast(r);
 /* the invisible node in the following should never be seen and
    needs re-thinking re constant reduction.                          */
 /*     return mkinvisible(t, e, mk_expr1(s_cast, t, e));         */
@@ -2531,22 +2973,30 @@ case s_typespec:
                                        |bitoftype_(s_enum)) &&
                     /* next line copes with "long long" encoding.       */
                     !(m & bitoftype_(s_long)))
+            {   TypeExpr *u, *s;
+                if (m & bitoftype_(s_bool)) u = te_uintbool, s = te_intbool;
+                else                        u = te_uint,     s = te_int;
                 e = (feature & FEATURE_PCC) ?
                     /* Someone might like to worry about the case       */
                     /* where default char is unsigned in PCC mode       */
                     /* does it then promote to signed int (as now) or   */
                     /* unsigned int?  K&R say (signed) int.             */
                     coerce2(e,
-                        (m & bitoftype_(s_unsigned)) ? te_uint:te_int) :
+                        (m & bitoftype_(s_unsigned)) ? u:s) :
                     coerce2(e,
                         (sizeof_short==sizeof_int && int_isshort_(m)
-                            && m & bitoftype_(s_unsigned)) ? te_uint:te_int);
+                            && m & bitoftype_(s_unsigned)) ? u:s);
+            }
             return e;
     case bitoftype_(s_double):
 /* The pcc mode code here may need improving (as char above) if PCC has */
 /* sizeof(0,(float)0)==sizeof(float) -- this code gives sizeof(double). */
             if ((c == COERCE_ARG || feature & FEATURE_PCC) &&
+#ifdef C99_COMPLEX
+                (m & (bitoftype_(s_short)|CXIMBITS)) == bitoftype_(s_short))
+#else
                 (m & bitoftype_(s_short)))
+#endif
                 return coerce2(e, te_double);
             return e;
     case bitoftype_(s_struct):
@@ -2574,6 +3024,7 @@ case t_subscript:
                            mk_expr1(s_cast, t1, mkaddr(e)));
             }
 case t_ref:
+case t_vla:
         {   TypeExpr *t2 = typearg_(t);
             /* recursion allows for ref to array/fn [ES,p128,l-1]!!?    */
             return coerceunary_2(
@@ -2620,7 +3071,7 @@ static bool isnullptrconst(Expr *e)
 {   if (h0_(e) == s_integer)
     {   TypeExpr *t = princtype(type_(e));   /* type_(e)==typeofexpr(e) */
         if (h0_(t) == s_typespec && typespecmap_(t) & INTEGRALTYPEBITS &&
-                                    intval_(e) == 0 ||
+                                    intval64_(e) == 0 ||
 /* Note: (void *)0 is a NPC, but (const void *)0 isn't.  We assume      */
 /* (void *const)0 is a NPC, because qualifiers are ignored on non-      */
 /* lvalues, of which casts are an example.                              */
@@ -2681,6 +3132,7 @@ Expr *mktest(AEop opreason, Expr *a)
         default:
             IGNORE(opreason);      /* re-think whether this is useful */
             if (isrelational_(op)) return a;  /* type OK */
+            if (isbooltype(typeofexpr(a))) return a;
             return mkbinary(s_notequal, a, mkintconst(te_int,0,0));
     }
 }
@@ -2699,6 +3151,7 @@ static Expr *mkvoided(Expr *e)
             return e;
         case s_let:
         case s_comma:
+        case s_cmplit:
             x = arg2_(x); break;
         case s_cond:
             (void)mkvoided(arg2_(x)); x = arg3_(x); break;
@@ -2735,6 +3188,7 @@ static Expr *mklet(Binder *v, TypeExpr *t, Expr *e)
 Expr *mkunary(AEop op, Expr *a)
 {   Expr *c;
     TypeExpr *t;
+
     if (monadneedslvalue_(op))    /* & ++ -- */
     {   c = ensurelvalue(a, op);
         c = (op == s_addrof) ? mkaddr(c) : mkincdec(op, c);
@@ -2743,9 +3197,19 @@ Expr *mkunary(AEop op, Expr *a)
                (h0_(c) == op) ? c :
                (t = typeofexpr(c), mkinvisible(t, mk_expr1(op,t,a), c));
     }
+
 /* The next line treats monadic + as coercing enum->int.  Check C++.    */
     if (h0_(a = coerceunary(a)) == s_error) return a;
     t = typeofexpr(a);
+#if 0
+    /* Probably not good idea, as usually in condition context, not arithmetic */
+    if (isbooltype(t))
+    {   switch (op)
+        {   case s_boolnot:
+                return mkbinary(s_xor, a, mkintconst(te_intbool, 1, 0));
+        }
+    }
+#endif
     /* the operators below all take rvalues in which qualifiers are ignored */
     switch (op)        /*  + - ~ ! *  */
     {   case s_content:
@@ -2898,15 +3362,36 @@ static Expr *bitfieldassign(AEop op, Expr *a, TypeExpr *ta, Expr *b)
 /* mkincdec and mkaddr never insert s_invisible nodes -- they leave the */
 /* caller to do it -- is this right in retrospect?                      */
 static Expr *mkincdec(AEop op, Expr *a)              /* op can be ++ -- */
-{   if (h0_(a) == s_error) return errornode;
+{   TypeExpr *t;
+    if (h0_(a) == s_error) return errornode;
+    t = princtype(typeofexpr(a));
+
+    if (isbooltype(t) && !isvolatile_type(t))
+    {   Expr *b;
+        if (!incdecisinc_(op))
+            b = mkunary(s_boolnot, a); /* -- result is !value */
+        else
+            b = mkintconst(te_boolean, 1, 0); /* ++ result is 1 */
+        if (incdecispre_(op))
+            return mkassign(s_assign, a, b);
+        else
+            return mkassign(s_displace, a, b);
+    }
+
+    #ifdef C99_COMPLEX
+    if (h0_(t) == s_typespec &&
+        typespecmap_(t) & (bitoftype_(s_complex)|bitoftype_(s_imaginary)))
+    {   typeclash(op); return errornode;
+    }
+    #endif
+
     {   /* type check enough here for correct error msgs or extra param */
-        Expr *b = mkintconst(te_int, (incdecisinc_(op) ? 1 : -1), 0);
+        Expr *b = mkintconst64(te_int, (incdecisinc_(op) ? 1 : -1), 0);
 /* The following test avoids warnings for "u--" where u is unsigned int */
 /* and where -1 should be the bit pattern 0xffff.                       */
 /* @@@ Reconsider the use of "--x" ==> "x=x+(-1) in the light of this.  */
         if (sizeof_int == 2 && !incdecisinc_(op))
-        {   TypeExpr *t = princtype(typeofexpr(a));
-            if (h0_(t) == s_typespec)
+        {   if (h0_(t) == s_typespec)
             {   SET_BITMAP m = typespecmap_(t);
                 if ((m & (bitoftype_(s_int)|bitoftype_(s_unsigned)|
                                             bitoftype_(s_long))) ==
@@ -3018,9 +3503,24 @@ case t_fnap:
 static Expr *mkopassign(AEop op, Expr *asimple, Expr *b)
 {   /* asimple must have passed issimplelvalue() or be otherwise reevalable */
 /* @@@ review s_postinc the light of clumsy code for sizeof_int == 2.       */
-    return mkassign(op == s_postinc ? s_displace : s_assign,
-       asimple,
-       mkbinary(op == s_postinc ? s_plus : unassignop_(op), asimple, b));
+    if (op == s_postinc) {
+        b = mkbinary(s_plus, asimple, b);
+#if defined SOFTWARE_FLOATING_POINT || defined SOFTWARE_LONG_LONG
+        if ((mcrepofexpr(asimple) >> MCR_SORT_SHIFT) == 3)
+        {   TypeExpr *t = typeofexpr(asimple);
+            Binder *gen = gentempbinder(t);
+            b = mkbinary(s_comma,
+                  mkbinary(s_comma,
+                           mkassign(s_assign, (Expr *)gen, asimple),
+                           mkassign(s_assign, asimple, b)),
+                         (Expr *)gen);
+            return mklet(gen, t, b);
+        }
+#endif
+        return mkassign(s_displace, asimple, b);
+    } else
+        return mkassign(s_assign, asimple,
+                        mkbinary(unassignop_(op), asimple, b));
 }
 
 static Expr *mkassign(AEop op, Expr *a, Expr *b)
@@ -3093,12 +3593,14 @@ static Expr *mkassign(AEop op, Expr *a, Expr *b)
 /* mkindex copes with indexing on a machine in which sizeof int and     */
 /* and sizeof long differ.  Then we need a widen/narrow before index.   */
 /* The last two arguments provide for (constant) index checking.        */
-static Expr *mkindex(Expr *e, int32 stride, Expr *array, int posneg)
+static Expr *mkindex(Expr *e, Expr *stride, Expr *array, int posneg)
 {   /* The code is marginally perverse here so that no tests are        */
     /* generated if sizeof_ptr/int/long are equal.                      */
     if (sizeof_ptr == sizeof_int || sizeof_ptr == sizeof_long
                                  || sizeof_ptr == sizeof_longlong)
     {   int32 n = sizeoftype(typeofexpr(e));
+        if (sizeof_ptr != sizeof_longlong && n == sizeof_longlong)
+            e = coerce2(e, te_lint), n = sizeof_long;
         if (sizeof_ptr != sizeof_int && n == sizeof_int)
             e = coerce2(e, te_lint);
         if (sizeof_ptr != sizeof_long && n == sizeof_long)
@@ -3107,13 +3609,90 @@ static Expr *mkindex(Expr *e, int32 stride, Expr *array, int posneg)
     else
         syserr(syserr_mkindex);
     check_index_overflow(array, e, posneg, 0);
-    return mkbinary(s_times, e,
-        mkintconst((sizeof_ptr==sizeof_int ? te_int:te_lint),stride,0));
+    stride = mkcast(s_cast, stride, (sizeof_ptr==sizeof_int ? te_int:te_lint));
+    return mkbinary(s_times, e, stride);
 }
 
+#ifdef C99_COMPLEX
+enum complex_domain { real, imaginary, complex };
+
+static TypeExpr *complextype(TypeExpr *precision, enum complex_domain domain)
+{
+    SET_BITMAP m = typespecmap_(precision);
+    if (domain == real) return precision;
+
+    switch (domain)
+    {   case imaginary: m |= bitoftype_(s_imaginary); break;
+        case complex:   m |= bitoftype_(s_complex); break;
+        default:        syserr("complextype"); break;
+    }
+    return primtype_(m);
+}
+
+static Expr *mkcomplex(TypeExpr *realtype, Expr *r, Expr *i)
+{
+    TypeExpr *t = complextype(realtype, complex);
+#if 0
+    Binder *b = gentempbinder(t);
+    return /*mklet(b, t,*/
+                   mkbinary(s_comma,
+                     mkbinary(s_comma,
+                       mkbinary(s_init,
+                         mk_exprwdot(s_dot, realtype, (Expr*)b, 0),
+                         r),
+                       mkbinary(s_init,
+                         mk_exprwdot(s_dot, realtype, (Expr*)b, sizeoftype(realtype)),
+                         i)),
+                       (Expr*)b)/*)*/;
+#else
+    return mk_expr2(s_complex, t, r, i);
+#endif
+}
+
+static Expr *mknonrealbinary(AEop op, Expr *a, Expr *b,
+                             TypeExpr *t1, TypeExpr *t2, TypeExpr *t3)
+{
+    TypeExpr *x1 = princtype(t1), *x2 = princtype(t2);
+    SET_BITMAP m1 = typespecmap_(x1), m2 = typespecmap_(x2);
+    Expr *c;
+    a = coerce2(a, t3); b = coerce2(b, t3);
+    if ((m1 | m2) & bitoftype_(s_complex)) syserr("No complex yet");
+    if ((m1 ^ m2) & bitoftype_(s_imaginary))
+    {
+        if (op == s_times || op == s_div)
+            t3 = complextype(t3, imaginary);
+        else if (op == s_plus || op == s_minus)
+        {   Expr *r, *i;
+            if (op == s_minus) b = mkunary(s_minus, b);
+            if (m1 & bitoftype_(s_imaginary))
+                i = a, r = b;
+            else
+                r = a, i = b;
+            return mkcomplex(t3, r, i);
+        }
+        else
+            syserr("Mixed real and imaginary");
+    }
+    else
+    {
+        if (op == s_plus || op == s_minus)
+            t3 = complextype(t3, imaginary);
+        else if (op == s_times || op == s_div)
+            t3 = complextype(t3, real);
+    }
+
+    c = mk_expr2(op, (isrelational_(op) ? te_boolean : t3), a, b);
+    /* the next line relies on the form of result of lubtype() (q.v.) */
+    return trydiadreduce(c, typespecmap_(t3));
+}
+#endif
 
 Expr *mkbinary(AEop op, Expr *a, Expr *b)
 {   TypeExpr *t1,*t2,*t3;
+    bool boolresult = NO;
+#ifdef C99_COMPLEX
+    bool nonreal;
+#endif
     if (op == s_init)           /* merge with diadneedslvalue below?    */
     {   Expr *c = mkassign(s_assign, a, b);
 /* @@@ do we need an ensurelvalue() on a above for meminit of anonu's?  */
@@ -3148,7 +3727,6 @@ Expr *mkbinary(AEop op, Expr *a, Expr *b)
     if (h0_(b = coerceunary_2(b, op==s_comma ? COERCE_COMMA : COERCE_NORMAL))
                                 == s_error) return b;
     /* the next line checks and inserts !=0 in && ||.                 */
-#define isboolean_(op) ((op)==s_andand || (op)==s_oror)
     if (isboolean_(op))
     {   a = mktest(op,a);
         b = mktest(op,b);
@@ -3156,6 +3734,22 @@ Expr *mkbinary(AEop op, Expr *a, Expr *b)
     }
     t1 = typeofexpr(a);
     t2 = typeofexpr(b);
+    if (isbooltype(t1) || isbooltype(t2))
+    {   int both = isbooltype(t1) && isbooltype(t2);
+        switch (op)
+        {   case s_or:  /* ops for which bool <op> bool is bool */
+            case s_xor:
+                if (!both) break;
+                /* fall through */
+            case s_and: /* ops for which bool <op> anything is bool */
+                boolresult = YES;
+                break;
+            case s_times:
+                if (both) return mkbinary(s_and, a, b);
+                break;
+        }
+    }
+
     switch (op)
     /* special case type rules...  generalise to table like lexclass? */
     {   case s_comma:
@@ -3208,15 +3802,8 @@ clash:      typeclash(op);
                 return mk_expr2_ptr(op, t1, a,
                              mkindex(b, strideofindexee(t1), a,1));
             if (indexable(t2) && indexer(t1))
-#ifdef OLD_POINTER_PLUS
-                return mk_expr2_ptr(op, t2,
-                             mkindex(a, strideofindexee(t2), b,1),
-                             b);
-#else
-/* int+ptr is now treated as ptr+int, hence i[p], p[i] as *(p+i).      */
                 return mk_expr2_ptr(op, t2, b,
                              mkindex(a, strideofindexee(t2), b,1));
-#endif
             break;
         case s_minus:
             if (indexable(t1) && indexer(t2))
@@ -3296,16 +3883,25 @@ clash:      typeclash(op);
             break;
     }
     /* all that SHOULD be left are the arithmetic types */
-    t3 = lubtype(op,t1,t2);           /* BEWARE - see trydiadreduce below */
+#ifdef C99_COMPLEX
+                                     /* BEWARE - see trydiadreduce below */
+    t3 = lubtype(op,t1,t2,boolresult,&nonreal);
+#else
+    t3 = lubtype(op,t1,t2,boolresult);/* BEWARE - see trydiadreduce below */
+#endif
     if (t3 == 0) return errornode;
+#ifdef C99_COMPLEX
+    if (nonreal) return mknonrealbinary(op, a, b, t1, t2, t3);
+#endif
     if (op == s_leftshift || op == s_rightshift);   /* done by lubtype() */
     else a = coerce2(a, t3), b = coerce2(b, t3);
+
     {
 #ifdef PASCAL /*ECN*/
         Expr *c = mk_expr2(op, ((isrelational_(op) || isboolean_(op)) ?
                                                        te_boolean : t3), a, b);
 #else
-        Expr *c = mk_expr2(op, (isrelational_(op) ?  te_int : t3), a, b);
+        Expr *c = mk_expr2(op, (isrelational_(op) ?  te_boolean : t3), a, b);
 #endif
         /* the next line relies on the form of result of lubtype() (q.v.) */
         return trydiadreduce(c, typespecmap_(t3));
@@ -3522,11 +4118,19 @@ static Expr *mkfnap_1(Expr *e, ExprList *l, FormTypeList *d,
 /* They reflect the above Codemist decision to implement 'float'        */
 /* prototype parameters as 'double' to aid old code transition to ansi. */
                 if (h0_(t2) == s_typespec  &&  (typespecmap_(t2) &
+#ifdef C99_COMPLEX
+                        (CXIMBITS|bitoftype_(s_double)|bitoftype_(s_short))) ==
+#else
                         (bitoftype_(s_double)|bitoftype_(s_short))) ==
+#endif
                             (bitoftype_(s_double)|bitoftype_(s_short)))
                 {   TypeExpr *t1 = princtype(typeofexpr(x));
                     if (h0_(t1) == s_typespec  &&  (typespecmap_(t1) &
+#ifdef C99_COMPLEX
+                        (CXIMBITS|bitoftype_(s_double)|bitoftype_(s_short))) ==
+#else
                         (bitoftype_(s_double)|bitoftype_(s_short))) ==
+#endif
                             (bitoftype_(s_double)|bitoftype_(s_short)))
                         x = mkcast(s_cast, x, te_float);
                 }
@@ -3745,6 +4349,21 @@ static void check_narrowing_cast(AEop op, SET_BITMAP from, SET_BITMAP to)
           /* any floating type to any integral type */
           (to & INTEGRALTYPEBITS &&
             (from & bitoftype_(s_double)))
+#ifdef C99_COMPLEX
+         ||
+          /* complex to non-complex */
+          (from & bitoftype_(s_complex) &&
+            !(to & bitoftype_(s_complex)))
+         ||
+          /* imaginary to real */
+          (from & bitoftype_(s_imaginary) &&
+            !(to & CXIMBITS))
+         || /* real to imaginary */
+          (to & bitoftype_(s_imaginary) &&
+            !(from & bitoftype_(s_imaginary)))
+#endif
+         || /* long long -> non long long */
+          (islonglong_(from) && !islonglong_(to))
           /* any other ideas at what to moan at? */
          )
     {   if (suppress & D_IMPLICITNARROWING) xwarncount++;
@@ -3752,12 +4371,69 @@ static void check_narrowing_cast(AEop op, SET_BITMAP from, SET_BITMAP to)
     }
 }
 
+#ifdef C99_COMPLEX
+Expr *mkcomplexconv(AEop op, Expr *e)
+{
+    Expr *r=0, *i=0;
+    TypeExpr *t = typeofexpr(e);
+    TypeExpr *t1 = princtype(t);
+    TypeExpr *tr;
+    int32 s;
+    SET_BITMAP m = typespecmap_(t1);
+    if (!isprimtype_(t1, s_double))
+    {   typeclash(op);
+        return errornode;
+    }
+    if (m & bitoftype_(s_long))
+        tr = te_ldble, s = sizeof_ldble;
+    else if (m & bitoftype_(s_short))
+        tr = te_float, s = sizeof_float;
+    else
+        tr = te_double, s = sizeof_double;
+    if (m & bitoftype_(s_complex))
+        r = mk_exprwdot(s_dot, tr, e, op == s_cimag ? s : 0);
+    else if ((m & bitoftype_(s_imaginary)!=0) == (op==s_cimag))
+    {   r = mk_expr1(s_cast, tr, e);
+        r = trycastreduce(e, tr, r, 1);
+    }
+    else
+        r = (Expr *) int_to_real(0, 0, typespecmap_(tr));
+    return r;
+}
+
+Expr *mknonrealcast(AEop op, TypeExpr *x, TypeExpr *y, Expr *e)
+{
+    check_narrowing_cast(op, typespecmap_(y), typespecmap_(x));
+    if (isprimtype_(x, s_imaginary))
+    {
+        if (isprimtype_(y, s_complex))
+            syserr("cast complex->imaginary");
+        else
+            return (Expr *) int_to_real(0, 0, typespecmap_(x));
+    }
+    else if (isprimtype_(x, s_complex))
+        syserr("cast \?\?->complex");
+    else if (isprimtype_(x, s_double))
+    {
+        if (isprimtype_(y, s_complex))
+            syserr("cast complex->double");
+        else
+            return (Expr *) int_to_real(0, 0, typespecmap_(x));
+    }
+    return 0;
+}
+#endif
+
 /* tidy up relationship with coerce2() */
 Expr *mkcast(AEop op, Expr *e, TypeExpr *tr)
 {   TypeExpr *te, *x, *y, *xp, *yp;
     Expr *r;
     SET_BITMAP m;
     if (h0_(e) == s_error) return errornode;
+    /* KJB hackery - VLAs are actually initialised as if they are       */
+    /* pointers.                                                        */
+    if (op == s_assign && h0_(tr) == t_vla)
+        tr = ptrtotype_(typearg_(tr));
 #ifdef CPLUSPLUS
     if (h0_(x = princtype(tr)) == t_ref)
     {   /* don't coerceunary yet, e.g. int a[5], (&x)[5] = a.           */
@@ -3774,7 +4450,7 @@ Expr *mkcast(AEop op, Expr *e, TypeExpr *tr)
 /* consider:  volatile int i; const int &ri = i;  temp or not?          */
                             qualifier_subset(lvt, xr) &&
 #endif
-              (qualfree_equivtype(lvt, xr) || type_derived_from(xr, lvt)
+              (qualfree_equivtype(lvt, xr) ||| type_derived_from(xr, lvt)
                                            || h0_(xr) == t_fnap)))
 /* The t_fnap case allows    int f(); int (&g)() = f;                   */
 /* @@@ The following is sordid: lvalue_type considers all class values  */
@@ -3819,6 +4495,9 @@ not_implemented_copy_constructor:
     /* coerce most things but not enum->int.                            */
     if (h0_(e = coerceunary_2(e, COERCE_ASSIGN)) == s_error) return e;
 
+    if (isbooltype(tr))
+        return mktest(s_cast, e);
+
     te = typeofexpr(e);
     /* check te,tr match enough ... */
     switch (qualfree_equivtype(te,tr))
@@ -3839,6 +4518,12 @@ case 0: /* not obviously permissible, check more */
         if (op != s_cast || feature & FEATURE_ANOMALY)
 #endif
             (void)check_narrow_subterm(e, y, x);
+#ifdef C99_COMPLEX
+        if (isprimtypein_(x, CXIMBITS) || isprimtypein_(y, CXIMBITS))
+        {   r = mknonrealcast(op, x, y, e);
+            if (r) return r;
+        }
+#endif
 #ifdef CPLUSPLUS
         if (isclasstype_(y))
         {   ClassMember *conv = class_has_conversion(typespectagbind_(y), x);
@@ -3866,7 +4551,7 @@ case 0: /* not obviously permissible, check more */
                             cc_pccwarn(sem_warn_fn_cast, op);
                     }
                     else if (!(feature & (FEATURE_PCC|FEATURE_LIMITED_PCC) ||
-                               suppress & D_IMPLICITCAST))
+                               suppress & D_FUNCCAST))
                         cc_warn(sem_warn_fn_cast, op);
 /* AM: the following reflects a bug (fix) in the interface aetree->cg.     */
 /* There is danger here if a local static array, or address of a local var */
@@ -3905,6 +4590,13 @@ case 0: /* not obviously permissible, check more */
             break;
     case s_typespec:
             m = typespecmap_(x);
+            /* Handle bool conversions - only arithmetic and pointers OK, other */
+            /* cases we fall through to get standard errors.                    */
+            if (m & bitoftype_(s_bool))
+            {   if (h0_(y) == s_typespec && (typespecmap_(y) & ARITHTYPEBITS) ||
+                    h0_(y) == t_content)
+                    return mktest(op, e);
+            }
             switch (m & -m)    /* LSB - unsigned/long etc. are higher */
             {   case bitoftype_(s_int):
                     if (h0_(y) == t_content && !int_isshort_(m))
@@ -3994,7 +4686,7 @@ case 0: /* not obviously permissible, check more */
 #ifdef SOFTWARE_FLOATING_POINT
     if (software_floating_point_enabled) return fixflt(r);
 #endif
-    return r;
+    return llcast(r);
 }
 
 static Expr *findfield(TypeExpr *te, ClassMember *member)
@@ -4114,7 +4806,11 @@ Expr *mkcond(Expr *a, Expr *b, Expr *c)
     else if (isvoidtype(t1) && isvoidtype(t2))
         /* note t1/t2 may be qualified void, but irrelevant on rvalues. */
         t = te_void;
-    else t = lubtype(s_cond,t1,t2);
+#ifdef C99_COMPLEX
+    else t = lubtype(s_cond,t1,t2,isbooltype(t1) && isbooltype(t2), NULL);
+#else
+    else t = lubtype(s_cond,t1,t2,isbooltype(t1) && isbooltype(t2));
+#endif
     if (t == 0) return errornode;
     b = coerce2(b,t);
     c = coerce2(c,t);
@@ -4134,9 +4830,26 @@ Expr *mkcond(Expr *a, Expr *b, Expr *c)
     return mkinvisible(t, r, intval_(a) ? b : c);
 }
 
+Expr *mkvlaalloc(Expr *n)
+{
+    ExprList *l = mkExprList(0, n);
+    Binder *b = findbinding(sim.autoallocfn, NULL, ALLSCOPES);
+    return mkfnap((Expr *) b, l);
+}
+
+Expr *mkvlafree(Expr *n)
+{
+    ExprList *l = mkExprList(0, n);
+    Binder *b = findbinding(sim.autofreefn, NULL, ALLSCOPES);
+    return mkfnap((Expr *) b, l);
+}
+
 void sem_init(void)
 {   static Expr errorexpr = { s_error };
     errornode = &errorexpr;
+    arraystarnode = (Expr *) global_mk_binder(0, 0, bitofstg_(s_extern)|b_undef, te_size_t);
 }
+
+#include "semx.c"
 
 /* End of sem.c */

@@ -30,6 +30,7 @@ SQZ     = squeeze
 WIPE    = -wipe
 TIDYDESC= do perl Build:TidyDesc
 
+LDFLAGS =
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK} ${OPTIONS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
@@ -52,7 +53,7 @@ CLXLIB    = C:CLX.o.clxlib
 # Include files
 #
 INCLUDES  = -Iriscos -IC:CLX -Iarm -Icfe -Imip -Iutil -Iccacorn -IC:
-DFLAGS    =
+DFLAGS    = 
 
 #
 # Program specific options:
@@ -66,10 +67,17 @@ INTERNALHEADERS =\
  h.assert h.ctype h.errno h.fenv h.float h.inttypes h.iso646 h.limits h.locale h.math\
  h.setjmp h.signal h.stdarg h.stdbool h.stddef h.stdint h.stdio h.stdlib h.string h.time
 
+HDRPATHS =\
+ cl.stdh.h.assert cl.stdh.h.ctype cl.stdh.h.errno cl.stdh.h.fenv cl.stdh.h.float\
+ cl.stdh.h.inttypes cl.stdh.h.iso646 cl.stdh.h.limits cl.stdh.h.locale cl.stdh.h.math\
+ cl.stdh.h.setjmp cl.stdh.h.signal cl.stdh.h.stdarg cl.stdh.h.stdbool cl.stdh.h.stddef\
+ cl.stdh.h.stdint cl.stdh.h.stdio cl.stdh.h.stdlib cl.stdh.h.string\
+ cl.stdh.h.time
+
 OBJS= o.driver o.aaof o.asd o.asm o.gen o.mcdep o.peephole o.aetree o.bind \
     o.builtin o.cg o.codebuf o.compiler o.cse o.csescan o.sr o.flowgraf \
-    o.jopprint o.misc o.regalloc o.regsets o.store o.lex o.pp o.sem o.simplify \
-    o.syn o.vargen o.version o.dde
+    o.inline o.jopprint o.misc o.regalloc o.regsets o.store o.lex o.pp \
+    o.sem o.simplify o.syn o.vargen o.version o.dde
 
 HDRS=ccacorn.c.headers ccacorn.c.peeppat ccacorn.h.errors
 

@@ -72,7 +72,7 @@
 /* *user-declared* vars for debug info.  This probably can be amalgamated   */
 /* with blkstack_ (discuss).  There are some importance differences.        */
 
-BindListList *current_env;
+struct CGState cgstate;
 
 #ifndef TARGET_IS_NULL
 
@@ -80,7 +80,7 @@ static BindListList *current_env2;
 
 /* procedural interface to machine dependent code generator is via: */
 /* show_instruction(), local_base(), local_address(), plus ...      */
-static void show_inst_2(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+static void show_inst_2(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {
     if (uses_r1(op))
     {   RealRegister r1r = register_number(r1.r);
@@ -97,6 +97,11 @@ static void show_inst_2(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
         if (mr >= (unsigned32)NMAGICREGS) syserr(syserr_mr, (long)mr);
         m.rr = mr;
     }
+    if (uses_r4(op))
+    {   RealRegister r4r = register_number(r4.r);
+        if (r4r >= (unsigned32)NMAGICREGS) syserr("syserr_r4r %ld", (long)r4r);
+        r4.rr = r4r;
+    }
 #ifdef TARGET_HAS_2ADDRESS_CODE
     if (jop_asymdiadr_(op))
     {   /* code in regalloc has ensured that r1 & r3 clash if r1 != r2 */
@@ -105,12 +110,12 @@ static void show_inst_2(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
     /* Maybe turn all 3-address codes to 2-address + MOVR here, but    */
     /* think more w.r.t use of load-address target opcodes.            */
 #endif
-    show_instruction(op, r1, r2, m);
+    show_instruction(op, r1, r2, m, r4);
 }
 
 static void show_inst_3K(J_OPCODE op, VRegnum r1, Binder *b, int32 k)
 {
-    VRegInt vr1, vr2, m;
+    VRegInt vr1, vr2, m, r4;
     if (uses_r1(op))
     {   RealRegister r1r = register_number(r1);
         if (r1r >= (unsigned32)NMAGICREGS) syserr(syserr_r1r, (long)r1r);
@@ -119,11 +124,12 @@ static void show_inst_3K(J_OPCODE op, VRegnum r1, Binder *b, int32 k)
     else vr1.r = r1;
     vr2.rr = local_base(b);
     m.i = local_address(b) + k;
+    r4.i = 0;
 #ifdef TARGET_HAS_RISING_STACK
     if ((bindaddr_(b) & BINDADDR_MASK) == BINDADDR_LOC)
       m.i += sizeof_int - ((b->bindmcrep) & MCR_SIZE_MASK);
 #endif
-    show_instruction(op, vr1, vr2, m);
+    show_instruction(op, vr1, vr2, m, r4);
 }
 
 static void show_inst_3(J_OPCODE op, VRegnum r1, Binder *b)
@@ -131,9 +137,6 @@ static void show_inst_3(J_OPCODE op, VRegnum r1, Binder *b)
 }
 
 #endif /* TARGET_IS_NULL */
-
-/* statistics */
-int32 icode_cur, block_cur;
 
 /* the next 4 private vars control start_basic_block() and emit() */
 static Icode *icodetop, *currentblock;
@@ -156,11 +159,6 @@ static BlockHead *block_header;
 BlockHead *top_block, *bottom_block;   /* exported to cg/regalloc */
 /* beware: way_out is used for two different purposes.                  */
 static LabelNumber *way_out;
-
-BindList *active_binders;
-
-Binder *juststored;
-VRegnum justregister;
 
 #define size_of_binders(l) sizeofbinders(l, NO)
 
@@ -198,7 +196,7 @@ int32 sizeofbinders(BindList *l, bool countall)
 static BlockHead *newblock2(LabelNumber *lab, BindList *active_on_entry)
 {   /* one day it may be nice to make the 2nd arg a union { int; BindList *} */
     BlockHead *p = (BlockHead *) BindAlloc(sizeof(BlockHead));
-    block_cur += sizeof(BlockHead);
+    cgstate.block_cur += sizeof(BlockHead);
     blkcode_(p) = (Icode *) DUFF_ADDR;
     blkusedfrom_(p) = NULL;
     blklab_(p)  = lab;
@@ -321,7 +319,7 @@ BlockHead *start_basic_block_at_level(LabelNumber *l, BindList *active_on_entry)
     if (!deadcode) emitbranch(J_B, l);   /* round off the previous block    */
     l->block = b = newblock(l, active_on_entry);    /* set the label        */
     deadcode = 0;                        /* assume label will be referenced */
-    juststored = NULL;
+    cgstate.juststored.var = NULL;
     if (debugging(DEBUG_CG)) cc_msg("L%ld:\n", (long)lab_name_(l));
     return b;
 }
@@ -487,17 +485,26 @@ void emit(J_OPCODE op, VRegnum r1, VRegnum r2, int32 m)
     inner_emit(op, vr1, vr2, vm);
 }
 
-static void inner_emit(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void emitll(J_OPCODE op, VRegnum r1, VRegnum r2, int64 *m)
+{
+    VRegInt vr1, vr2, vm;
+    vr1.r = r1;
+    vr2.r = r2;
+    vm.ll = m;
+    inner_emit(op, vr1, vr2, vm);
+}
+
+static void inner_emit_4(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {
     if (deadcode) {
         if (!usrdbg(DBG_LINE)) return;
         start_new_basic_block(nextlabel()); }
 
     if (op != J_MOVR ||
-        r1.r==justregister) juststored = NULL;
+        r1.r==cgstate.juststored.reg) cgstate.juststored.var = NULL;
     if (op==J_B)
     {   deadcode = 1;
-        if (debugging(DEBUG_CG)) print_jopcode(op,r1,r2,m);
+        if (debugging(DEBUG_CG)) print_jopcode(op,r1,r2,m,r4);
         finishblock();
         blknext_(block_header) = m.l;
         return;
@@ -508,7 +515,7 @@ static void inner_emit(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
     {   blknext1_(block_header) = m.l;
         blkflags_(block_header) |= BLK2EXIT;
         blkflags_(block_header) |= op & Q_MASK;
-        if (debugging(DEBUG_CG)) print_jopcode(op,r1,r2,m);
+        if (debugging(DEBUG_CG)) print_jopcode(op,r1,r2,m,r4);
         start_new_basic_block(nextlabel());
         return;
     }
@@ -564,15 +571,16 @@ case J_STRDK:
             icodetop = &p[ICODESEGSIZE];
             if (debugging(DEBUG_CG))
                 cc_msg("New ICODE segment allocated\n");
-            icode_cur += icoden * sizeof(Icode);   /* wasted */
+            cgstate.icode_cur += icoden * sizeof(Icode);   /* wasted */
         }
     }
-    if (debugging(DEBUG_CG)) print_jopcode(op,r1,r2,m);
+    if (debugging(DEBUG_CG)) print_jopcode(op,r1,r2,m,r4);
     currentblock[icoden].op = op;
     currentblock[icoden].r1 = r1;
     currentblock[icoden].r2 = r2;
-    currentblock[icoden++].m = m;
-    icode_cur += sizeof(Icode);
+    currentblock[icoden].m = m;
+    currentblock[icoden++].r4 = r4;
+    cgstate.icode_cur += sizeof(Icode);
     if (isproccall_(op) && op != J_OPSYSK)
     {   if (blkflags_(block_header) & BLKCALL)
             blkflags_(block_header) |= BLK2CALL;
@@ -601,6 +609,12 @@ case J_STRDK:
     }
 }
 
+static void inner_emit(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+{   VRegInt r4;
+    r4.i = 0;
+    inner_emit_4(op, r1, r2, m, r4);
+}
+
 /* AM believes that remove_noops logically fits here now. */
 
 #ifndef TARGET_IS_NULL
@@ -615,12 +629,13 @@ bool is_compare(J_OPCODE op)
 
 static Icode fg_pending;
 
-static void expand_jop_macro(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void expand_jop_macro(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {
 #ifdef TARGET_NOT_YET_J_ALIGNMENT       /* removed soon */
     op &= ~J_ALIGNMENT;
 #endif
-        if (debugging(DEBUG_CG)) print_jopcode(op&~J_DEADBITS,r1,r2,m);
+
+        if (debugging(DEBUG_CG)) print_jopcode(op&~J_DEADBITS,r1,r2,m,r4);
 #ifdef TARGET_STACK_MOVES_ONCE
 /*
  * TARGET_STACK_MOVES_ONCE is believed to be OK when used in combination
@@ -694,10 +709,11 @@ case J_PUSHR: case J_PUSHD: case J_PUSHF: case J_PUSHL:
         return;
     }
     if (fg_pending.op == J_PUSHM)
-    {   VRegInt vr1, vr2;
+    {   VRegInt vr1, vr2, vr4;
         vr1.r = GAP;
         vr2.r = GAP;
-        show_inst_2(J_PUSHM, vr1, vr2, fg_pending.m);
+        vr4.i = 0;
+        show_inst_2(J_PUSHM, vr1, vr2, fg_pending.m, vr4);
         fg_pending.op = J_NOOP, fg_pending.m.i = 0;
     }
 /* end of peepholer                     ************************        */
@@ -722,8 +738,8 @@ case J_EXTEND:
         }
 #  else
         m.i = m.i == 2 ? 16: 24;
-        show_inst_2(J_SHLK, r1, r2, m);
-        show_inst_2(J_SHRK+J_SIGNED, r1, r1, m);
+        show_inst_2(J_SHLK, r1, r2, m, r4);
+        show_inst_2(J_SHRK+J_SIGNED, r1, r1, m, r4);
 # endif
         return;
 #endif
@@ -778,7 +794,7 @@ case J_STRING:
            */
         {   int32 offset = data.size;   /* The literal's about to be */
                                         /* put at this offset ...  */
-            VRegInt vr2, vm;
+            VRegInt vr2, vm, vr4;
             vg_genstring(m.s, stringlength(m.s)+1, 0);
             /* The following call is unexpectedly important...            */
             /* vg_genstring() does not post-align, and other genXXX() fns */
@@ -789,7 +805,8 @@ case J_STRING:
             /* since datasegment is defined, it will have been obj_symref'd */
             vr2.i = offset;
             vm.sym = bindsym_(datasegment);
-            show_inst_2(J_ADCON, r1, vr2, vm);
+            vr4.i = 0;
+            show_inst_2(J_ADCON, r1, vr2, vm, vr4);
             return;
         }
         r2.i = 0;
@@ -957,15 +974,16 @@ case J_LDRLK: case J_STRLK:
         /* drop through */
 #endif
     }
-    show_inst_2(op, r1, r2, m);
+    show_inst_2(op, r1, r2, m, r4);
 }
 
 static void show_branch_instruction(J_OPCODE op, LabelNumber *m)
 {
-    VRegInt vr1, vr2, vm;
+    VRegInt vr1, vr2, vm, vr4;
     vr1.r = vr2.r = GAP;
     vm.l = m;
-    expand_jop_macro(op, vr1, vr2, vm);
+    vr4.i = 0;
+    expand_jop_macro(op, vr1, vr2, vm, vr4);
 }
 
 /* more of the debugger */
@@ -973,11 +991,11 @@ static void dbg_scope1(BindListList *newbl, BindListList *old)
 {
     IGNORE(newbl); IGNORE(old); /* avoid warnings when dbg_scope is FALSE */
     if (dbg_scope(newbl, old))
-    {   VRegInt vr1, vr2, vm;
+    {   VRegInt vr1, vr2, vm, vr4;
         vr1.r = vr2.r = GAP;
-        vm.i = 0;
+        vm.i = vr4.i = 0;
         /* request code location where scope started or ended */
-        expand_jop_macro(J_INFOSCOPE, vr1, vr2, vm);
+        expand_jop_macro(J_INFOSCOPE, vr1, vr2, vm, vr4);
     }
 }
 
@@ -1000,13 +1018,13 @@ static void show_basic_block(BlockHead *p, int32 cond)
         blkusedfrom_(p)->blklstcar != prevblock ||
         (blkflags_(prevblock) & BLKSWITCH))
     {
-        VRegInt vr1, vr2, vm;
+        VRegInt vr1, vr2, vm, vr4;
         vr1.r = vr2.r = GAP;
-        vm.l = blklab_(p);
-        expand_jop_macro(J_LABEL, vr1, vr2, vm);    /* label of block */
+        vm.l = blklab_(p); vr4.i = 0;
+        expand_jop_macro(J_LABEL, vr1, vr2, vm, vr4);    /* label of block */
 #ifndef TARGET_STACK_MOVES_ONCE
         vm.i = blkstacki_(p);
-        expand_jop_macro(J_STACK, vr1, vr2, vm);    /* env. of block  */
+        expand_jop_macro(J_STACK, vr1, vr2, vm, vr4);    /* env. of block  */
 #endif
     }
     for (b1=0; b1<len; b1++)
@@ -1018,12 +1036,16 @@ static void show_basic_block(BlockHead *p, int32 cond)
 //                if ((op & Q_MASK) != Q_XXX) op = (op & ~Q_MASK) | cond;
                 if ((op & Q_MASK) != Q_XXX && (op & (Q_MASK&~Q_UBIT)) != Q_FXXX) {
                     if ((cond & Q_FBIT) != (op & Q_FBIT)) {
-                       printf("Eyup: %08lx -> %08lx\n", (op & Q_MASK)^Q_FLIP, (cond & Q_MASK)^Q_FLIP);
+                       syserr("Eyup: %08lx -> %08lx\n", (op & Q_MASK)^Q_FLIP, (cond & Q_MASK)^Q_FLIP);
                     }
                     op = (op & ~Q_MASK) | cond;
                 }
         }
-        expand_jop_macro(op, b[b1].r1, b[b1].r2, b[b1].m);
+        #ifdef TARGET_EXPANDS_MACROS
+        if (target_expand(op, b[b1].r1, b[b1].r2, b[b1].m, b[b1].r4, &blkflags_(p)))
+            continue;
+        #endif
+        expand_jop_macro(op, b[b1].r1, b[b1].r2, b[b1].m, b[b1].r4);
     }
     prevblock = p;
 }
@@ -1255,10 +1277,10 @@ static int32 adjusted_stack_size(int32 stack_size, Icode *code, int32 n) {
 #ifdef TARGET_HAS_COND_EXEC
 
 #define set_cond_execution(cond)        \
- { VRegInt vr1, vr2, vm;                \
+ { VRegInt vr1, vr2, vm, vr4;           \
    vr1.r = vr2.r = GAP;                 \
-   vm.i = 0;                            \
-   expand_jop_macro(J_CONDEXEC|(cond),vr1, vr2, vm); }
+   vm.i = vr4.i = 0;                    \
+   expand_jop_macro(J_CONDEXEC|(cond),vr1, vr2, vm, vr4); }
 
 /* A block is not usable with conditional execution if if ends with a */
 /* conditional branch (or switch), or if it is shared between the     */
@@ -1398,37 +1420,37 @@ static void show_block_pair(int32 cond, BlockHead *b1, BlockHead *b2, CommonInst
             set_cond_execution(cond);
 #ifndef TARGET_STACK_MOVES_ONCE
             if (s1 != s2)  {
-                VRegInt vr1, vr2, vm;
+                VRegInt vr1, vr2, vm, vr4;
                 vr1.r = vr2.r = GAP;
-                vm.i = s1;
-                expand_jop_macro(J_STACK, vr1, vr2, vm);
+                vm.i = s1; vr4.r = 0;
+                expand_jop_macro(J_STACK, vr1, vr2, vm, vr4);
             }
 #endif
             for (; p1 < n1; p1++, c1++) {
                 s1 = adjust_stack_size(s1, c1);
-                expand_jop_macro(c1->op, c1->r1, c1->r2, c1->m);
+                expand_jop_macro(c1->op, c1->r1, c1->r2, c1->m, c1->r4);
             }
         }
         if (p2 != n2) {
             set_cond_execution(Q_NEGATE(cond));
 #ifndef TARGET_STACK_MOVES_ONCE
             if (s1 != s2)  {
-                VRegInt vr1, vr2, vm;
+                VRegInt vr1, vr2, vm, vr4;
                 vr1.r = vr2.r = GAP;
-                vm.i = s2;
-                expand_jop_macro(J_STACK, vr1, vr2, vm);
+                vm.i = s2; vr4.i = 0;
+                expand_jop_macro(J_STACK, vr1, vr2, vm, vr4);
             }
 #endif
             for (; p2 < n2; p2++, c2++) {
                 s2 = adjust_stack_size(s2, c2);
-                expand_jop_macro(c2->op, c2->r1, c2->r2, c2->m);
+                expand_jop_macro(c2->op, c2->r1, c2->r2, c2->m, c2->r4);
             }
         }
         if (n1 < l1) {
             set_cond_execution(Q_AL|Q_UBIT);
             s1 = adjust_stack_size(s1, c1);
             s2 = adjust_stack_size(s2, c2);
-            expand_jop_macro(c1->op, c1->r1, c1->r2, c1->m);
+            expand_jop_macro(c1->op, c1->r1, c1->r2, c1->m, c1->r4);
             c1++; c2++;
             p1++, p2++;
         }
@@ -1468,8 +1490,10 @@ static void show_n(int32 n, Icode *c, int32 s) {
     int32 i;
     IGNORE(s);
     for (i = 0; i < n; i++, c++)
-        expand_jop_macro(c->op, c->r1, c->r2, c->m);
+        expand_jop_macro(c->op, c->r1, c->r2, c->m, c->r4);
 }
+
+#define BLKLIFTABLE BLKP2
 
 static LabelNumber *use_cond_field(BlockHead *p)
 {
@@ -2242,6 +2266,595 @@ void lose_dead_code(void)
     kill_unreachable_blocks(); /* (just to unset BLKALIVE if usrdbg(..)) */
 }
 
+#ifdef TARGET_HAS_SAVE
+
+/* If the target local codegenerator has separable entry to function (J_ENTER)
+ * and save callee-save registers & setup frame (J_SAVE) operations, try to
+ * move the J_SAVE into the body of the function past conditional exits (to give
+ * faster fast exit paths). This is done after register allocation, so it may
+ * fail when better allocation would allow it to succeed.
+ */
+
+typedef struct RAList RAList;
+struct RAList {
+  RAList *cdr;
+  RealRegister r1, r2;
+  int32 argregdead;
+};
+
+#define BlockList_NDelete(b, bl) ((BlockList *)ndelete((VRegnum)b, (RegList *)bl))
+
+static BlockList *BlockList_Insert(BlockHead *b, BlockList *bl) {
+  return (member((VRegnum)b, (RegList *)bl)) ? bl : mkBlockList(bl, b);
+}
+
+static BlockList *BlockList_Union(BlockList *bl1, BlockList *bl2) {
+  for (; bl2 != NULL; bl2 = bl2->blklstcdr)
+    bl1 = BlockList_Insert(bl2->blklstcar, bl1);
+  return bl1;
+}
+
+
+static BlockList *BlockList_Difference(BlockList *bl1, BlockList *bl2) {
+  for (; bl2 != NULL; bl2 = bl2->blklstcdr)
+    bl1 = BlockList_NDelete(bl2->blklstcar, bl1);
+  return bl1;
+}
+
+static RealRegister ArgRegister(RealRegister r, RAList *ra) {
+  r = register_number(r);
+  for (; ra != NULL; ra = cdr_(ra))
+    if (r == ra->r1)
+      return ra->r2;
+  return r;
+}
+
+static RealRegister VarRegister(RealRegister r, RAList *ra) {
+  r = register_number(r);
+  for (; ra != NULL; ra = cdr_(ra))
+    if (r == ra->r2)
+      return ra->argregdead ? ra->r1 : r;
+  return r;
+}
+
+static BlockHead *ts_blockbetween(BlockHead *before, BlockHead *after) {
+/* Insert a block between <before> and <after>, copying information from
+ * <before>. Keep blkusedfrom_ fields up to date (insertblockbetween doesn't
+ * because it's also used from CSE before the fields are set up).
+ */
+  BlockHead *b = insertblockbetween(before, after);
+  blkstacki_(b) = blkstacki_(before);
+  blkdebenv_(b) = blkdebenv_(before);
+  blkflags_(b) = blkflags_(before);
+  refblock(blklab_(after), b, unrefblock(after, before));
+  refblock(blklab_(b), before, NULL);
+  return b;
+}
+
+static void try_shrinkwrap(void) {
+  BlockHead *top = top_block,
+            *next = blknext_(top)->block;
+  BlockList *lifted = NULL;
+
+  int32 argdesc;
+  RAList *copies = NULL;
+  bool changed = NO;
+  BlockHead *saveblock = ts_blockbetween(top, next);
+  { /* Introduce the SAVE jopcode, and set up a translation between argument
+     * registers and the VRegisters to which they've been moved.
+     */
+    Icode *newic = (Icode *)BindAlloc(sizeof(Icode));
+    Icode *ic = blkcode_(top);
+    int32 n = blklength_(top);
+    *newic = *ic;
+    ic->op = J_SAVE;
+    argdesc = ic->m.i;
+    blkcode_(saveblock) = ic; blklength_(saveblock) = n;
+    blkcode_(top) = newic; blklength_(top) = 1;
+    for (; --n >= 0; ic++)
+      if ((ic->op & J_TABLE_BITS) == J_MOVR)
+        copies = (RAList *)syn_list4(copies, register_number(ic->r1.r),
+                                             register_number(ic->m.r),
+                                             ic->op & J_DEAD_R3);
+  }
+  if (!(var_cc_private_flags & 262144) &&
+      !usrdbg(DBG_ANY) &&
+      block_single_entry(next)) {
+    /* Attempt to find a set of blocks after <saveblock> which can be moved
+     * before it. The set must contain at least one return (or there's no point
+     * to the motion), may have predecessors only in the set plus <saveblock>,
+     * and may have successors only in the set plus returns plus one other
+     * block (which will become the successor of <saveblock>). Blocks in the set
+     * may contain no calls, nor write any callee-save register nor read any
+     * register set up in <saveblock> (except those which are copies of argument
+     * registers). In addition, blocks which are not single-exit with successor
+     * way_out may write no argument register.
+     */
+    BlockHead *p = top;
+    RealRegSet maynotwrite, maynotread, argregset, calleesaveregset;
+    Icode *ic = blkcode_(saveblock);
+    int32 i, n = blklength_(saveblock);
+    memclr(&maynotread, sizeof(RealRegSet));
+    memclr(&calleesaveregset, sizeof(RealRegSet));
+    memclr(&argregset, sizeof(RealRegSet));
+    for (i = 0; i < k_intregs_(argdesc); i++)
+#ifdef TARGET_IS_MIPS
+      if (i >= 2*k_fltregs_(argdesc))
+#endif
+        augment_RealRegSet(&argregset, R_P1+i);
+    for (i = 0; i < k_fltregs_(argdesc); i++)
+      augment_RealRegSet(&argregset, R_FP1+i);
+    for (i = 0; i < NVARREGS; i++)
+      augment_RealRegSet(&calleesaveregset, R_V1+i);
+    for (i = 0; i < NFLTVARREGS; i++)
+      augment_RealRegSet(&calleesaveregset, R_FV1+i);
+#ifdef TARGET_IS_ARM
+    /* Not preserved by J_SAVE for some calling standards. Holds value on
+       function entry for reentrant APCS. FixedRegisterUse should tell us
+       this.
+     */
+    augment_RealRegSet(&calleesaveregset, R_IP);
+#endif
+#ifndef TARGET_STACKS_LINK
+    augment_RealRegSet(&calleesaveregset, R_LR);
+#endif
+    for (; --n >= 0; ic++) {
+    /* Registers set in <saveblock> won't be accessible to code moved before it.
+     * I think these can actually only be registers to which arguments are
+     * copied, so this is redundant (they'll be translated back to the argument
+     * register numbers via the <copies> list), but this code is cautious in case
+     * anything else gets appended to the block.
+     */
+      J_OPCODE op = ic->op;
+      if (loads_r1(op)) augment_RealRegSet(&maynotread, register_number(ic->r1.r));
+      if (loads_r2(op)) augment_RealRegSet(&maynotread, register_number(ic->r2.r));
+    }
+
+    for (; p != NULL; p = blkdown_(p))
+      blkflags_(p) &= ~BLKLIFTABLE;
+
+    for (p = next; p != NULL; p = blkdown_(p))
+      if (blkflags_(p) & (BLKCALL | BLKSWITCH))
+        break;
+      else if (blkflags_(p) & BLKALIVE) {
+      /* (Ignore blocks removed by cross-jumping) */
+        bool terminal = !(blkflags_(p) & BLK2EXIT) && blknext_(p) == way_out;
+        RealRegSet mnr = maynotread;
+        if (terminal)
+          maynotwrite = calleesaveregset;
+        else
+          union_RealRegSet(&maynotwrite, &argregset, &calleesaveregset);
+        ic = blkcode_(p); n = blklength_(p);
+        for (; --n >= 0; ic++) {
+          J_OPCODE op = ic->op & J_TABLE_BITS;
+          VRegInt r1 = ic->r1, r2 = ic->r2, m = ic->m;
+          RealRegSet rsin, rsout;
+          FixedRegisterUse(ic, &rsin, &rsout);
+          if (uses_r1(op)) r1.r = ArgRegister(r1.r, copies);
+          if (uses_r2(op)) r2.r = ArgRegister(r2.r, copies);
+          if (uses_r3(op)) m.r = ArgRegister(m.r, copies);
+          if (uses_stack(op) ||
+              intersect_RealRegSet(&rsin, &maynotwrite, &rsin) ||
+              intersect_RealRegSet(&rsout, &maynotwrite, &rsout) ||
+              (loads_r1(op) && member_RealRegSet(&maynotwrite, r1.r)) ||
+              (loads_r2(op) && member_RealRegSet(&maynotwrite, r2.r)) ||
+              (reads_r1(op) && member_RealRegSet(&mnr, r1.r)) ||
+              (reads_r2(op) && member_RealRegSet(&mnr, r2.r)) ||
+              (reads_r3(op) && member_RealRegSet(&mnr, m.r)))
+            break;
+
+          if (terminal) {
+          /* exit paths are allowed to write result registers, but once written
+           * they may not be read (mechanism defect: I can't distinguish between
+           * reading the VReg copy, which definitely isn't allowed, and reading
+           * the value written here, which would be OK. I doubt it matters.
+           */
+            if (loads_r1(op) && member_RealRegSet(&argregset, r1.r))
+              augment_RealRegSet(&mnr, r1.r);
+            if (loads_r2(op) && member_RealRegSet(&argregset, r2.r))
+              augment_RealRegSet(&mnr, r2.r);
+          }
+        }
+        if (n >= 0) break;
+        blkflags_(p) |= BLKLIFTABLE;
+      }
+
+    if (p != NULL) {
+    /* (p == NULL means the SAVE is going to have no effect, so there's no sense
+     * trying to move code before it)
+     */
+      BlockList *successors = NULL,
+                *predecessors = NULL,
+                *liftable = NULL;
+      bool atleastoneexit = NO;
+      for (p = next; p != NULL; p = blkdown_(p))
+        if (blkflags_(p) & BLKLIFTABLE) {
+          liftable = BlockList_Insert(p, liftable);
+          if (blknext_(p) == way_out)
+            atleastoneexit = YES;
+          else
+            successors = BlockList_Insert(blknext_(p)->block, successors);
+          if (blkflags_(p) & BLK2EXIT) {
+            if (blknext1_(p) == way_out)
+              atleastoneexit = YES;
+            else
+              successors = BlockList_Insert(blknext1_(p)->block, successors);
+          }
+          predecessors = BlockList_Union(predecessors, blkusedfrom_(p));
+        }
+
+      predecessors = BlockList_Difference(predecessors, liftable);
+      successors = BlockList_Difference(successors, liftable);
+
+      if (atleastoneexit &&
+          predecessors != NULL && predecessors->blklstcdr == NULL &&
+          predecessors->blklstcar == saveblock &&
+          /* really, <predecessors> must include <saveblock>, so the checks
+           * besides that its length is 1 are redundant
+           */
+          successors != NULL && successors->blklstcdr == NULL) {
+        /* The set <liftable> can safely be moved before <saveblock>, with all
+         * occurrences of callee-save registers replaced by the corresponding
+         * argument register.
+         */
+        BlockList *bl;
+        BlockHead *insertbefore = successors->blklstcar;
+        LabelNumber *l_saveblock = blklab_(saveblock),
+                    *l_insertbefore = blklab_(insertbefore),
+                    *l_inserted = blklab_(next);
+        int32 s1 = blkstacki_(next),
+              s2 = blkstacki_(insertbefore);
+        lifted = liftable;
+        blknext_(top) = blklab_(next);
+        refblock(l_inserted, top, unrefblock(saveblock, top));
+        blknext_(saveblock) = l_insertbefore;
+        refblock(l_insertbefore, saveblock, unrefblock(next, saveblock));
+        for (bl = liftable; bl != NULL; bl = bl->blklstcdr) {
+          BlockHead *b = bl->blklstcar;
+          Icode *ic_in = blkcode_(b),
+                *ic_out = ic_in;
+          n = blklength_(b);
+          blkstacki_(b) = 0;
+          for (; --n >= 0; ic_in++) {
+            J_OPCODE op = ic_in->op;
+            VRegInt r1 = ic_in->r1, r2 = ic_in->r2, m = ic_in->m;
+            if (uses_r1(op)) r1.r = ArgRegister(r1.r, copies);
+            if (uses_r2(op)) r2.r = ArgRegister(r2.r, copies);
+            if (uses_r3(op)) m.r = ArgRegister(m.r, copies);
+            if (op != J_SETSP) {
+              ic_out->op = op; ic_out->r1 = r1; ic_out->r2 = r2; ic_out->m = m;
+              ic_out++;
+            } else
+              blklength_(b)--;
+          }
+          if (blknext_(b) == l_insertbefore) {
+            blknext_(b) = l_saveblock;
+            refblock(l_saveblock, b, unrefblock(insertbefore, b));
+          }
+          if ((blkflags_(b) & BLK2EXIT) && blknext1_(b) == l_insertbefore) {
+            blknext1_(b) = l_saveblock;
+            refblock(l_saveblock, b, unrefblock(insertbefore, b));
+          }
+        }
+        if (s1 != s2) {
+          BlockHead *b = ts_blockbetween(saveblock, insertbefore);
+          Icode *ic = (Icode *)BindAlloc(sizeof(Icode));
+          ic->op = J_SETSP; ic->r1.r = GAP; ic->r2.i = s1; ic->m.i = s2;
+          blkstacki_(b) = s1; blklength_(b) = 1; blkcode_(b) = ic;
+        }
+        changed = YES;
+      }
+    }
+    if (lifted == NULL)
+    for (p = next; p != NULL; p = blkdown_(p))
+      blkflags_(p) &= ~BLKLIFTABLE;
+    else
+      blkflags_(top_block) |= BLKLIFTABLE;
+
+  }
+  /* Now follows code to turn direct tail recursion into a loop. Of course, the
+   * call has already turned into a tailcall, but we can do better by omitting
+   * the need to restore saved registers from the frame here and by branching to
+   * after the save instruction. We may be able to do better still by writing
+   * arguments to VRegisters not the argument registers and skipping the copy
+   * from argument to VRegister on entry. This could be done as source-to-source
+   * translation, but this would miss calls which become tail recursive only by
+   * dead code elimination, and would preclude shifting fast exit code before
+   * the save.
+   * Code moved before the save must be duplicated here, so we limit severely
+   * what it can be (just one block permitted: a number of jopcodes might be
+   * more sensible).
+   */
+  if (!(var_cc_private_flags & 524288) &&
+#ifdef TARGET_FP_ARGS_IN_FP_REGS
+      k_fltregs_(argdesc) == 0 &&
+#endif
+      length((List *)copies) == k_argwords_(argdesc) &&
+      (lifted == NULL || lifted->blklstcdr == NULL)) {
+    /* First create places for tail-recursion branches to go to: one just after
+     * the SAVE jopcode, and one after all copying of argument registers to
+     * VRegisters which leave the argument register dead. For the second case,
+     * the copies need to be reordered in general. (The two destinations are
+     * tailreclab_argsinaregs and tailreclab_argsinvregs; the second may be
+     * null).
+     */
+    int32 nargs = k_argwords_(argdesc);
+    BlockList *exits = blkusedfrom_(way_out->block);
+    LabelNumber *tailreclab_argsinaregs = NULL,
+                *tailreclab_argsinvregs = NULL;
+    BlockHead *inserted = lifted == NULL ? NULL :
+                                           lifted->blklstcar;
+    BlockHead *next = blknext_(saveblock)->block;
+    if (blklength_(saveblock) == 1)
+      tailreclab_argsinaregs = blklab_(next);
+    else {
+      BlockHead *p = ts_blockbetween(saveblock, next);
+      Icode *ic = blkcode_(saveblock); int32 n = blklength_(saveblock);
+      tailreclab_argsinaregs = blklab_(p);
+      blkcode_(p) = ++ic; blklength_(p) = --n;
+      blklength_(saveblock) = 1;
+      { int32 ndead = 0;
+        RAList *cp = copies;
+        for (; cp != NULL; cp = cdr_(cp))
+          if (cp->argregdead) ndead++;
+        if (ndead > 0) {
+          if (ndead == n)
+            tailreclab_argsinvregs = blklab_(next);
+          else {
+            BlockHead *q = ts_blockbetween(p, next);
+            tailreclab_argsinvregs = blklab_(q);
+            { int32 i, j;
+              for (cp = copies, i = j = n; --i >= 0; ) {
+                if ((ic[i].op & J_TABLE_BITS) == J_MOVR &&
+                    register_number(ic[i].r1.r) == cp->r1 &&
+                    ic[i].m.r == cp->r2) {
+                  if (!cp->argregdead) {
+                    if (--j != i) ic[j] = ic[i];
+                  }
+                  cp = cdr_(cp);
+                } else if (--j != i)
+                  ic[j] = ic[i];
+              }
+              copies = (RAList *)dreverse((List *)copies);
+              for (cp = copies, i = 0; cp != NULL; cp = cdr_(cp))
+                if (cp->argregdead) {
+                  ic[i].op = J_MOVR + J_DEAD_R3;
+                  ic[i].r1.r = cp->r1; ic[i].r2.r = GAP; ic[i].m.r = cp->r2;
+                  i++;
+                }
+              blkcode_(q) = ic + ndead; blklength_(q) = n - ndead;
+              blklength_(p) = ndead;
+              nargs = ndead;
+            }
+          }
+        }
+      }
+    }
+    for (; exits != NULL; exits = exits->blklstcdr) {
+      BlockHead *b = exits->blklstcar;
+      Icode *ic = blkcode_(b);
+      int32 i, n = blklength_(b);
+      if (n > 0 &&
+          (ic[n-1].op & J_TABLE_BITS) == J_TAILCALLK &&
+          bindsym_(ic[n-1].m.b) == currentfunction.symstr) {
+        LabelNumber **nextp;
+        LabelNumber *dest = tailreclab_argsinaregs;
+        blklength_(b) = --n;
+        unrefblock(way_out->block, b);
+        blkflags_(b) &= ~BLK0EXIT;
+        changed = YES;
+        if (inserted == NULL)
+          nextp = &blknext_(b);
+        else {
+          BlockHead *q = insertblockbetween(b, way_out->block);
+          size_t size = (size_t)blklength_(inserted) * sizeof(Icode);
+          Icode *ic = (Icode *)BindAlloc(size);
+          memcpy(ic, blkcode_(inserted), size);
+          blklength_(q) = blklength_(inserted); blkcode_(q) = ic;
+          blkflags_(q) = blkflags_(inserted);
+          blkstacki_(q) = blkstacki_(inserted);
+          blkdebenv_(q) = blkdebenv_(inserted);
+          if (blknext_(inserted) == way_out) {
+            blknext_(q) = way_out;
+            nextp = &blknext1_(q);
+          } else {
+            blknext1_(q) = way_out;
+            nextp = &blknext_(q);
+          }
+          refblock(blklab_(q), b, NULL);
+          refblock(way_out, q, NULL);
+          b = q;
+        }
+        if (tailreclab_argsinvregs != NULL) {
+          RealRegSet maynotread, mnr;
+          RAList *ra;
+          int32 na = nargs;
+          memclr(&maynotread, sizeof(RealRegSet));
+          for (ra = copies; ra != NULL; ra = cdr_(ra))
+            if (ra->argregdead)
+              augment_RealRegSet(&maynotread, ra->r1);
+          mnr = maynotread;
+          for (i = n; --i >= 0 && na > 0; ) {
+            J_OPCODE(op) = ic[i].op;
+            VRegInt r1 = ic[i].r1, r2 = ic[i].r2, m = ic[i].m;
+            if (uses_r1(op)) r1.r = register_number(r1.r);
+            if (uses_r2(op)) r2.r = register_number(r2.r);
+            if (uses_r3(op)) m.r = register_number(m.r);
+            if (loads_r1(op)) {
+              r1.r =  VarRegister(r1.r, copies);
+              if (delete_RealRegSet(&maynotread, r1.r))
+                na--;
+            }
+            if (loads_r2(op)) {
+              r2.r =  VarRegister(r2.r, copies);
+              if (delete_RealRegSet(&maynotread, r2.r))
+                na--;
+            }
+            if ((reads_r1(op) && member_RealRegSet(&maynotread, r1.r)) ||
+                (reads_r2(op) && member_RealRegSet(&maynotread, r2.r)) ||
+                (reads_r3(op) && member_RealRegSet(&maynotread, m.r)))
+              break;
+          }
+          if (na == 0) {
+            for (; --n, nargs > 0; ) {
+              J_OPCODE(op) = ic[n].op;
+              VRegInt r1 = ic[n].r1, r2 = ic[n].r2, m = ic[n].m;
+              if (uses_r1(op)) r1.r = VarRegister(r1.r, copies);
+              if (uses_r2(op)) r2.r = VarRegister(r2.r, copies);
+              if (uses_r3(op)) m.r = VarRegister(m.r, copies);
+              if (loads_r1(op) && delete_RealRegSet(&mnr, r1.r)) {
+                ic[n].r1 = r1;
+                nargs--;
+              }
+              if (loads_r2(op) && delete_RealRegSet(&mnr, r2.r)) {
+                ic[n].r2 = r2;
+                nargs--;
+              }
+              if (reads_r1(op) && member_RealRegSet(&mnr, r1.r)) ic[n].r1 = r1;
+              if (reads_r2(op) && member_RealRegSet(&mnr, r2.r)) ic[n].r2 = r2;
+              if (reads_r3(op) && member_RealRegSet(&mnr, m.r)) ic[n].m = m;
+            }
+            dest = tailreclab_argsinvregs;
+            if (inserted != NULL) {
+              ic = blkcode_(b), n = blklength_(b);
+              for (; --n >= 0; ) {
+                J_OPCODE(op) = ic[n].op;
+                if (uses_r1(op)) ic[n].r1.r = VarRegister(ic[n].r1.r, copies);
+                if (uses_r2(op)) ic[n].r2.r = VarRegister(ic[n].r2.r, copies);
+                if (uses_r3(op)) ic[n].m.r = VarRegister(ic[n].m.r, copies);
+              }
+            }
+          }
+        }
+        *nextp = dest;
+        refblock(dest, b, NULL);
+      }
+    }
+  }
+  if (debugging(DEBUG_CG) && changed)
+    flowgraf_print("After shrinkwrap", YES);
+}
+
+#endif
+
+static LabelNumber *dump_flowgraph(LabelNumber *pending_branch, int32 lifted)
+{ BlockHead *p1;
+
+  for (p1=top_block; p1!=NULL; p1=blkdown_(p1))
+  { BlockHead *p = p1;
+    if ( ( (blkflags_(p) & BLKALIVE) || usrdbg(DBG_LINE+DBG_VAR) ) &&
+         !(blkflags_(p) & BLKCODED) &&
+         (blkflags_(p) & BLKLIFTABLE) == lifted)
+      for (;;)
+      { LabelNumber *w = blklab_(p);
+        if ( (blkflags_(p) & BLKEMPTY) && !usrdbg(DBG_LINE+DBG_VAR) )
+          syserr(syserr_live_empty_block, (long)lab_name_(w));
+        if (pending_branch != NOTALAB && pending_branch != w)
+          show_branch_instruction(J_B, pending_branch);
+        if (blkflags_(p) & BLKSWITCH)
+        {   LabelNumber **v = blktable_(p);
+            int32 i, n = blktabsize_(p);
+            /* Normalise the entries in the switch table */
+            /* This is done so that the r2 field of J_CASEBRANCH is OK */
+            for (i=0; i<n; i++)
+              if (v[i] == way_out) v[i] = RETLAB;
+        }
+#ifdef CPLUSPLUS
+        if (blkflags_(p) & BLKSWITCH && blklength_(p) == 1
+                                     && blkcode_(p)->op == J_THUNKTABLE)
+        { LabelNumber **v = blktable_(p);
+          int32 i, n = blktabsize_(p);
+          pending_branch = NOTALAB;
+          for (i=0; i<n; i++)
+          { BlockHead *b = v[i]->block;
+            if (blkcode_(b)[0].op == J_ORG) goto omit_casebranch;
+          }
+          for (i=0; i<n; i++)
+          { BlockHead *b = v[i]->block;
+            Icode *c0 = blkcode_(b), *c1 = c0 + 1;
+            if (blklength_(b) == 2 &&
+                (c0->op & J_TABLE_BITS) == J_ADDK &&
+                 c0->r1.rr == 0 && c0->r2.rr == 0 && c0->m.i == 0 &&
+                 (c1->op & J_TABLE_BITS) == J_TAILCALLK)
+            { expand_jop_macro(c1->op, c1->r1, c1->r2, c1->m);
+              blkflags_(b) |= BLKCODED;
+            } else
+#ifdef TARGET_HAS_SWITCH_BRANCHTABLE
+            if (i == (n-1))
+              pending_branch = v[n-1];
+            else
+#endif
+              show_branch_instruction(J_BXX, v[i]);
+          }
+          blkflags_(p) |= BLKCODED;
+omit_casebranch:;
+        } else
+#endif
+        if (blkflags_(p) & BLK2EXIT && blknext_(p) != blknext1_(p))
+/* The seemingly odd test for distinct destinations is present here since  */
+/* cross-jump optimisations can reveal new cases of vacuous tests, and if  */
+/* I pass such a case down to use_cond_field() the destination block gets  */
+/* displayed twice (which would be sort of OK except for the fact that     */
+/* setting its label twice causes trouble).                                */
+          pending_branch = use_cond_field(p);
+        else
+        {
+          show_basic_block(p, Q_AL);
+          if (blkflags_(p) & BLKSWITCH)
+          { LabelNumber **v = blktable_(p);
+            int32 i, n = blktabsize_(p);
+/* drop though to execute last case directly: only if target uses a branch */
+/* table of branch instructions!!!!!!!!!                                   */
+#ifdef TARGET_HAS_SWITCH_BRANCHTABLE
+            for (i=0; i<n-1; i++)
+              show_branch_instruction(J_BXX, v[i]);
+            pending_branch = v[n-1];
+#else
+            for (i=0; i<n; i++)
+              show_branch_instruction(J_BXX, v[i]);
+            pending_branch = NOTALAB;
+#endif
+          }
+#ifdef TARGET_HAS_TAILCALL
+          else if (blkflags_(p) & BLK0EXIT)
+            pending_branch = NOTALAB;
+#endif
+          else if ( blknext_(p) == way_out ||
+                    (!(blkflags_(p) & BLKALIVE) &&
+                     is_exit_label(blknext_(p))) )
+            pending_branch = RETLAB;
+          else
+            pending_branch = blknext_(p);
+        }
+        if (pending_branch == NOTALAB ||
+            pending_branch == RETLAB  ||
+/* @@@ LDS 21-Sep-89: the following line conspires with cg_loop and emits  */
+/* better code for while/for loops, saving 1 br-not-taken/iteration.       */
+          (blkflags_(p) & BLKLOOP) && !usrdbg(DBG_LINE)) break;
+        { BlockList *bl;
+          int flag = 1;
+          BlockHead *prev = p;
+          p = pending_branch->block;
+/* p is now the destination block for the one I have just displayed.       */
+/* If it has not already been coded but all its ancestors have (except     */
+/* itself, if it is its own ancestor) I will display it next.              */
+          if (blkflags_(p) & BLKCODED || usrdbg(DBG_VAR)) break;
+          for (bl = blkusedfrom_(p); bl!=NULL; bl=bl->blklstcdr)
+          { if (bl->blklstcar != p &&
+                !(blkflags_(bl->blklstcar) & BLKCODED))
+            { flag = 0;
+              break;
+            }
+          }
+          if (flag) continue; /* use block p next, do not advance p1 */
+          if (p == blkdown_(prev)) continue;
+        }
+        break;                       /* go on to next sequential block */
+      }
+  }
+  return pending_branch;
+}
+
 void linearize_code(void)
 {
 /* before we can tidy up branches to branches we have to find out which  */
@@ -2381,6 +2994,15 @@ void linearize_code(void)
     if (procflags & BLKCALL) augment_RealRegSet(&regmaskvec, R_LR);
 #endif
 
+
+    {   BlockHead *p;
+        for (p = top_block; p != NULL; p = blkdown_(p))
+        blkflags_(p) &= ~BLKLIFTABLE;
+    }
+#ifdef TARGET_HAS_SAVE
+    try_shrinkwrap();
+#endif
+
 /* Now dump out the flowgraph - note that J_ENTER implicitly               */
 /* does a 'set_cond_execution(Q_AL)' if TARGET_HAS_COND_EXEC               */
 
@@ -2394,8 +3016,7 @@ void linearize_code(void)
 /* J_LABEL and J_STACK which preceed J_ENTER currently.                    */
     localcg_reinit();
 
-  { LabelNumber *pending_branch_address = NOTALAB;
-    BlockHead *p1;
+  { LabelNumber *pending_branch_address;
     current_env2 = 0;
 #ifndef TARGET_IS_ARM
     dbg_enterproc();
@@ -2405,99 +3026,16 @@ void linearize_code(void)
     if (debugging(DEBUG_CG))
         cc_msg("\n\nFlattened form:\n\n");
 
-    for (p1=top_block; p1!=NULL; p1=blkdown_(p1))
-    { BlockHead *p = p1;
-      if ( ( (blkflags_(p) & BLKALIVE) || usrdbg(DBG_LINE+DBG_VAR) ) &&
-           !(blkflags_(p) & BLKCODED))
-        for (;;)
-        { LabelNumber *w = blklab_(p);
-          if ( (blkflags_(p) & BLKEMPTY) && !usrdbg(DBG_LINE+DBG_VAR) )
-            syserr(syserr_live_empty_block, (long)lab_name_(w));
-          if (pending_branch_address!=NOTALAB && pending_branch_address!=w)
-            show_branch_instruction(J_B, pending_branch_address);
-          if (blkflags_(p) & BLKSWITCH)
-          {   LabelNumber **v = blktable_(p);
-              int32 i, n = blktabsize_(p);
-              /* Normalise the entries in the switch table */
-              /* This is done so that the r2 field of J_CASEBRANCH is OK */
-              for (i=0; i<n; i++)
-                if (v[i] == way_out) v[i] = RETLAB;
-          }
-#ifdef CPLUSPLUS
-          if (blkflags_(p) & BLKSWITCH && blklength_(p) == 1
-                                       && blkcode_(p)->op == J_THUNKTABLE)
-              pending_branch_address = NOTALAB;
-          else
-#endif
-          if (blkflags_(p) & BLK2EXIT && blknext_(p) != blknext1_(p))
-/* The seemingly odd test for distinct destinations is present here since  */
-/* cross-jump optimisations can reveal new cases of vacuous tests, and if  */
-/* I pass such a case down to use_cond_field() the destination block gets  */
-/* displayed twice (which would be sort of OK except for the fact that     */
-/* setting its label twice causes trouble).                                */
-            pending_branch_address = use_cond_field(p);
-          else
-          {
-            show_basic_block(p, Q_AL);
-            if (blkflags_(p) & BLKSWITCH)
-            { LabelNumber **v = blktable_(p);
-              int32 i, n = blktabsize_(p);
-/* drop though to execute last case directly: only if target uses a branch */
-/* table of branch instructions!!!!!!!!!                                   */
-#ifdef TARGET_HAS_SWITCH_BRANCHTABLE
-              for (i=0; i<n-1; i++)
-                show_branch_instruction(J_BXX, v[i]);
-              pending_branch_address = v[n-1];
-#else
-              for (i=0; i<n; i++)
-                show_branch_instruction(J_BXX, v[i]);
-              pending_branch_address = NOTALAB;
-#endif
-            }
-#ifdef TARGET_HAS_TAILCALL
-            else if (blkflags_(p) & BLK0EXIT)
-              pending_branch_address = NOTALAB;
-#endif
-            else if ( blknext_(p) == way_out ||
-                      (!(blkflags_(p) & BLKALIVE) &&
-                       is_exit_label(blknext_(p))) )
-              pending_branch_address = RETLAB;
-            else
-              pending_branch_address = blknext_(p);
-          }
-          if (pending_branch_address == NOTALAB ||
-              pending_branch_address == RETLAB  ||
-/* @@@ LDS 21-Sep-89: the following line conspires with cg_loop and emits  */
-/* better code for while/for loops, saving 1 br-not-taken/iteration.       */
-            (blkflags_(p) & BLKLOOP) && !usrdbg(DBG_LINE)) break;
-          { BlockList *bl;
-            int flag = 1;
-            BlockHead *prev = p;
-            p = pending_branch_address->block;
-/* p is now the destination block for the one I have just displayed.       */
-/* If it has not already been coded but all its ancestors have (except     */
-/* itself, if it is its own ancestor) I will display it next.              */
-            if (blkflags_(p) & BLKCODED || usrdbg(DBG_VAR)) break;
-            for (bl = blkusedfrom_(p); bl!=NULL; bl=bl->blklstcdr)
-            { if (bl->blklstcar != p &&
-                  !(blkflags_(bl->blklstcar) & BLKCODED))
-              { flag = 0;
-                break;
-              }
-            }
-            if (flag) continue; /* use block p next, do not advance p1 */
-            if (p == blkdown_(prev)) continue;
-          }
-          break;                       /* go on to next sequential block */
-        }
-    }
+    pending_branch_address = dump_flowgraph(NOTALAB, BLKLIFTABLE);
+    pending_branch_address = dump_flowgraph(pending_branch_address, 0);
+
     if (pending_branch_address != NOTALAB)
       show_branch_instruction(J_B, pending_branch_address);
     if (usrdbg(DBG_VAR)) dbg_scope1(0, current_env2);
   }
-  { VRegInt w;
-    w.r = GAP;
-    expand_jop_macro(J_ENDPROC, w, w, w);
+  { VRegInt w, z;
+    w.r = GAP; z.i = 0;
+    expand_jop_macro(J_ENDPROC, w, w, w, z);
   }
 #endif /* TARGET_IS_NULL */
 }
@@ -2506,7 +3044,7 @@ void flowgraph_reinit(void)
 {
     currentblock = icodetop = (Icode *) DUFF_ADDR;
                                         /* NB. (currentblock >= icodetop) */
-    icode_cur = 0, block_cur = 0;
+    cgstate.icode_cur = 0, cgstate.block_cur = 0;
     icoden = 0;
     bottom_block = 0, block_header = (BlockHead*) DUFF_ADDR;
     deadcode = 1;

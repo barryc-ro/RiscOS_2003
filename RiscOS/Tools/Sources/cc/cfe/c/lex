@@ -95,11 +95,15 @@ static unsigned32 lexclass[1+255];
 #define NUM_INT    bitoftype_(s_int)
 #define NUM_LONG   bitoftype_(s_long)
 #define NUM_SHORT  bitoftype_(s_short)
+#define NUM_LLONG  (NUM_LONG|NUM_SHORT)
 #define NUM_UNSIGN bitoftype_(s_unsigned)
 #ifdef CPLUSPLUS
 #  define NUM_CHAR bitoftype_(s_char)   /* Type of 'a' is char in C++.  */
 #else
 #  define NUM_CHAR NUM_INT              /* Type of 'a' is int in C.     */
+#endif
+#ifdef C99_COMPLEX
+#  define NUM_IMAG bitoftype_(s_imaginary)
 #endif
 /* Note that NUM_WCHAR is defined in defaults.h.                        */
 
@@ -120,6 +124,8 @@ static unsigned32 lexclass[1+255];
 #define l_minus     11L
 #define l_lpar      12L
 #define l_less      13L
+#define l_colon     14L
+#define l_rem       15L
 #define LEX_CHTYPE  15L  /* mask */
 #define l_idcont    16L  /* orable */
 #define mklc(l,t1,t2,t3) (((unsigned32)(l)) | ((unsigned32)(t1) << 8) | \
@@ -144,7 +150,7 @@ static AEop make_floating(char *s, int radix, int32 flag)
    Currently it just assumes that syn.c will look at curlex.a2.flag.
 */
 static AEop make_integer(int32 radix, int32 flag)
-/* Numbers that overflow 2**32-1 lead to a diagnostic.                 */
+/* Numbers that overflow 2**64-1 lead to a diagnostic.                 */
 /* Otherwise their type suffix (in flag) is modified to yield a type.  */
 /* Note that octal and hex numbers sometimes have different types.     */
 /* I have allowed the digits '8' and '9' to build up even in           */
@@ -152,12 +158,12 @@ static AEop make_integer(int32 radix, int32 flag)
 /* BEWARE: possible two's complement dependency.                       */
 {
     bool overflow = 0, badoct = 0;
-    unsigned32 value = 0;
+    unsigned64 value = 0;
     char c, *cp = namebuf;
     switch (radix)
     {
 case 8: while ((c = *cp++) != 0)
-        {   if ((value & 0xe0000000)!=0) overflow=1;
+        {   if ((value & 0xe000000000000000u)!=0) overflow=1;
             if (c>='8') badoct=1;
             value=(value<<3) | (int)intofdigit(c);
         }
@@ -165,26 +171,52 @@ case 8: while ((c = *cp++) != 0)
         break;
 case 10:while ((c = *cp++) != 0)
         {   bool bigish = 0;
-            if (value >= ((unsigned32)0xffffffff)/10) bigish = 1;
-            if (value > ((unsigned32)0xffffffff)/10) overflow=1;
+            if (value >= ((unsigned64)0xffffffffffffffff)/10) bigish = 1;
+            if (value > ((unsigned64)0xffffffffffffffff)/10) overflow=1;
             value = value*10 + (int)intofdigit(c);
-/* The next 2 curious lines make things work (I hope) if int32 is 64 bits! */
-            if (value & 0x80000000) value |= ~0x7fffffffL;
-            else value &= 0x7fffffff;
             if (bigish && value < 10) overflow=1;
         }
         break;
 case 16:while ((c = *cp++) != 0)
-        {   if ((value & 0xf0000000)!=0) overflow=1;
+        {   if ((value & 0xf000000000000000)!=0) overflow=1;
             value = (value<<4) | intofxdigit(c);
         }
         break;
     }
-/* Correct down to 32-bits: do the same even if it will be unsigned */
-    if (value & 0x80000000) value |= ~0x7fffffffL;
-    else value &= 0x7fffffff;
+    if (language_flavour >= FLAVOUR_C99)
+    {
+        if (overflow)
+            cc_err(lex_err_ioverflowx, namebuf, 64);
+
+        /* Do this separately for now, to ensure no weirdness */
+        /* We know long is at least 32-bit, and long long is at least 64 */
+        if (pp_inhashif)
+            flag |= NUM_LLONG; /* Everything is intmax_t or uintmax_t */
+        else
+        {
+            if (sizeof_int == 2)
+            {   if (value >= 0x10000)
+                    flag |= NUM_LONG;
+                else if (value >= 0x8000 && !(flag & NUM_UNSIGN))
+                    flag |= (radix == 10) ? NUM_LONG : NUM_UNSIGN;
+            }
+            if (sizeof_long != 4 || sizeof_longlong != 8) syserr("lex num");
+            if (value > 0xffffffff)
+                flag |= NUM_LLONG;
+            else if (value >= 0x80000000 && !(flag & NUM_UNSIGN))
+                flag |= (radix == 10) ? NUM_LLONG : NUM_UNSIGN;
+        }
+        if (value >= 0x8000000000000000 && !(flag & NUM_UNSIGN))
+        {   if (radix == 10 && !overflow)
+                cc_rerr(lex_err_ioverflowx, namebuf, 64);
+            flag |= NUM_UNSIGN;
+        }
+    }
+    else
+    {
+    if (value > 0xffffffff) overflow = 1;
     if (overflow)
-        cc_err(lex_err_ioverflow, namebuf);
+        cc_err(lex_err_ioverflowx, namebuf, 32);
 
 /* Now modify 'flag' (if necessary) to get a type for the constant.     */
     /* ANSI rules (bracketted cases cannot happen if int==long):
@@ -195,7 +227,7 @@ case 16:while ((c = *cp++) != 0)
      *             (ul) unsigned long.
      */
     if (sizeof_int == 2)                /* TARGET_HAS_16_BIT_INT        */
-    {    if (value & 0xffff0000 || flag & NUM_LONG)
+    {   if (value & 0xffff0000 || flag & NUM_LONG)
         {   flag |= NUM_LONG;
             if (value & 0x80000000 && !(flag & NUM_UNSIGN))
             {   if (radix == 10)
@@ -223,6 +255,7 @@ case 16:while ((c = *cp++) != 0)
                     cc_ansi_warn(lex_warn_force_unsigned, namebuf, namebuf);
             }
         }
+    }
     }
     curlex.a1.i = value;
     curlex.a2.flag = flag;
@@ -361,7 +394,7 @@ static AEop read_number(int radix)
                 while (isxdigit(curchar)) nextchar();
             }
         }
-        if (curchar=='.')
+        if (curchar=='.' && language_flavour >= FLAVOUR_C99)
         {   nextchar();
             if (k == 0)
             {   namebuf[k++] = '0'; /* consider '0x0.' */
@@ -376,7 +409,7 @@ static AEop read_number(int radix)
             {   cc_err(lex_err_need_hex_dig);
                 namebuf[k++] = '0';         /* treat as 0x0 */
             }
-            if (is_p(curchar))
+            if (is_p(curchar) && language_flavour >= FLAVOUR_C99)
                 flag = read_floating(radix, k);
             else
                 namebuf[k] = '\0';
@@ -415,7 +448,11 @@ static AEop read_number(int radix)
     for (;;)
     {
         if ((curchar == 'l' || curchar == 'L') && !(flag & NUM_LONG))
-        {   flag |= NUM_LONG; nextchar(); continue;
+        {   int last = curchar;
+            flag |= NUM_LONG; nextchar();
+            if (curchar == last && language_flavour >= FLAVOUR_C99)
+            {   flag |= NUM_SHORT; nextchar(); /* long short hack */
+            }
         }
         if ((curchar == 'u' || curchar == 'U') && !(flag & NUM_UNSIGN))
         {   flag |= NUM_UNSIGN; nextchar(); continue;
@@ -619,7 +656,8 @@ static void read_string(int quote, AEop type, bool lengthwanted)
             if (sizeof_int == 2) k = (int16)k;  /* normalise, eg for cmp.   */
         }
         curlex.a1.i = k;
-        curlex.a2.flag = (type == s_wstring) ? NUM_WCHAR : NUM_CHAR;
+        curlex.a2.flag = (pp_inhashif && language_flavour >= FLAVOUR_C99) ? NUM_INT|NUM_LLONG :
+                         (type == s_wstring) ? NUM_WCHAR : NUM_CHAR;
                                       /* perhaps NUM_INT|NUM_LONG if n=4?   */
         curlex.sym = s_integer;       /* chars give produce int consts.     */
 /* returning s_character/s_wcharacter would improve messages for int'a';    */
@@ -713,6 +751,14 @@ case l_idstart:
                 if (inside_valof_block && curlex.sym == s_identifier &&
                     curlex.a1.sv == resultisword) curlex.sym = s_resultis;
 #endif
+#ifdef C99_COMPLEX
+                if (curlex.sym == s_I)
+                {   static FloatCon *i;
+                    if (!i) i = real_of_string("1.", NUM_IMAG|NUM_FLOAT|NUM_SHORT);
+                    curlex.a1.fc = i;
+                    curlex.sym = s_floatcon;
+                }
+#endif
             }
             break;
         }
@@ -761,8 +807,27 @@ case l_noglue:
                 curlex.sym = charinfo >> 8 & 255;
                 curchar = NOTACHAR;
                 break;
+case l_colon:   savechar = curchar;
+                nextchar();
+                if (curchar == '>')
+                    curlex.sym = s_rbracket,
+                    curchar = NOTACHAR;
+                else
+                #ifdef CPLUSPLUS
+                    goto selfglue2;
+                #else
+                    curlex.sym = charinfo >> 8 & 255;
+                #endif
+                break;
+case l_rem:     nextchar();
+                if (curchar == '>')
+                    curlex.sym = s_rbrace,
+                    curchar = NOTACHAR;
+                else
+                    goto eqglue2;
+                break;
 case l_eqglue:  nextchar();
-                if (curchar == '=')
+      eqglue2:  if (curchar == '=')
                     curlex.sym = charinfo >> 16,
                     curchar = NOTACHAR;
                 else curlex.sym = charinfo >> 8 & 255;
@@ -770,7 +835,7 @@ case l_eqglue:  nextchar();
 case l_selfglue:
                 savechar = curchar;
                 nextchar();
-                if (curchar == savechar)
+     selfglue2: if (curchar == savechar)
                     curlex.sym = charinfo >> 16 & 255,
                     curchar = NOTACHAR;
                 /* all selfgluer's '+' have a '+=' form except C++ ':=' */
@@ -779,9 +844,19 @@ case l_selfglue:
                     curchar = NOTACHAR;
                 else curlex.sym = charinfo >> 8 & 255;
                 break;
+case l_less:    savechar = curchar;
+                nextchar();
+                if (curchar == '%')
+                    curlex.sym = s_lbrace;
+                else if (curchar == ':')
+                    curlex.sym = s_lbracket;
+                else
+                    goto shifter2;
+                curchar = NOTACHAR;
+                break;
 case l_shifter: savechar = curchar;            /* very much like l_selfglue */
                 nextchar();                    /* (32 bits is too few)      */
-                if (curchar == '=')
+      shifter2: if (curchar == '=')
                     curlex.sym = charinfo >> 24,
                     curchar = NOTACHAR;
                 else if (curchar == savechar)
@@ -926,7 +1001,7 @@ static void lex_getbodysym()
 #endif
 
 void ungetsym(void)
-{   nextlex = curlex;    /* Surprisingly, this copying is as efficient */
+{    nextlex = curlex;    /* Surprisingly, this copying is as efficient */
     curlex = prevlex;    /* as pointer juggling - perhaps more so.     */
 }
 
@@ -977,10 +1052,10 @@ void lex_init()         /* C version  */
       sp[26] = {
         { mklc(l_noglue, s_lpar, 0, 0),      "(" },
         { mklc(l_noglue, s_rpar, 0, 0),      ")" },
-        { mklc(l_noglue, s_lbracket, 0, 0),  "[" },
-        { mklc(l_noglue, s_rbracket, 0, 0),  "]" },
-        { mklc(l_noglue, s_lbrace, 0, 0),    "{" },
-        { mklc(l_noglue, s_rbrace, 0, 0),    "}" },
+        { mklc(l_noglue, s_lbracket, 0, 0),  "[", },
+        { mklc(l_noglue, s_rbracket, 0, 0),  "]", },
+        { mklc(l_noglue, s_lbrace, 0, 0),    "{", },
+        { mklc(l_noglue, s_rbrace, 0, 0),    "}", },
         { mklc(l_noglue, s_semicolon, 0, 0), ";" },
         { mklc(l_noglue, s_comma, 0, 0),     "," },
         { mklc(l_noglue, s_bitnot, 0, 0),    "~" },
@@ -988,14 +1063,14 @@ void lex_init()         /* C version  */
         /* now the assignable nongluers */
         { mklc(l_eqglue, s_times, s_timesequal, 0), "*", "*=" },
         { mklc(l_eqglue, s_div, s_divequal, 0),     "/", "/=" },
-        { mklc(l_eqglue, s_rem, s_remequal, 0),     "%", "%=" },
+        { mklc(l_rem,    s_rem, s_remequal, 0),     "%", "%=" },
         { mklc(l_eqglue, s_xor, s_xorequal, 0),     "^", "^=" },
         { mklc(l_eqglue, s_boolnot, s_notequal, 0), "!", "!=" },
         /* now the self-gluers (only the single form is assignable) */
 #ifdef CPLUSPLUS
-        { mklc(l_selfglue, s_colon, s_coloncolon, 0),  ":", "::", "" },
+        { mklc(l_colon,  s_colon, s_coloncolon, 0),  ":", "::", "" },
 #else
-        { mklc(l_noglue, s_colon, 0, 0),     ":" },
+        { mklc(l_colon,  s_colon, 0, 0),     ":" },
 #endif
         { mklc(l_selfglue, s_assign, s_equalequal, s_equalequal),
                                                     "=", "==", "==" },
@@ -1006,7 +1081,7 @@ void lex_init()         /* C version  */
         { mklc(l_selfglue, s_plus, s_plusplus, s_plusequal),
                                                     "+", "++", "+=" },
         /* shifts/relops - both the single and double form is assignable */
-        { mklc(l_shifter, s_less, s_leftshift, s_lessequal),
+        { mklc(l_less, s_less, s_leftshift, s_lessequal),
                                                          "<", "<<", "<=" },
         { mklc(l_shifter, s_greater, s_rightshift, s_greaterequal),
                                                          ">", ">>", ">=" },
@@ -1060,15 +1135,16 @@ void lex_init()         /* C version  */
 #ifdef TARGET_IS_ARM
         { "__swi",    s_swi },
         { "__swi_indirect", s_swi_i },
-        { "__caller_narrow", s_callernarrow },
 #else
         /* give traps reasonable names on Unix... */
         { "__systrap",s_swi },
         { "__systrap_indirect", s_swi_i },
 #endif
+        { "__caller_narrow", s_callernarrow },
         { "__irq", s_irq },
         { "__global_reg", s_globalreg },
         { "__global_freg", s_globalfreg },
+        { "__softfp", s_softfp },
 
         { "__less",         s_less_ieee },
         { "__lessequal",    s_lessequal_ieee },
@@ -1077,19 +1153,29 @@ void lex_init()         /* C version  */
         { "__lessgreater",  s_lessgreater_ieee },
         { "__unordered",    s_unordered_ieee },
 
-#define N_PCC_FUSSY_KEYWORDS 47 /* everything above!  Bad style!!!      */
+#define N_PCC_FUSSY_KEYWORDS 48 /* everything above!  Bad style!!!      */
 /* The following are ANSI C keywords, but old PCC (unix) sources        */
 /* (compile with -pcc -fussy) may treat them as identifiers!            */
         { "const",    s_const },
         { "signed",   s_signed },
         { "volatile", s_volatile },
+#define N_C90_KEYWORDS 51 /* everything above!  Bad style!!!      */
+        { "restrict", s_restrict },
+        { "_Bool",    s_bool },
+#ifdef C99_COMPLEX
+        { "_Complex", s_complex },
+        { "_Imaginary", s_imaginary },
+        { "__i",      s_I },
+        { "__cimag",  s_cimag },
+        { "__creal",  s_creal },
+#endif
+        { "inline",   s_inline },
 /* C++ only keywords (redeclared as s_identifier on use in C mode)      */
         { "asm",      CPP_word|s_asm },
         { "catch",    CPP_word|s_catch },
         { "class",    CPP_word|s_class },
         { "delete",   CPP_word|s_delete },
         { "friend",   CPP_word|s_friend },
-        { "inline",   CPP_word|s_inline },
         { "new",      CPP_word|s_new },
         { "operator", CPP_word|s_operator },
         { "private",  CPP_word|s_private },
@@ -1122,17 +1208,31 @@ void lex_init()         /* C version  */
     {   unsigned int u, n = sizeof(ns)/sizeof(ns[0]);
         if ((feature & (FEATURE_PCC|FEATURE_FUSSY)) ==
                        (FEATURE_PCC|FEATURE_FUSSY))  n = N_PCC_FUSSY_KEYWORDS;
+        else if (language_flavour < FLAVOUR_C99) n = N_C90_KEYWORDS;
 #undef N_PCC_FUSSY_KEYWORDS
+#undef N_C90_KEYWORDS
         for (u = 0; u < n; ++u)
         {   char *name = ns[u].name; int32 sym = ns[u].sym;
             sym_insert(name, sym);
             sym_name_table[sym & ~CPP_word] = name;
         }
     }
+
+    if (language_flavour >= FLAVOUR_C99)
+        sym_name_table[s_longlong] = "long long";
+
     {   unsigned int u;
         for (u = 0; u < sizeof(sp)/sizeof(sp[0]); u++)
         {   char *name = sp[u].name; unsigned32 lc = sp[u].lc;
             AEop s;
+            /* Knock out digraphs for pre-C99 */
+            if (language_flavour < FLAVOUR_C99)
+            {   switch (lc & LEX_CHTYPE)
+                {   case l_colon: lc = (lc &~ LEX_CHTYPE) | l_noglue; break;
+                    case l_less:  lc = (lc &~ LEX_CHTYPE) | l_shifter; break;
+                    case l_rem:   lc = (lc &~ LEX_CHTYPE) | l_eqglue; break;
+                }
+            }
             lexclass_(*name) = lc;
             if ((s = (lc >>  8) & 255) != 0) sym_name_table[s] = name;
             if ((s = (lc >> 16) & 255) != 0) sym_name_table[s] = sp[u].name1;

@@ -16,13 +16,15 @@
 #include "globals.h"
 #include "mcdep.h"
 #include "mcdpriv.h"
+#include "errors.h"
 
-#include "pp.h"
 #include "compiler.h"
 
 int arthur_module;
 int32 config;
 int32 pcs_flags;
+int32 arm_arch;
+static int mult_type, early_shift;
 
 #ifdef TARGET_IS_HELIOS
 int in_stubs;
@@ -78,26 +80,104 @@ static struct {
    LDM_REGCOUNT_MAX_DEFAULT,
 };
 
+static struct cpukw { char const *opt; int32 arch; char earlyshift; char mulspeed; }
+const cpu_keywords[] = {
+    { "arm2",       ARMv2,                         0, 0 },
+    { "arm3",       ARMv2,                         0, 0 },
+    { "arm6",       ARMv3,                         0, 0 },
+    { "arm600",     ARMv3,                         0, 0 },
+    { "arm610",     ARMv3,                         0, 0 },
+    { "arm7",       ARMv3,                         0, 0 },
+    { "arm7m",      ARMv3|ARM_M,                   0, 1 },
+    { "arm7dm",     ARMv3|ARM_M,                   0, 1 },
+    { "arm7tm",     ARMv4|ARM_M|ARM_T,             0, 1 },
+    { "arm7tdmi",   ARMv4|ARM_M|ARM_T,             0, 1 },
+    { "arm700",     ARMv3,                         0, 0 },
+    { "arm704",     ARMv3,                         0, 0 },
+    { "arm710",     ARMv3,                         0, 0 },
+    { "arm720t",    ARMv4|ARM_M|ARM_T,             0, 1 },
+    { "strongarm1", ARMv4|ARM_M,                   0, 3 },
+    { "sa-110",     ARMv4|ARM_M,                   0, 3 },
+    { "sa-1100",    ARMv4|ARM_M,                   0, 3 },
+    { "sa-1110",    ARMv4|ARM_M,                   0, 3 },
+    { "arm9tdmi",   ARMv4|ARM_M|ARM_T,             0, 2 },
+    { "arm910t",    ARMv4|ARM_M|ARM_T,             0, 2 },
+    { "arm920t",    ARMv4|ARM_M|ARM_T,             0, 2 },
+    { "arm922t",    ARMv4|ARM_M|ARM_T,             0, 2 },
+    { "xscale",     ARMv5|ARM_M|ARM_T|ARM_E|ARM_P, 1, 4 },
+    { "2",          ARMv2,                         0, 0 },
+    { "3",          ARMv3,                         0, 0 },
+    { "3m",         ARMv3|ARM_M,                   0, 1 },
+    { "4",          ARMv4|ARM_M,                   0, 1 },
+    { "4xm",        ARMv4,                         0, 0 },
+    { "4t",         ARMv4|ARM_M|ARM_T,             0, 1 },
+    { "4txm",       ARMv4|ARM_T,                   0, 0 },
+    { "5",          ARMv5|ARM_M,                   0, 2 },
+    { "5xm",        ARMv5,                         0, 0 },
+    { "5t",         ARMv5|ARM_M|ARM_T,             0, 2 },
+    { "5txm",       ARMv5|ARM_T,                   0, 0 },
+    { "5te",        ARMv5|ARM_M|ARM_T|ARM_E|ARM_P, 0, 2 },
+    { "5texp",      ARMv5|ARM_M|ARM_T|ARM_E,       0, 2 }
+};
+
 static void HandleZHOpt(char *tail) {
-    int32 include = (int32)tail[0] - 'A';
-    int32 exclude = (int32)tail[1] - 'A';
-    if (include & PCS_FPREGARGS) {
-        config |=  CONFIG_FPREGARGS;
-        include &= ~PCS_FPREGARGS;
-    } else if (exclude & PCS_FPREGARGS)
-        config &=  ~CONFIG_FPREGARGS;
-#if 0
-    /* /noswst implies /nofp, unless /fp used explicitly */
-    /* retracted, because it renders code undebuggable (even if its
-       switched off for -g, unless absolutely everything, library included,
-       is compiled likewise).
-     */
-    if ((include & PCS_NOSTACKCHECK) && !(exclude & PCS_NOFP))
-        include |= PCS_NOFP;
-#endif
-    pcs_flags = (pcs_flags & ~exclude) | include;
-    if (pcs_flags & PCS_REENTRANT)
-        config |= CONFIG_REENTRANT_CODE;
+    switch (tail[0]) {
+      case '1':
+      {
+        int32 include = (int32)tail[1] - 'A';
+        int32 exclude = (int32)tail[2] - 'A';
+        pcs_flags = (pcs_flags & ~exclude) | (include & ~PCS_FPREGARGS);
+        if (pcs_flags & PCS_REENTRANT)
+            config |= CONFIG_REENTRANT_CODE;
+        else
+            config &= ~CONFIG_REENTRANT_CODE;
+
+        if (include & PCS_FPREGARGS)
+            config |=  CONFIG_FPREGARGS;
+        else if (exclude & PCS_FPREGARGS)
+            config &=  ~CONFIG_FPREGARGS;
+
+        if ((((include | exclude) & PCS_FPE3) ||
+             (include & PCS_FPREGARGS)) &&
+            (pcs_flags & PCS_SOFTFP))
+            cc_warn(mcdep_warn_fpinconsistent);
+
+        if (include & PCS_SOFTFP)
+            config |= CONFIG_SOFTWARE_FP;
+        else if (exclude & PCS_SOFTFP)
+            config &= ~CONFIG_SOFTWARE_FP;
+
+        if (config & CONFIG_SOFTWARE_FP)
+            config &= ~CONFIG_FPREGARGS;
+        break;
+      }
+
+      case '2':
+        if (tail[1] == '+')
+          config &=~ CONFIG_NO_UNALIGNED_LOADS;
+        else if (tail[1] == '-')
+          config |= CONFIG_NO_UNALIGNED_LOADS;
+
+        if (tail[2] == '+')
+          config &=~ CONFIG_NO_HALFWORD_LOADS;
+        else if (tail[2] == '-')
+          config |= CONFIG_NO_HALFWORD_LOADS;
+
+        if (tail[3] == '+')
+          config &=~ CONFIG_NO_HALFWORD_STORES;
+        else if (tail[3] == '-')
+          config |= CONFIG_NO_HALFWORD_STORES;
+        break;
+
+      case '3':
+      {
+        const struct cpukw *cpu = cpu_keywords + strtol(tail+1, NULL, 16);
+        arm_arch = cpu->arch;
+        mult_type = cpu->mulspeed;
+        early_shift = cpu->earlyshift;
+        break;
+      }
+    }
 }
 
 bool mcdep_config_option(char name, char tail[])
@@ -189,9 +269,13 @@ static struct kw { char const *opt; int32 zhflag; } const pcs_keywords[] = {
     { "nofpr",                  PCS_FPREGARGS << 8},
     { "fp",             PCS_NOFP << 8},
     { "nofp",           PCS_NOFP},
+    { "softfp",         PCS_SOFTFP},
+    { "hardfp",         PCS_SOFTFP << 8}
 };
 
-static char zhopt[] = "-zhAA";
+static char zhopt[] = "-zh1AA";
+static char zh2opt[] = "-zh2xxx";
+static char zh3opt[] = "-zh3xx";
 
 KW_Status mcdep_keyword(const char *key, int *argp, char **argv) {
     if (cistreq(key, "-apcs")) {
@@ -207,8 +291,8 @@ KW_Status mcdep_keyword(const char *key, int *argp, char **argv) {
             char str[64];
             if (ch == 0) {
                 if (flags == 0) return KW_BADARG;
-                zhopt[3] = 'A'+(int)(flags & PCS_ZH_MASK);
-                zhopt[4] = 'A'+(int)((flags >> 8) & PCS_ZH_MASK);
+                zhopt[4] = 'A'+(int)(flags & PCS_ZH_MASK);
+                zhopt[5] = 'A'+(int)((flags >> 8) & PCS_ZH_MASK);
                 argv[n-1] = zhopt;
                 argv[n] = NULL;
                 return KW_OK;
@@ -226,6 +310,47 @@ KW_Status mcdep_keyword(const char *key, int *argp, char **argv) {
                 return KW_BADARG;
         }
     }
+    else if (cistreq(key, "-memaccess")) {
+        int n = *argp+1;
+        char *next = argv[n];
+        *argp = n;
+        if (next == 0) return KW_MISSINGARG;
+        while (next[0]) {
+          bool doit, op;
+          if (next[0] != '+' && next[0] != '-') return KW_BADARG;
+          doit = next[0];
+          op = safe_toupper(next[1]);
+          if (op != 'L' && op != 'S') return KW_BADARG;
+          if (next[2] == 0 || next[3] == 0) return KW_BADARG;
+          if (op == 'L' && next[2] == '4' && next[3] == '1')
+            zh2opt[4] = doit;
+          else if (op == 'L' && next[2] == '2' && next[3] == '2')
+            zh2opt[5] = doit;
+          else if (op == 'S' && next[2] == '2' && next[3] == '2')
+            zh2opt[6] = doit;
+          else return KW_BADARG;
+
+          next += 4;
+        }
+        argv[n-1] = zh2opt;
+        argv[n] = NULL;
+        return KW_OK;
+    }
+    else if (cistreq(key, "-cpu")) {
+        int n = *argp+1, i;
+        char *next = argv[n];
+
+        *argp = n;
+        if (next == 0) return KW_MISSINGARG;
+        for (i = 0; i < sizeof(cpu_keywords) / sizeof(struct cpukw); i++)
+            if (cistreq(next, cpu_keywords[i].opt)) {
+                sprintf(zh3opt+4, "%02X", i);
+                argv[n-1] = zh3opt;
+                argv[n] = NULL;
+                return KW_OK;
+            }
+        return KW_BADARG;
+    }
     return KW_NONE;
 }
 
@@ -234,7 +359,7 @@ char *target_lib_name(const char *name, int32 endian) {
     static char namebuf[64];
     int len = strlen(name);
     if (endian == 0) endian = config;
-    HandleZHOpt(&zhopt[3]);
+    HandleZHOpt(&zhopt[4]);
     if (name[len-2] == '.' && name[len-1] == 'o') {
         memcpy(namebuf, name, len);
         memcpy(&namebuf[len-1], pcs_flags & PCS_CALLCHANGESPSR ? "32" : "26", 2);
@@ -254,7 +379,7 @@ char *target_asm_options(int32 endian) {
     strcpy(v, (endian & CONFIG_BIG_ENDIAN) ? "-bi" : "-li");
     i = 3;
   }
-  HandleZHOpt(&zhopt[3]);
+  HandleZHOpt(&zhopt[4]);
   if (i != 0) v[i++] = ' ';
   strcpy(&v[i], "-apcs 3");
   if (pcs_flags & PCS_REENTRANT) strcat(&v[i], "/reent");
@@ -278,7 +403,7 @@ char *target_asm_options(int32 endian) {
 
 void config_init(void)
 {
-    config = CONFIG_HAS_MULTIPLY;
+    config = 0;
     if (patchable_config.bytesex == BYTESEX_LITTLE)
         config |= CONFIG_ENDIANNESS_SET;
     else if (patchable_config.bytesex == BYTESEX_BIG)
@@ -289,7 +414,12 @@ void config_init(void)
         config |= CONFIG_BIG_ENDIAN;
     }
 
-    if (patchable_config.pcs_options & PCS_FPREGARGS)
+    if (patchable_config.pcs_options & PCS_REENTRANT)
+        config |= CONFIG_REENTRANT_CODE;
+
+    if (patchable_config.pcs_options & PCS_SOFTFP)
+        config |= CONFIG_SOFTWARE_FP;
+    else if (patchable_config.pcs_options & PCS_FPREGARGS)
         config |= CONFIG_FPREGARGS;
 
     if (patchable_config.no_unaligned_loads)

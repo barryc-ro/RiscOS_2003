@@ -55,6 +55,10 @@
 
 #include "asdfmt.h"
 
+#ifndef ITEMBITFIELD
+#define ITEMBITFIELD 16
+#endif
+
 #ifdef TARGET_HAS_DEBUGGER
 
 #define OldAsdTables (asd_old_tables ^ ((var_cc_private_flags & 128L) != 0))
@@ -95,7 +99,16 @@ typedef struct Dbg_TypeFRef {
     SET_BITMAP sort;
 } Dbg_TypeFRef;
 
-static Dbg_TypeFRef *dbg_structRefs;
+static struct Dbg_TypeFRef *dbg_structRefs;
+
+typedef struct Dbg_VarFRef {
+    struct Dbg_VarFRef *nextref;
+    int32 *varref;
+} Dbg_VarFRef;
+
+static Dbg_VarFRef *addvarfref(Dbg_VarFRef *next, int32 *typep);
+
+struct DbgList;
 
 typedef struct Dbg_LocList
 {   struct Dbg_LocList *cdr;
@@ -103,9 +116,12 @@ typedef struct Dbg_LocList
     int32 pos;
     int32 typeref;
     Dbg_TypeFRef *typefrefs;
+    Dbg_VarFRef *varfrefs;
 } Dbg_LocList;
 
 static Dbg_LocList *dbg_loclist;
+
+static Dbg_LocList *dbg_findloclist(Binder *b);
 
 /* The next macro seems to indicate a lack to do this portably in ANSI-C */
 /* Are discriminated unions second class objects?                        */
@@ -142,6 +158,7 @@ typedef struct DbgList
                 int32 location;
                 Symstr *sym;
                 Symstr *base;
+                int32 loc;
               } DEB_VAR;
        struct { int32 type;
                 TypeExpr *typex;
@@ -165,6 +182,10 @@ typedef struct DbgList
                         int32 codeaddr;
                       } s;
               } DEB_SCOPE;
+       struct { int32 type;   /* of the extracted value */
+                int32 container;
+                unsigned8 size, offset, pad1, pad2;
+              } DEB_BF;
     } car;
 } DbgList;
 
@@ -259,8 +280,12 @@ VoidStar dbg_notefileline(FileLine fl)
     if (usrdbg(DBG_LINE))
     {   Deb_filecoord *l = x->linelist;
         /* @@@ beware - odd use of #line *MAY* (check) set off the syserr() */
-        if (l != NULL && l->line > fl.l)
-            syserr(syserr_debugger_line);
+        /* There used to be a syserr here if (l != NULL && l->line > fl.l),
+           but it can be triggered by #line (though not #line n file, which
+           won't give equality of filename): the CVS has an example. Also, it
+           fails if functions are taken out of file order, as in the
+           out-of-line expansion of inline functions.
+         */
         l = (Deb_filecoord *) DbgAlloc(sizeof(Deb_filecoord));
           l->nextinfile = x->linelist, l->nextincode = 0,
           l->file = x, l->line = fl.l, l->col = fl.column,
@@ -525,13 +550,38 @@ static void dbg_typerep(TypeExpr *, int32 *typep);
 static int32 dbg_arrayrep(TypeExpr *t, Expr *e)
 {   /* e is the array size. Since C arrays start at 0, the upper bound is */
     /* one less                                                           */
+    Expr *s;
     DbgList *p = (DbgList*) DbgAlloc(DbgListVarSize(DEB_ARRAY));
     p->debsort = ITEMARRAY;
-    p->car.DEB_ARRAY.arrayflags = (e ? 10:6);
+    /* Oooh, variable length array type. Woo. */
+    if (e && h0_(e) == s_plus && h0_(arg1_(e)) == s_binder)
+    {   /* Is actually <hidden local var>+1. The hidden variable would */
+        /* not normally be shown, so we paste it in here.              */
+        Binder *b = (Binder *) arg1_(e);
+        Dbg_LocList *l = (Dbg_LocList*) BindAlloc(sizeof(Dbg_LocList));
+        l->name = b;
+        l->pos = 0;
+        l->typefrefs = NULL;
+        l->varfrefs = addvarfref(NULL, &p->car.DEB_ARRAY.upperbound);
+        dbg_typerep(bindtype_(b), &l->typeref);
+        l->cdr = dbg_loclist;
+        dbg_loclist = l;
+        p->car.DEB_ARRAY.arrayflags = 0x22;
+        p->car.DEB_ARRAY.upperbound = 0;
+    }
+    else
+    if (e && h0_(e) == s_integer)
+    {   p->car.DEB_ARRAY.arrayflags = 0x0A;
+        p->car.DEB_ARRAY.upperbound = evaluate(e)-1;
+    }
+    else
+    {   p->car.DEB_ARRAY.arrayflags = 0x06;
+        p->car.DEB_ARRAY.upperbound = 0;
+    }
+    s = sizeoftypeasexpr(t);
+    p->car.DEB_ARRAY.size = h0_(s) == s_integer ? intval_(s) : 0;
     dbg_typerep(t, &p->car.DEB_ARRAY.basetype);
     p->car.DEB_ARRAY.lowerbound = 0;
-    p->car.DEB_ARRAY.upperbound = e ? evaluate(e)-1:0;
-    p->car.DEB_ARRAY.size = sizeoftype(t);
     p->cdr = dbglist;              /* do this last (typerep above) */
     dbglist = p;
     dbgloc += 24;
@@ -539,6 +589,11 @@ static int32 dbg_arrayrep(TypeExpr *t, Expr *e)
 }
 
 #define dbg_mk_typerep(code,ptrc) TYPE_TYPEWORD((int32)(code), ptrc)
+
+/* The following macro is used to default the signedness for 'plain'   */
+/* char and 'plain' int bit fields. Borrowed from sem.c                */
+#define issignedchar_(m) ((m) & bitoftype_(s_signed) || \
+          (feature & FEATURE_SIGNED_CHAR && !((m) & bitoftype_(s_unsigned))))
 
 static int32 dbg_structentry(
   SET_BITMAP sort, ClassMember *members, int32 size, Dbg_TypeFRef *refs,
@@ -574,14 +629,34 @@ static int32 dbg_structentry(
             structfield(l, sort, &sp);
             if (memsv_(l))
             {   /* note that memsv is 0 for padding bit fields */
-                Dbg_Structelt *p =
+                Dbg_Structelt *el =
                   (Dbg_Structelt *) DbgAlloc(sizeof(Dbg_Structelt));
-                p->next = elts;
-                p->offset = sp.woffset;
-                /* TopExpress format can't handle bitfields */
-                dbg_typerep(sp.bsize != 0 ? te_int : memtype_(l), &p->type);
-                p->name = symname_(memsv_(l));
-                elts = p;
+                el->next = elts;
+                el->offset = sp.woffset;
+                if (sp.bsize == 0)
+                    dbg_typerep(memtype_(l), &el->type);
+                else {
+                    DbgList *p = (DbgList*)DbgAlloc(DbgListVarSize(DEB_BF));
+                    TypeExpr te; te = *memtype_(l);
+                    typespecmap_(&te) &= ~BITFIELD;
+                    dbgloc += 16;
+                    el->type = dbg_mk_typerep(dbg_check(dbgloc-16), 0);
+                    p->debsort = ITEMBITFIELD;
+                    p->car.DEB_BF.offset = (unsigned8)sp.boffset;
+                    p->car.DEB_BF.size = (unsigned8)sp.bsize;
+                    p->car.DEB_BF.pad1 = p->car.DEB_BF.pad2 = 0;
+                    p->cdr = dbglist;
+                    dbglist = p;
+                    /* Blurgh */
+                    if (!(typespecmap_(&te) & (bitoftype_(s_signed)|bitoftype_(s_unsigned))))
+                        typespecmap_(&te) |= feature & FEATURE_SIGNED_CHAR
+                                                           ? bitoftype_(s_signed)
+                                                           : bitoftype_(s_unsigned);
+                    dbg_typerep(&te, &p->car.DEB_BF.type);
+                    dbg_typerep(te_int, &p->car.DEB_BF.container);
+                }
+                el->name = symname_(memsv_(l));
+                elts = el;
             }
         }
     }
@@ -672,6 +747,14 @@ static Dbg_TypeFRef *addtypefref(Dbg_TypeFRef *next, int32 *typep, int32 ptrcnt)
     return fr;
 }
 
+static Dbg_VarFRef *addvarfref(Dbg_VarFRef *next, int32 *typep) {
+    Dbg_VarFRef *fr = (Dbg_VarFRef*)DbgAlloc(sizeof(Dbg_VarFRef));
+    fr->nextref = next;
+    fr->varref = typep;
+    *typep = 0;
+    return fr;
+}
+
 static void struct_typerep(TypeExpr *x, int32 *typep, int32 ptrcnt)
 {   TagBinder *b = typespectagbind_(x);
     int32 size = attributes_(b) & TB_DEFD ? sizeoftype(x) : 0;
@@ -701,6 +784,7 @@ static void dbg_typerep(TypeExpr *x, int32 *typep)
     for (;;) switch (h0_(x)) {
     case t_content:
     case t_ref:         /* @@@ OK? */
+    case t_vla:         /* Hmmm */
         ptrcnt++;
         x = typearg_(x);
         /* TopExpress spec cannot express const/volatile pointers */
@@ -716,7 +800,7 @@ static void dbg_typerep(TypeExpr *x, int32 *typep)
       { SET_BITMAP m = typespecmap_(x);
         switch (m & -m) {   /* LSB - unsigned32/long etc. are higher */
         case bitoftype_(s_char):
-            *typep = dbg_mk_typerep((m & bitoftype_(s_signed)) ? TYPESBYTE: TYPEUBYTE,
+            *typep = dbg_mk_typerep(issignedchar_(m) ? TYPESBYTE: TYPEUBYTE,
                                     ptrcnt);
             return;
         case bitoftype_(s_int):
@@ -775,8 +859,8 @@ static void dbg_typerep(TypeExpr *x, int32 *typep)
     }
 }
 
-static void dbg_addvar(Symstr *name, int32 t, int32 sourcepos,
-                       unsigned32 stgclass, Symstr *base, int32 addr, TypeExpr *type)
+static DbgList *dbg_addvar(Symstr *name, int32 t, int32 sourcepos,
+                           unsigned32 stgclass, Symstr *base, int32 addr, TypeExpr *type)
 {   DbgList *p = (DbgList*) DbgAlloc(DbgListVarSize(DEB_VAR));
     p->debsort = ITEMVAR;
     p->car.DEB_VAR.type = t;
@@ -785,10 +869,12 @@ static void dbg_addvar(Symstr *name, int32 t, int32 sourcepos,
     p->car.DEB_VAR.location = addr;
     p->car.DEB_VAR.sym = name;
     p->car.DEB_VAR.base = base;
+    p->car.DEB_VAR.loc = dbgloc;
     p->cdr = dbglist;
     dbglist = p;
     dbgloc += 20 + padstrlen(strlen(symname_(name)));
     if (type != NULL) dbg_typerep(type, &p->car.DEB_VAR.type);
+    return p;
 }
 
 void dbg_topvar(Symstr *name, int32 addr, TypeExpr *t, int stgclass,
@@ -956,11 +1042,12 @@ void dbg_locvar(Binder *name, FileLine fl)
         Dbg_LocList *p = (Dbg_LocList*) BindAlloc(sizeof(Dbg_LocList));
         if (debugging(DEBUG_Q))
             cc_msg("note loc var $b\n", name);
-        p->cdr = dbg_loclist;
         p->name = name;
         p->pos = fl.l;
         p->typefrefs = NULL;
+        p->varfrefs = NULL;
         dbg_typerep(bindtype_(name), &p->typeref);
+        p->cdr = dbg_loclist;
         dbg_loclist = p;
     }
 }
@@ -979,6 +1066,7 @@ void dbg_locvar1(Binder *b)
     unsigned32 stgclass;
     int stgclassname;
     int32 addr = bindaddr_(b);
+    Dbg_VarFRef *refs;
     if (p == NULL || p->pos == -1)
     {   if (debugging(DEBUG_Q))
             cc_msg(" omitted");
@@ -1029,6 +1117,9 @@ void dbg_locvar1(Binder *b)
     }
     if (debugging(DEBUG_Q))
         cc_msg(" %c %lx", stgclassname, (long)addr);
+    for (refs = p->varfrefs; refs; refs = refs->nextref)
+        *refs->varref = dbgloc;
+    p->varfrefs = 0;
     dbg_addvar(name, p->typeref, p->pos, stgclass, base, addr, NULL);
 }
 
@@ -1259,8 +1350,17 @@ void dbg_writedebug(void)
           }
         case ITEMARRAY:
             dbg_hdr(sort, 24);
+            if (p->car.DEB_ARRAY.arrayflags == 0x22 &&
+                p->car.DEB_ARRAY.upperbound == 0)
+                p->car.DEB_ARRAY.arrayflags = 0x06;
             obj_writedebug(&p->car.DEB_ARRAY.size, 5+DBG_INTFLAG);
             check += 24;
+            break;
+        case ITEMBITFIELD:
+            dbg_hdr(sort, 16);
+            obj_writedebug(&p->car.DEB_BF.type, 2+DBG_INTFLAG);
+            obj_writedebug(&p->car.DEB_BF.size, 4);
+            check += 16;
             break;
         case ITEMSCOPEBEGIN:
         case ITEMSCOPEEND:

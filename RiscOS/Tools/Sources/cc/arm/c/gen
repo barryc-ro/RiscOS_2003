@@ -88,6 +88,7 @@ static void orr_integer(RealRegister r1,RealRegister r2,int32 n,int32 scc,int32 
 static void multiply_integer(RealRegister r1,RealRegister r2,int32 n,int32 scc);
 static void conditional_branch_to(int32 condition,LabelNumber *destination,bool bxxcase);
 static void routine_entry(int32 m);
+static void routine_saveregs(int32 m);
 static void routine_exit(int32 condition,bool to_pc);
 static void show_fp_inst_direct(J_OPCODE op,int32 m,int32 peep,RealRegister r1r,RealRegister r2r,RealRegister mr);
 
@@ -205,6 +206,7 @@ static int32 ldm_type(int32 op, LoadOrStoreMul *s, int32 end)
 
 static void ldmstm_generate(SavedLDM *p, LoadOrStoreMul *s)
 { RealRegister basereg = s->basereg;
+  int sp = frameregs[R_SP];
   if (p->startoff != p->endoff) {
     /* more than one register: ldm or stm likely */
     int32 op = 0;
@@ -221,7 +223,7 @@ static void ldmstm_generate(SavedLDM *p, LoadOrStoreMul *s)
       op = ldm_type(OP_LDMIA, s, end+4);
     else if (start == 4)
       op = ldm_type(OP_LDMIB, s, end);
-    else if (end == 0)
+    else if (end == 0 && basereg != sp) /* Avoid generally for stack */
       op = ldm_type(OP_LDMDA, s, start-4);
     else if (end == -4)
       op = ldm_type(OP_LDMDB, s, start);
@@ -232,7 +234,7 @@ static void ldmstm_generate(SavedLDM *p, LoadOrStoreMul *s)
         addon = start, op = OP_LDMIA, end += 4;
       op = ldm_type(op, s, end);
     } else if (/* start < 0 && */ end < 0 && s->baseadjust <= end) {
-      if (s->baseadjust == start)
+      if (s->baseadjust == start || basereg == sp)
         addon = end+4, op = OP_LDMDB;
       else
         addon = end, op = OP_LDMDA, start -= 4;
@@ -242,7 +244,7 @@ static void ldmstm_generate(SavedLDM *p, LoadOrStoreMul *s)
         b = p->lastreg;
         op = OP_LDMIA;
       } else {
-        if (basereg == frameregs[R_SP]) {
+        if (basereg == sp) {
           ldm_printf("No stm - would modify SP\n");
           goto dosingly;
         }
@@ -311,7 +313,7 @@ dosingly:
            When basereg is the stack pointer, we must ensure that we are
            going in the right direction, otherwise we must prevent the writeback.
          */
-        if (basereg == frameregs[R_SP] && (offx ^ s->baseadjust) < 0) {
+        if (basereg == sp && (offx ^ s->baseadjust) < 0) {
           ldm_printf("-- avoid writeback: basereg R%ld, SGN offx != SGN baseadjust (%ld %ld)\n",
             basereg, offx, s->baseadjust);
         }
@@ -450,9 +452,7 @@ static void ldm_flush_r(int32 regbits)
       if (s->regbits & regbit(r))
         s->offset[r] -= s->baseadjusted;
   } else if (s->baseadjust != 0 && !s->basedead)
-  {
     add_integer(s->basereg, s->basereg, s->baseadjust, 0);
-  }
 }
 
 static void ldm_flush(void) {
@@ -928,7 +928,8 @@ int32 a_uses_r3(J_OPCODE op)
 int32 a_uses_r4(J_OPCODE op, int32 peep)
 {
    return (peep & P_RSHIFT) ||
-          ((op & J_TABLE_BITS) > J_LAST_JOPCODE && (a_attributes(op) & _a_read_r4));
+          ((op & J_TABLE_BITS) > J_LAST_JOPCODE ? (a_attributes(op) & _a_read_r4) :
+                                 uses_r4(op));
 }
 
 int32 a_modifies_mem(J_OPCODE op)
@@ -939,14 +940,15 @@ int32 a_modifies_mem(J_OPCODE op)
                                  op == J_MOVC || op == J_CLRC;
 }
 
-bool setspsr(J_OPCODE op, int32 m)
+bool setspsr(J_OPCODE op, int32 m, int32 r4)
 {
     return (    is_compare(op)
              || (op == J_CASEBRANCH)
              || ((op == J_MOVC || op == J_CLRC || op == J_PUSHC) &&
                  m > MOVC_LOOP_THRESHOLD)
              || (op == J_OPSYSK && (var_cc_private_flags & 512L))
-             || ((pcs_flags & PCS_CALLCHANGESPSR) &&
+             || ((op == J_BINRK || op == J_BINRR) && (r4 & B_S))
+             || (/*(pcs_flags & PCS_CALLCHANGESPSR) &&*/
                  (op == J_CALLK || op == J_CALLR || op == J_CALLI)
                  /* J_COUNT is ok because the count functions don't
                     alter the psr.
@@ -1024,14 +1026,16 @@ void show_inst_direct(PendingOp *p)
 {
     struct DispDesc dispdesc;
     int32 w, msh = 0, illbits;
-    J_OPCODE op = p->op;
-    RealRegister r1r = p->r1, r2r = p->r2, mr = p->m, r4 = p->r4;
+    J_OPCODE op = p->ic.op;
+    RealRegister r1r = p->ic.r1.rr, r2r = p->ic.r2.rr, mr = p->ic.m.rr, r4 = p->ic.r4.rr;
     int32 peep = p->peep, dataflow = p->dataflow;
     int32 r1 = r1r, r2 = r2r, m = mr;
     bool dont_kill_ip = NO;
     int32 regsused = 0;
 
+#ifdef ENABLE_LOCALCG
     if (localcg_debug(4)) a_pr_jopcode(p);
+#endif
 
 /* Should this really be arranged as:
  *  union { Symstr *sym; int32 umint; } um;
@@ -1259,7 +1263,8 @@ case J_RORR:
 case J_CMPR:
         ldm_c_flush(regsused, 1);
         {   int32 mask = op & (Q_MASK & ~Q_UBIT);
-            int32 opc = (mask == Q_EQ || mask == Q_NE) ? F_TEQ : F_CMP;
+            /* Always use CMP - why? because of weird 64-bit stuff */
+            int32 opc = /*(mask == Q_EQ || mask == Q_NE) ? F_TEQ : */F_CMP;
             outinstr(OP_RXR | opc | F_SCC | F_RN(r2r) | mr | msh);
         }
         illbits &= ~((Q_MASK&~Q_FBIT)|J_SHIFTMASK);
@@ -1297,14 +1302,24 @@ case J_RSBR:
 
 #undef irrop
 
-case J_MLA:
+case J_MLAR:
+        if (r1r == mr) syserr("MLA clash (%ld,%ld,%ld,%ld)", r1r, mr, r2r, r4);
         ldm_c_flush(regsused, SCC_of_PEEP(peep));
         outinstr(OP_MLA | F_RN(r1r) | F_RD(r4) |  (r2r << 8) | mr | SCC_of_PEEP(peep));
         peep &= ~(P_CMPZ | Q_MASK);
         break;
 case J_MULR:
+        if (r1r == mr) syserr("MUL clash (%ld,%ld,%ld)", r1r, mr, r2r);
         ldm_c_flush(regsused, SCC_of_PEEP(peep));
         outinstr(OP_MUL | F_RN(r1r) | (r2r << 8) | mr | SCC_of_PEEP(peep));
+        peep &= ~(P_CMPZ | Q_MASK);
+        break;
+case J_MULL:
+        if (r1r == r2r || r1r == mr || r2r == mr) syserr("MULL clash (%ld,%ld,%ld,%ld)", r1r, r2r, mr, r4);
+        ldm_c_flush(regsused, SCC_of_PEEP(peep));
+        outinstr((op & J_SIGNED ? OP_SMULL : OP_UMULL) | F_RD(r1r) | F_RN(r2r) |
+                 mr | (r4 << 8) | SCC_of_PEEP(peep));
+        illbits &= ~(J_SIGNED|J_UNSIGNED);
         peep &= ~(P_CMPZ | Q_MASK);
         break;
 
@@ -1576,6 +1591,39 @@ case J_ADCON:
         }
         break;
 #endif  /* TARGET_IS_HELIOS */
+case J_ADCONLL:
+        ldm_flush();
+        {   int32 direction = F_UP, adconop = F_ADD, disp;
+            int64 ll = *(int64 *)m;
+            int32 irep[2];
+            if (target_lsbytefirst)
+                irep[0] = (int32) ll, irep[1] = (int32) (ll >> 32);
+            else
+                irep[0] = (int32) ll, irep[1] = (int32) (ll >> 32);
+            disp = lit_findwordsincurpool(irep, 2, LIT_LLNUM1);
+            if (disp < 0) {
+                disp = lit_findwordsinprevpools(irep, 2, LIT_LLNUM1,
+                          codebase+codep+8-1020);
+                if (disp >= 0) {
+                    disp = codebase+codep+8-disp;
+                    direction = F_DOWN, adconop = F_SUB;
+                } else {
+                    addressability(256);
+                    (void)lit_findword(irep[0],
+                              LIT_LLNUM1, 0,
+                              LITF_INCODE|LITF_FIRST);
+                    /* use the second address in case overflow */
+                    disp = lit_findword(irep[1],
+                              LIT_LLNUM2, 0,
+                              LITF_INCODE|LITF_LAST) - 4;
+                }
+            }
+            disp >>= 2;
+            if (direction == F_UP)
+                addfref_(litlab, codep | LABREF_W256);
+            outinstr(OP_RXN | adconop | F_RD(r1r) | F_RN(R_PC) | disp | 0xf00);
+        }
+        break;
 case J_LOADSB:
         ldm_flush();
 #ifdef TARGET_IS_RISC_OS
@@ -1842,6 +1890,16 @@ case J_LDRWR:
         peep &= P_RSHIFT;
         illbits &= ~(J_SIGNED|J_UNSIGNED|J_NEGINDEX|J_SHIFTMASK);
         break;
+//case J_LDRLK:
+//case J_STRLK:
+//        w = loads_r1(op) ? F_LDR : F_STR;
+//        bigdisp(&dispdesc, m, 0xfff, r2r);
+//        w |= dispdesc.u_d;
+//        if (peep & (P_PRE | P_POST)) adjustipvalue(dispdesc.r, dispdesc.r, w & F_UP ? dispdesc.m : -dispdesc.m);
+//        ldm_outinstr((prepost(op) | w | F_WORD | F_RD(r1r) | F_RN(dispdesc.r) | dispdesc.m),
+//                     dataflow & J_DEAD_R2);
+//        r1r++;
+//        m+=4;
 case J_LDRK:
 case J_STRK:
         w = loads_r1(op) ? F_LDR : F_STR;
@@ -1905,6 +1963,11 @@ case J_ENDPROC:
         break;
 case J_ENTER:
         routine_entry(m);
+#ifdef TARGET_HAS_SAVE
+        break;
+case J_SAVE:
+#endif
+        routine_saveregs(m);
         break;
 
 /* J_PUSHR should never reach armgen (removed in flowgraf) */
@@ -1949,6 +2012,31 @@ case J_USED:
 
 case J_INLINE1:
         syserr(syserr_inline1);
+        break;
+
+case J_BINRK:
+        ldm_c_flush(regsused, SCC_of_PEEP(peep));
+        if ((r4 & B_CLASS) == B_DP)
+        {   int32 op = OP_RXN | ((r4 & B_DP_OP)<<21);
+            int32 packed = eightbits(mr);
+            if (packed < 0) syserr("bad BINRK imm");
+            outinstr(op | SCC_of_PEEP(peep) | F_RD(r1r) | F_RN(r2r) | packed);
+            peep &=~ P_CMPZ;
+            break;
+        }
+        syserr("unknown BINRK");
+        break;
+
+case J_BINRR:
+        ldm_c_flush(regsused, SCC_of_PEEP(peep));
+        if ((r4 & B_CLASS) == B_DP)
+        {   int32 op = OP_RXR | ((r4 & B_DP_OP)<<21);
+            outinstr(op | SCC_of_PEEP(peep) | F_RD(r1r) | F_RN(r2r) | mr | msh);
+            peep &=~ P_CMPZ;
+            illbits &= ~J_SHIFTMASK;
+            break;
+        }
+        syserr("unknown BINRR");
         break;
 
 case J_CLRC:
@@ -2281,10 +2369,41 @@ case J_MOVFIR:
             outinstr(OP_POSTN | F_UP | F_LDR | F_RD(r1r) | F_RN(sp) | 4);
         }
         break;
+case J_MOVIFM:
+/* Load n FP registers from n integer registers. m holds a bitmap of     */
+/* integer registers, r1 a bitmap of the fp registers.                   */
+        {   int32 sp = frameregs[R_SP];
+            int32 r;
+            ldm_flush();
+            outinstr(OP_STMFD | F_WRITEBACK | F_RN(sp) | m);
+            for (r = R_F0; r1r != 0; r++)
+                if (r1r & regbit(r)) {
+                    outinstr(OP_CPPOST | F_UP | F_LDR | F_WRITEBACK |
+                             F_RN(sp) | F_RD(checkfreg(r)) | F_SINGLE | 1);
+                    r1r ^= regbit(r);
+                }
+        }
+        break;
+case J_MOVFIM:
+/* Load n integer registers from n FP registers. m holds a bitmap of     */
+/* fp registers, r1 a bitmap of the integer registers.                   */
+        {   int32 sp = frameregs[R_SP];
+            int32 r;
+            ldm_flush();
+            for (r = R_F0+NFLTREGS-1; m != 0; r--)
+                if (m & regbit(r)) {
+                    outinstr(OP_CPPRE | F_DOWN | F_STR | F_WRITEBACK |
+                             F_RN(sp) | F_RD(checkfreg(r)) | F_SINGLE | 1);
+                    m ^= regbit(r);
+                }
+            outinstr(OP_LDMFD | F_WRITEBACK | F_RN(sp) | r1r);
+        }
+        break;
 case J_MOVIFR:
 /* Load FP register from an integer one                                  */
         {   int32 sp = frameregs[R_SP];
-            outinstr(OP_PREN | F_DOWN | F_STR | F_RD(mr) | F_RN(sp) | 4);
+            outinstr(OP_PREN | F_DOWN | F_STR | F_WRITEBACK |
+                     F_RD(mr) | F_RN(sp) | 4);
             outinstr(OP_CPPOST | F_UP | F_LDR | F_WRITEBACK  |
                      F_RN(sp) | F_RD(checkfreg(r1r)) | F_SINGLE | 1);
         }
@@ -2528,13 +2647,18 @@ int32 eightbits(int32 n)
     return(-1);
 }
 
-bool immed_cmp(int32 n)
+bool ImmediateOperand(int32 n, J_OPCODE op)
 {
-/* False if neither CMP nor CMN can handle this integer                  */
-/* Utterly ARM specific                                                  */
-    if (eightbits(n)>=0) return YES;
-    if (eightbits(-n)>=0) return YES;
-    return NO;
+    switch (op & J_TABLE_BITS) {
+    case J_ADDK:
+    case J_SUBK:
+    case J_CMPK: return eightbits(n) >= 0 || eightbits(-n) >= 0;
+    case J_ANDK:
+    case J_MOVK: return eightbits(n) >= 0 || eightbits(~n) >= 0;
+    case J_ORRK:
+    case J_EORK: return eightbits(n) >= 0;
+    default:     return NO;
+    }
 }
 
 /* although the idea of setlabel is machine independent, it stays here
@@ -2959,9 +3083,9 @@ static int32 *compare_integer_i(RealRegister r, int32 n, RealRegister workreg,
 /* Compare register r with integer n, setting condition codes            */
     int32 op = OP_RXN|F_CMP|F_SCC, packed = eightbits(n);
     if (packed>=0) {
-      if (mask == Q_EQ || mask == Q_NE || mask == Q_UNE || mask == Q_UEQ) {
+      /*if (mask == Q_EQ || mask == Q_NE || mask == Q_UNE || mask == Q_UEQ) {
         op = OP_RXN|F_TEQ|F_SCC;
-      }
+      }*/
     } else
       op = OP_RXN|F_CMN|F_SCC,
       packed = eightbits(-n);
@@ -3006,9 +3130,9 @@ static void compare_integer(RealRegister r, int32 n, RealRegister workreg,
             for (iw = 0; &w[iw] != we; iw++) outinstr(w[iw]);
         } else
             load_integer_literal(workreg, n);
-        if (mask == Q_EQ || mask == Q_NE || mask == Q_UNE || mask == Q_UEQ)
+        /*if (mask == Q_EQ || mask == Q_NE || mask == Q_UNE || mask == Q_UEQ)
           outinstr(OP_RXR | F_TEQ | F_SCC | F_RN(r) | workreg);
-        else
+        else*/
           outinstr(OP_RXR | F_CMP | F_SCC | F_RN(r) | workreg);
         killipvalue(workreg);
     }
@@ -3250,6 +3374,8 @@ RealRegister local_base(Binder *b) {
     return local_base_a(bindaddr_(b));
 }
 
+static bool saveregs_done;
+
 static int32 local_addr_a(int32 p)
 {
     /* fp_minus_sp is now maintained by show_instruction_direct, so is
@@ -3438,15 +3564,11 @@ static void PushRegs(int32 mask) {
         outinstr(stm | mask);
 }
 
+
+
+
 static void routine_entry(int32 m)
-{   RealRegister sp = frameregs[R_SP];
-    RealRegister ip = frameregs[R_IP];
-    int32 intregs = k_intregs_(m),
-          fltregs = k_fltregs_(m);
-    condition_mask = C_ALWAYS;
-    if (m < 0) syserr(syserr_enter, (long)m);
-    nargwords = k_argwords_(m);
-    nregargwords = intregs + 2*fltregs;
+{   condition_mask = C_ALWAYS;
 #if DEBUG_X
     if (debugging(DEBUG_X)) desperate_codetrace();
 #endif
@@ -3467,6 +3589,7 @@ static void routine_entry(int32 m)
             codeseg_function_name(name, /* nargwords, unused on ARM */ m);
         if (k_fltregs_(m) != 0) flags |= aof_fpreg;
         dbg_enterproc();
+        //fpdesc_startproc();
         show_entry(name, flags);
     }
 
@@ -3483,25 +3606,38 @@ static void routine_entry(int32 m)
 #endif
     fp_minus_sp = 0;
     returnlab = nextlabel();
+    saveregs_done = NO;
     argwordsbelowfp = realargwordsbelowfp = 0;
-    argstopopabovefp = 0;
+    intsavewordsbelowfp = savewordsabovefp = argstopopabovefp = 0;
+}
+
+static void routine_saveregs(int32 m)
+{   RealRegister sp = frameregs[R_SP];
+    RealRegister ip = frameregs[R_IP];
+    int32 intregs = k_intregs_(m),
+          fltregs = k_fltregs_(m);
+    saveregs_done = YES;
+    if (m < 0) syserr(syserr_enter, (long)m);
+    nargwords = k_argwords_(m);
+    nregargwords = intregs + 2*fltregs;
+#if DEBUG_X
+    if (debugging(DEBUG_X)) desperate_codetrace();
+#endif
+
     if (!(procflags & NONLEAF) || (pcs_flags & PCS_NOFP) ||
          (procauxflags & bitoffnaux_(s_irq)))
     {
         int32 mask;
-        savewordsabovefp = 0;
         if (feature & FEATURE_DONTUSE_LINKREG)
             regmask |= M_LR;
         if (procauxflags & bitoffnaux_(s_irq)) {
             mask = regmask & (M_VARREGS | M_ARGREGS | regbit(R_IP) | M_LR);
-            if (pcs_flags & PCS_NOFP) {
-                regmask |= regbit(R_FP); mask |= regbit(R_FP);
-            }
         } else {
             mask = regmask & (M_VARREGS | M_LR);
             if (procflags & PROC_ARGPUSH) {
                 bool maybevariadic = fltregs == 0 && intregs < nargwords;
                 if (maybevariadic) {
+                    //fpdesc_setinitoffset(-4-NARGREGS*4);
                     PushRegs(M_ARGREGS);
                     argstopopabovefp = NARGREGS;
                 } else {
@@ -3516,11 +3652,13 @@ static void routine_entry(int32 m)
             (procflags & (PROC_USESADCONS+BLK0EXIT)))
         {   outinstr(OP_RXR | F_MOV | F_RD(ip) | R_SB);
             regmask |= regbit(R_SB); mask |= regbit(R_SB);
+            //fpdesc_enterproc();
             PushRegs(mask);
             outinstr(OP_RXR | F_MOV | F_RD(R_SB) | ip);
-        } else if (mask != 0)
+        } else if (mask != 0) {
+            //fpdesc_enterproc();
             PushRegs(mask);
-        savewordsabovefp = 0;
+        }
         intsavewordsbelowfp = bitcount(mask & ~M_ARGREGS);
         if (procflags & PROC_ARGPUSH) savefltargs(fltregs);
         savefpregs(regmask);
@@ -3574,8 +3712,8 @@ static void routine_entry(int32 m)
                     realargwordsbelowfp = nregargwords;
                 }
             } else {
-                PushRegs(M_ARGREGS);
                 fpoff += NARGREGS*4;
+                PushRegs(M_ARGREGS);
             }
             PushRegs(mask);
             if (saveargs) savefltargs(fltregs);
@@ -3603,7 +3741,7 @@ static void routine_entry(int32 m)
     }
 #ifdef TARGET_STACK_MOVES_ONCE
     /* Simulate J_SETSP */
-    add_integer(frameregs[R_SP], frameregs[R_SP], -greatest_stackdepth, 0);
+    add_integer(sp, sp, -greatest_stackdepth, 0);
     fp_minus_sp += greatest_stackdepth;
 #endif
 }
@@ -3675,23 +3813,28 @@ static void routine_exit(int32 condition, bool to_pc)
                      procauxflags & bitoffnaux_(s_irq) ? M_LR :
                      (pcs_flags & PCS_CALLCHANGESPSR) ? M_PC :
                               M_PC | F_PSR;
+    bool isleaf = !(procflags & NONLEAF) || !saveregs_done;
+
+    if (!saveregs_done) mask = 0;
 
 #ifdef TARGET_STACK_MOVES_ONCE
     /* Simulate J_SETSP, and its ARM elision before NONLEAF return.       */
     /* /* this is wrong (condition as scc argument for add_integer is     */
     /* misguided)                                                         */
-    if (!(procflags & NONLEAF))
+    if (isleaf && saveregs_done)
       /* don't update fp_minus_fp, since next basic block requires.       */
-      add_integer(frameregs[R_SP], frameregs[R_SP],
-                  greatest_stackdepth, condition);
+      add_integer(sp, sp, greatest_stackdepth, condition);
 #endif
-    if (feature & FEATURE_DONTUSE_LINKREG) mask |= M_LR;
+    if (!saveregs_done)
+        mask = 0;
+    else if (feature & FEATURE_DONTUSE_LINKREG)
+        mask |= M_LR;
     restorefpregs(mask, condition);
 #ifndef PROFILE_COUNTS_INLINE
     if (profile_option)
         outinstr3(OP_BL | condition, fn_exit_sym, NO);
 #endif
-    if ((procflags & NONLEAF) && !(pcs_flags & PCS_NOFP) &&
+    if ( !isleaf && !(pcs_flags & PCS_NOFP) &&
          !(procauxflags & bitoffnaux_(s_irq))) {
         RealRegister fp = frameregs[R_FP];
         unsigned count = (unsigned)bitcount(mask & M_VARREGS);
@@ -3706,6 +3849,7 @@ static void routine_exit(int32 condition, bool to_pc)
                      4*(count + 3L));
             PopRegs(condition, mask);
         }
+        if (mask & M_PC) return;
     } else {
         if (procauxflags & bitoffnaux_(s_irq))
             mask &= M_VARREGS | M_ARGREGS | regbit(R_IP) | M_LR;
@@ -3715,23 +3859,27 @@ static void routine_exit(int32 condition, bool to_pc)
                         (4*realargwordsbelowfp));
             mask &= M_VARREGS;
         }
-        if ((regmask & M_LR) == 0 || argstopopabovefp != 0)
+        if (!saveregs_done)
+            /* nothing */;
+        else if ((regmask & M_LR) == 0 || argstopopabovefp != 0)
         {   mask |= (regmask & M_LR);
             if (mask != 0)    /* AM: for odd circ's in tail recursion */
                 PopRegs(condition, mask);
             if (argstopopabovefp != 0)
                outinstr(OP_RXN | condition | F_ADD | F_RD(sp) | F_RN(sp) |
                         (4*argstopopabovefp));
-
-            if (to_pc && !(procauxflags & bitoffnaux_(s_irq)))
-                outinstr(OP_RXR | condition | F_MOV | F_RD(R_PC) | R_LR |
-                         ((pcs_flags & PCS_CALLCHANGESPSR) ? 0 : F_SCC));
         }
-        else
+        else {
             PopRegs(condition, mask | ldm_link);
+            if (ldm_link & M_PC) return;
+        }
+    }
+    if (to_pc) {
         if (procauxflags & bitoffnaux_(s_irq))
-            outinstr(OP_RXN | condition | F_SUB | F_RD(R_PC) | F_RN(R_LR) |
-                     F_SCC | 4);
+            outinstr(OP_RXN | condition | F_SUB | F_RD(R_PC) | F_RN(R_LR) | F_SCC | 4);
+        else
+            outinstr(OP_RXR | condition | F_MOV | F_RD(R_PC) | R_LR |
+                     ((pcs_flags & PCS_CALLCHANGESPSR) ? 0 : F_SCC));
     }
 }
 
@@ -3809,10 +3957,10 @@ static void conditional_branch_to(int32 condition,
 
 /* Exported routines...                                               */
 
-void show_instruction(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void show_instruction(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {   int32 dataflow = op & J_DEADBITS;
     static int32 cond = Q_AL;
-    int32 newcond = 1;
+    int32 newcond = 1, peep = 0;
     op &= ~(J_DEADBITS|J_ALIGNMENT);    /* remove dataflow bits         */
 /* While code is still in flux, we assume all STRW's coming here have   */
 /* J_ALIGN4&J_ALIGNWR set...                                            */
@@ -3854,6 +4002,7 @@ void show_instruction(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
         switch (op & ~Q_MASK) {
         case J_ENTER: case J_ENDPROC: case J_LABEL:
             newcond = Q_AL; flush = YES; break;
+        case J_SAVE:
         case J_STACK: case J_INFOLINE: case J_INFOBODY: case J_INFOSCOPE:
         case J_OPSYSK: case J_CALLK: case J_CALLR: case J_CALLI:
         case J_CASEBRANCH: case J_BXX:
@@ -3862,10 +4011,31 @@ void show_instruction(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
             flush = YES; break;
         case J_CONDEXEC:
             newcond = op & Q_MASK; /*flush = YES; */ break;
+        case J_BINRK: case J_BINRR:
+            if (r4.i & B_S) peep |= P_CMPZ;
+            if (r4.i & B_NORM)
+            {   switch (r4.i & B_CLASS)
+                {   case B_DP:
+                        switch (r4.i & B_DP_OP)
+                        {   case B_RSB:
+                                if (op == J_BINRK && m.i == 0)
+                                {   int32 df = dataflow;
+                                    op = J_NEGR;
+                                    m = r2;
+                                    r2.rr = GAP;
+                                    dataflow &= ~(J_DEAD_R2 | J_DEAD_R3);
+                                    if (df & J_DEAD_R2) dataflow |= J_DEAD_R3;
+                                }
+                                break;
+                        }
+                        break;
+                }
+            }
+            break;
         }
         {   PendingOp cur;
-            cur.op = op; cur.r1 = r1.rr; cur.r2 = r2.rr; cur.m = m.i;
-            cur.r4 = 0; cur.peep = 0; cur.dataflow = dataflow;
+            cur.ic.op = op; cur.ic.r1 = r1; cur.ic.r2 = r2; cur.ic.m = m;
+            cur.ic.r4 = r4; cur.peep = peep; cur.dataflow = dataflow;
             cur.cond = cond;
             peephole_op(&cur, flush);
             if (flush) ldm_flush();
@@ -3880,7 +4050,7 @@ void branch_round_literals(LabelNumber *m)
     int32 c = condition_mask;
     PendingOp p;
     condition_mask = C_ALWAYS;   /* in case conditional instructions */
-    p.op = J_B; p.r1 = p.r2 = p.r4 = GAP; p.m = (int32)m;
+    p.ic.op = J_B; p.ic.r1.rr = p.ic.r2.rr = p.ic.r4.rr = GAP; p.ic.m.l = m;
     p.peep = p.dataflow = 0;
     show_inst_direct(&p);
     condition_mask = c;
@@ -3947,9 +4117,170 @@ int32 target_inlinable(Binder *b, int32 nargs)
     return 0;
 }
 
+#define expand_out(op,r1,r2,r3,r4) \
+    { VRegInt vr1,vr2,vr3,vr4; \
+      vr1.i = r1; vr2.i = r2; vr3.i = r3; vr4.i = r4; \
+      expand_jop_macro(op,vr1,vr2,vr3,vr4); \
+    }
+
+#define set_cond_execution(cond)        \
+ { VRegInt vr1, vr2, vm, vr4;           \
+   vr1.r = vr2.r = GAP;                 \
+   vm.i = vr4.i = 0;                    \
+   expand_jop_macro(J_CONDEXEC|(cond),vr1, vr2, vm, vr4); }
+
+bool target_expand(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4, int32 *blkflags)
+{
+    //bool did_call = NO;
+
+    if (op != J_CALLK && op != J_TAILCALLK) return NO;
+
+    if (!target_lsbytefirst) return NO; // Fuck it
+
+    if (r1.r != R_A1) return NO;
+
+    if (m.b == (Binder *)sim.lltol)
+    {
+    }
+    else if (m.b == (Binder *)sim.llfromu)
+    {   expand_out(J_MOVK,                      R_A2, GAP,  0,    0);
+    }
+    else if (m.b == (Binder *)sim.llfroml)
+    {   expand_out(J_SHRK+J_SIGNED,             R_A2, R_A1, 31,   0);
+    }
+    else if (m.b == (Binder *)sim.lladd)
+    {   expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_ADD|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A2, R_A2, R_A4, B_DP|B_ADC);
+    }
+    else if (m.b == (Binder *)sim.lladdlu)
+    {   expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_ADD|B_S);
+        expand_out(J_BINRK+J_DEAD_R2,           R_A2, R_A2, 0,    B_DP|B_ADC);
+    }
+    else if (m.b == (Binder *)sim.lladdls)
+    {   expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A3, B_DP|B_ADD|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3+((SHIFT_RIGHT+SHIFT_ARITH+31)<<J_SHIFTPOS),
+                                                R_A2, R_A2, R_A3, B_DP|B_ADC);
+    }
+    else if (m.b == (Binder *)sim.lladduu)
+    {   expand_out(J_MOVK,                      R_A3, GAP,  0,    0);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_ADD|B_S);
+        expand_out(J_BINRK+J_DEAD_R2,           R_A2, R_A3, 0,    B_DP|B_ADC);
+    }
+    else if (m.b == (Binder *)sim.lladdss)
+    {   expand_out(J_SHRK+J_SIGNED,             R_A3, R_A1, 31,   0);
+        expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A3, B_DP|B_ADD|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3+((SHIFT_RIGHT+SHIFT_ARITH+31)<<J_SHIFTPOS),
+                                                R_A2, R_A3, R_A2, B_DP|B_ADC);
+    }
+    else if (m.b == (Binder *)sim.llsub)
+    {   expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_SUB|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A2, R_A2, R_A4, B_DP|B_SBC);
+    }
+    else if (m.b == (Binder *)sim.llsublu)
+    {   expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_SUB|B_S);
+        expand_out(J_BINRK+J_DEAD_R2,           R_A2, R_A2, 0,    B_DP|B_SBC);
+    }
+    else if (m.b == (Binder *)sim.llsubls)
+    {   expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A3, B_DP|B_SUB|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3+((SHIFT_RIGHT+SHIFT_ARITH+31)<<J_SHIFTPOS),
+                                                R_A2, R_A2, R_A3, B_DP|B_SBC);
+    }
+    else if (m.b == (Binder *)sim.llsubuu)
+    {   expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A2, B_DP|B_SUB|B_S);
+        expand_out(J_BINRK+J_DEAD_R2+J_DEAD_R3, R_A2, R_A2, R_A2, B_DP|B_SBC);
+    }
+    else if (m.b == (Binder *)sim.llsubss)
+    {   expand_out(J_SHRK+J_SIGNED,             R_A3, R_A1, 31,   0);
+        expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A3, B_DP|B_SUB|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3+((SHIFT_RIGHT+SHIFT_ARITH+31)<<J_SHIFTPOS),
+                                                R_A2, R_A3, R_A2, B_DP|B_SBC);
+    }
+    else if (m.b == (Binder *)sim.llrsb)
+    {   expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_RSB|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A2, R_A2, R_A4, B_DP|B_RSC);
+    }
+    else if (m.b == (Binder *)sim.llrsblu)
+    {   expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_RSB|B_S);
+        expand_out(J_BINRK+J_DEAD_R2,           R_A2, R_A2, 0,    B_DP|B_RSC);
+    }
+    else if (m.b == (Binder *)sim.llsubls)
+    {   expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A3, B_DP|B_RSB|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3+((SHIFT_RIGHT+SHIFT_ARITH+31)<<J_SHIFTPOS),
+                                                R_A2, R_A2, R_A3, B_DP|B_RSC);
+    }
+    else if (m.b == (Binder *)sim.llsubuu)
+    {   expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A2, B_DP|B_RSB|B_S);
+        expand_out(J_BINRK+J_DEAD_R2+J_DEAD_R3, R_A2, R_A2, R_A2, B_DP|B_RSC);
+    }
+    else if (m.b == (Binder *)sim.llsubss)
+    {   expand_out(J_SHRK+J_SIGNED,             R_A3, R_A1, 31,   0);
+        expand_out(J_BINRR+J_DEAD_R2,           R_A1, R_A1, R_A3, B_DP|B_RSB|B_S);
+        expand_out(J_BINRR+J_DEAD_R2+J_DEAD_R3+((SHIFT_RIGHT+SHIFT_ARITH+31)<<J_SHIFTPOS),
+                                                R_A2, R_A3, R_A2, B_DP|B_RSC);
+    }
+    else if (m.b == (Binder *)sim.lland)
+    {   expand_out(J_ANDR+J_DEAD_R2+J_DEAD_R3,  R_A1, R_A1, R_A3, 0);
+        expand_out(J_ANDR+J_DEAD_R2+J_DEAD_R3,  R_A2, R_A2, R_A4, 0);
+    }
+    else if (m.b == (Binder *)sim.llor)
+    {   expand_out(J_ORRR+J_DEAD_R2+J_DEAD_R3,  R_A1, R_A1, R_A3, 0);
+        expand_out(J_ORRR+J_DEAD_R2+J_DEAD_R3,  R_A2, R_A2, R_A4, 0);
+    }
+    else if (m.b == (Binder *)sim.lleor)
+    {   expand_out(J_EORR+J_DEAD_R2+J_DEAD_R3,  R_A1, R_A1, R_A3, 0);
+        expand_out(J_EORR+J_DEAD_R2+J_DEAD_R3,  R_A2, R_A2, R_A4, 0);
+    }
+    else if (m.b == (Binder *)sim.llneg)
+    {   expand_out(J_BINRK+J_DEAD_R2,           R_A1, R_A1, 0,    B_DP|B_RSB|B_S);
+        expand_out(J_BINRK+J_DEAD_R2,           R_A2, R_A2, 0,    B_DP|B_RSC);
+    }
+    else if (m.b == (Binder *)sim.llnot)
+    {   expand_out(J_NOTR+J_DEAD_R3,            R_A1, GAP,  R_A1,  0);
+        expand_out(J_NOTR+J_DEAD_R3,            R_A2, GAP,  R_A2,  0);
+    }
+    else if (m.b == (Binder *)sim.llmuluu && arm_arch & ARM_M)
+    {   expand_out(J_MULL+J_UNSIGNED+J_DEAD_R3+J_DEAD_R4, R_A1, R_IP, R_A2, R_A1);
+        expand_out(J_MOVR+J_DEAD_R3,            R_A2, GAP,  R_IP, 0);
+    }
+    else if (m.b == (Binder *)sim.llmulss && arm_arch & ARM_M)
+    {   expand_out(J_MULL+J_SIGNED+J_DEAD_R3+J_DEAD_R4, R_A1, R_IP, R_A2, R_A1);
+        expand_out(J_MOVR+J_DEAD_R3,            R_A2, GAP,  R_IP, 0);
+    }
+    else if (m.b == (Binder *)sim.llmullu && arm_arch & ARM_M)
+    {   expand_out(J_MULL+J_UNSIGNED+J_DEAD_R4, R_A1, R_IP, R_A3, R_A1);
+        expand_out(J_MLAR+J_DEAD_R2+J_DEAD_R3+J_DEAD_R4,  R_A2, R_A2, R_A3, R_IP);
+    }
+    else if (m.b == (Binder *)arg1_(sim.llcmpge))
+    {   expand_out(J_BINRR+J_DEAD_R1+J_DEAD_R2+J_DEAD_R3, R_A1, R_A1, R_A3, B_DP|B_SUB|B_S);
+        expand_out(J_BINRR+J_DEAD_R1+J_DEAD_R2+J_DEAD_R3, R_A2, R_A2, R_A4, B_DP|B_SBC|B_S);
+    }
+    else if (m.b == (Binder *)arg1_(sim.llcmple))
+    {   expand_out(J_BINRR+J_DEAD_R1+J_DEAD_R2+J_DEAD_R3, R_A1, R_A3, R_A1, B_DP|B_SUB|B_S);
+        expand_out(J_BINRR+J_DEAD_R1+J_DEAD_R2+J_DEAD_R3, R_A2, R_A4, R_A2, B_DP|B_SBC|B_S);
+    }
+    else if (m.b == (Binder *)arg1_(sim.llcmpu))
+    {   expand_out(J_CMPR+J_DEAD_R2+J_DEAD_R3+Q_EQ, GAP, R_A2, R_A4, 0);
+        set_cond_execution(Q_EQ);
+        expand_out(J_CMPR+J_DEAD_R2+J_DEAD_R3+Q_EQ, GAP, R_A1, R_A3, 0);
+        set_cond_execution(Q_AL);
+    }
+    else
+        return NO;
+
+    if (op == J_CALLK)
+    {   if (/*!did_call &&*/ !(*blkflags & BLK2CALL)) *blkflags &= ~BLKCALL;
+    }
+    else if (op == J_TAILCALLK)
+    {   *blkflags &=~ BLK0EXIT;
+        /*if (did_call) *blkflags |= BLKCALL;*/
+    }
+
+    return YES;
+}
+
 bool alterscc(Icode *ic)
 {
-    return setspsr(ic->op & J_TABLE_BITS, ic->m.i);
+    return setspsr(ic->op & J_TABLE_BITS, ic->m.i, ic->r4.i);
 }
 
 #define TYPESPEC_DOUBLE typespecmap_(te_double)

@@ -35,6 +35,7 @@
 #include "xrefs.h"          /* for LIT_LABEL */
 #include "errors.h"
 #include "aeops.h"
+#include "inline.h"
 
 #ifdef PASCAL
 /* for production qualify compilers prefer syserr() over assert().      */
@@ -202,7 +203,7 @@ default:
 
 Binder *global_mk_binder(Binder *b, Symstr *c, SET_BITMAP d, TypeExpr *e)
 {
-    int32 size = d & (bitofstg_(s_virtual)|b_globalregvar) ?
+    int32 size = d & (bitofstg_(s_virtual)|b_globalregvar|bitofstg_(s_auto)) ?
                      sizeof(Binder) : SIZEOF_NONAUTO_BINDER;
     Binder *p = (Binder*) GlobAlloc(SU_Bind, size);
  /*
@@ -228,6 +229,8 @@ Binder *global_mk_binder(Binder *b, Symstr *c, SET_BITMAP d, TypeExpr *e)
 #endif
     if (size == sizeof(Binder))
         bindxx_(p) = GAP;
+    if (d & bitofstg_(s_auto))
+        p->bindmcrep = NOMCREPCACHE;
     return p;
 }
 
@@ -383,6 +386,7 @@ TypeExpr *globalize_typeexpr(TypeExpr *t)
     {
 case t_content:
 case t_ref:
+case t_vla:
         {   TypeExpr *gt = globalize_typeexpr(typearg_(t));
             if (glob_incache)
             {   TypeExpr temp;
@@ -396,13 +400,27 @@ case t_ref:
             /* note that glob_incache is set correctly */
         }
 case t_subscript:
+        {   Expr *a = typesubsize_(t), *g;
+            if (a == 0)
+                g = 0;
+            else if (h0_(a) == s_integer)
+                g = globalize_int(evaluate(a));
+            else
+            {   g = 0;
+                ///* need to create invisible local size variable */
+                //DeclRhsList *d = mkDeclRhsList(0, 0, bitofstg_(s_auto));
+                //d->declname = gensymval(0);
+                //d->decltype = te_int;
+                //g = (Expr *) instate_declaration(d, GLOBALSCOPE);
+                //typesubsize_(t) = g;
+                /* Er, need to assign a to g */
+            }
             ans = (TypeExpr*) global_list4(SU_Type, t_subscript,
                                 globalize_typeexpr(typearg_(t)),
-                                typesubsize_(t)==0 ? (Expr *)0 :
-                                    globalize_int(evaluate(typesubsize_(t))),
-                                0);
+                                g, 0);
             glob_incache = 0;
             return ans;
+        }
 case t_fnap:
             /* the DeclRhsList of formals could well become a ClassMember */
             ans = g_mkTypeExprfn(t_fnap,
@@ -1075,6 +1093,29 @@ Binder *implicit_decl(Symstr *a, int32 fn)
     return topbindingchain;
 }
 
+Binder *declare_funcname(Symstr *a, const char *name)
+{
+    Binder *b;
+    #if 0 /* no need - ISO permits undefined behaviour */
+    if ((b = find_scopemember(a, local_scope->scopemems)) != NULL)
+    {   cc_err(bind_err_duplicate_definition, a);
+        binduses_(b) |= u_referenced;
+    }
+    #endif
+    b = mk_binder(a, bitofstg_(s_static)|b_undef,
+                  mk_typeexprsubscript(
+                               primtype_(bitoftype_(s_char)|bitoftype_(s_const)),
+                               mkintconst(te_int, strlen(name)+1, 0), 0
+                              )
+                 );
+    add_local_binder(b);
+#ifdef CONST_DATA_IN_CODE
+    binduses_(b) |= u_constdata;
+#endif
+    return b;
+}
+
+
 /*
  * Used below and in instate_declaration for tentative Ansi definitions.
  * To say that this code is NASTY is a gross understatement. In fact,
@@ -1401,11 +1442,27 @@ static Binder *instate_declaration_1(DeclRhsList *d, int declflag)
                 typefnaux_(d->decltype).flags |=
                     typefnaux_(b->bindtype).flags &
                     ~typefnaux_(d->decltype).flags;
+#ifdef CPLUSPLUS
                 if ((d->declstg & bitofstg_(s_inline)) &&
                     (bindstg_(b) & b_maybeinline))
                         bindstg_(b) = (bindstg_(b) & ~bitofstg_(s_extern)) |
                             bitofstg_(s_static);
                 bindstg_(b) &= ~b_maybeinline;
+#else
+                /* Spot any non-"inline without extern" declarations (before defn) */
+                if ((bindstg_(b) & b_maybeinline) !=
+                    (d->declstg & b_maybeinline) &&
+                    !Inline_FindFn(d->declname))
+                {   bindstg_(b) &= ~b_maybeinline;
+                    d->declstg &= ~b_maybeinline;
+                }
+                if (d->declstg & bitofstg_(s_inline) &&
+                    !(bindstg_(b) & bitofstg_(s_inline)))
+                {   bindstg_(b) |= bitofstg_(s_inline);
+                    if (!(bindstg_(b) & b_undef))
+                        cc_warn(bind_warn_inline_ineffective);
+                }
+#endif
 /* /* @@@ old-style bit here. */
             }
             switch (equivtype(b->bindtype, d->decltype))
@@ -1497,6 +1554,7 @@ static Binder *instate_declaration_1(DeclRhsList *d, int declflag)
             /* as extern (presumably in a header) may be DEFINED extern".  */
             if ((d->declstg & bitofstg_(s_extern)) &&
                 (!(d->declstg & b_undef) | (d->declstg & b_omitextern)) &&
+                !(d->declstg & b_maybeinline) &&
                 sv != mainsym)
                 cc_warn(bind_warn_not_in_hdr, sv);
         }
@@ -1507,6 +1565,11 @@ static Binder *instate_declaration_1(DeclRhsList *d, int declflag)
             if (h0_(t) != t_fnap || !equivtype(typearg_(t), te_int))
                 if (!(feature & FEATURE_PCC) || (feature & FEATURE_FUSSY))
                     cc_warn(bind_warn_main_not_int);
+            if (d->declstg & bitofstg_(s_inline))
+            {   d->declstg &=~ bitofstg_(s_inline)|b_maybeinline;
+                bindstg_(b) &=~ bitofstg_(s_inline)|b_maybeinline;
+                cc_rerr(bind_rerr_main_inline);
+            }
         }
 
         if (feature & FEATURE_PCC)
@@ -1823,11 +1886,16 @@ void bind_cleanup(void)
                     if (bindstg_(b)&b_fnconst)
                         cc_pccwarn(bind_err_undefined_static, b);
                 }
-                else if (!(binduses_(b) & u_referenced) &&
-                         !(bindstg_(b) & bitofstg_(s_inline)))
+                else if (!(binduses_(b) & u_referenced)
+#ifdef CPLUSPLUS
+                         && !(bindstg_(b) & bitofstg_(s_inline))
+#endif
+                        )
 /* @@@ of course we shouldn't generate unreferenced inline fns!         */
                     cc_warn(bind_warn_static_not_used, b);
             }
+        else if ((bindstg_(b) & (bitofstg_(s_inline)|b_undef)) == (bitofstg_(s_inline)|b_undef))
+            cc_rerr(bind_err_undefined_inline, b);
         else if (feature & FEATURE_NOUSE)
         {   if (!(binduses_(b) & u_referenced) &&
                 !(bindstg_(b) & bitofstg_(s_typedef)))
@@ -1896,6 +1964,7 @@ static void init_sym_name_table(void)
 #ifdef EXTENSION_VALOF
     sym_name_table[s_valof]       = errname_valof;       /* valof */
 #endif
+    sym_name_table[s_cmplit]      = errname_cmplit;      /* <compound literal> */
     sym_name_table[s_ellipsis]    = errname_ellipsis;    /* ... */
     sym_name_table[s_eol]         = errname_eol;         /* \\n */
     sym_name_table[s_eof]         = errname_eof;         /* <eof> */

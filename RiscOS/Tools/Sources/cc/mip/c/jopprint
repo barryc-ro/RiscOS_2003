@@ -20,6 +20,7 @@
 #endif
 #include "globals.h"
 #include "cgdefs.h"
+#include "store.h"
 #define DEFINE_JOPTABLE 1
 #include "jopcode.h"
 #include "aeops.h"
@@ -48,6 +49,7 @@ case Q_GE:  op = "(if GE)"; break;
 case Q_LT:  op = "(if LT)"; break;
 case Q_GT:  op = "(if GT)"; break;
 case Q_LE:  op = "(if LE)"; break;
+case Q_AL|J_SIGNED:                  /* bits moved, rationalise */
 case Q_AL|J_UNSIGNED:                /* bits moved, rationalise */
 case Q_AL:  op = "       "; break;
 case Q_NOT: op = "(never)"; break;
@@ -60,7 +62,7 @@ case Q_FG:  op = "(if >)"; break;
 case Q_FU:  op = "(if ?)"; break;
 case Q_FLE: op = "(if <=)"; break;
 case Q_FGE: op = "(if >=)"; break;
-case Q_FUE: op = "(if ?=)"; break
+case Q_FUE: op = "(if ?=)"; break;
 case Q_FUL: op = "(if ?<)"; break;
 case Q_FUG: op = "(if ?>)"; break;
 case Q_FLG: op = "(if <>)"; break;
@@ -77,7 +79,7 @@ case Q_FUGEX: op = "(if ?>=)*"; break;
 case Q_FULEX: op = "(if ?<=)*"; break;
 case Q_FUGX: op = "(if ?>)*"; break;
 case Q_FULX: op = "(if ?<)*"; break;
-case Q_FXXXX: op = "(if XXX)*"); break;
+case Q_FXXXX: op = "(if XXX)*"; break;
 default:    /*op = "??????????";
             sprintf(op, "Q_%.5lx", (long)w); bug fix for RISC OS build */
             {   static char opbuf[12];
@@ -113,15 +115,54 @@ extern void jopprint_opname(J_OPCODE o)
 #endif
 }
 
+typedef struct BindListIndex BindListIndex;
+struct BindListIndex {
+    int32 h0;
+    BindListIndex *next;
+    Binder *binder;
+    BindList *bindlist;
+};
+
+static int32 bindlist_n;
+static BindListIndex *bindlist_index;
+
 static void pr_bindlist(BindList *p)
 {
     int ch = '{';
-    for (; p!=NULL; p = p->bindlistcdr)
-    { /* To prevent ncc going bang when compiled with pcc */
-        cc_msg("%c$b", ch, p->bindlistcar);
-        ch = ',';
+    for (; p!=NULL; p = p->bindlistcdr) {
+        Binder *b = p->bindlistcar;
+        if (bindlist_n != 0) {
+            if (h0_(b) == s_binder) {
+                if (ch == '{') {
+                    BindListIndex *bi = (BindListIndex *)SynAlloc(sizeof(BindListIndex));
+                    h0_(bi) = ++bindlist_n;
+                    bi->binder = b;
+                    bi->next = bindlist_index;
+                    bi->bindlist = p;
+                    bindlist_index = bi;
+                    p->bindlistcar = (Binder *)bi;
+                    cc_msg("%c#%ld= $b", ch, bindlist_n ^ 0x80000000L, b);
+                } else
+                    cc_msg("%c$b", ch, b);
+                ch = ',';
+            } else {
+                cc_msg("%c#%ld#}", ch, h0_(b) ^ 0x80000000L);
+                return;
+            }
+        } else {
+            cc_msg("%c$b", ch, b);
+            ch = ',';
+        }
     }
     cc_msg("%s", (ch=='{') ? "{}" : "}");
+}
+
+static void pr_bindlist_head(BindList *p, int32 n)
+{
+    int ch = '{';
+    for (; --n >= 0; p = p->bindlistcdr, ch = ',')
+        cc_msg("%c$b", ch, p->bindlistcar);
+    cc_msg("%c*}", ch);
 }
 
 static void pr_argdesc(int32 d)
@@ -141,7 +182,7 @@ static void pr_argdesc(int32 d)
     if (d & K_VACALL) cc_msg("...");     /* call vararg fn   */
 }
 
-void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {
         cc_msg("%8s", condition_name(op & Q_MASK));
         jopprint_opname(op);
@@ -184,9 +225,23 @@ void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
         else if (op==J_STRING)
             pr_stringsegs(m.s);
         else if (op==J_SETSPENV)
-        {   pr_bindlist(m.bl);
-            cc_msg(" from ");
-            pr_bindlist(r2.bl);
+        {   if (bindlist_n == 0 && m.bl != NULL && r2.bl != NULL)
+            {   int32 lm = length((List *)m.bl);
+                int32 lr2 = length((List *)r2.bl);
+                if (lm > lr2) {
+                    pr_bindlist_head(m.bl, lm - lr2);
+                    cc_msg(" from ");
+                    pr_bindlist(r2.bl);
+                } else {
+                    pr_bindlist(m.bl);
+                    cc_msg(" from ");
+                    pr_bindlist_head(r2.bl, lr2 - lm);
+                }
+            } else {
+                pr_bindlist(m.bl);
+                cc_msg(" from ");
+                pr_bindlist(r2.bl);
+            }
         }
         else if (op==J_SETSPGOTO)
         {   cc_msg("L%ld from ", (long)lab_xname_(m.l));
@@ -197,7 +252,9 @@ void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
             else cc_msg("%ld", (long)m.r);
         }
         else if ((op & ~Q_MASK)==J_B || op == J_BXX || op == J_LABEL)
-            cc_msg("L%ld", (long)lab_xname_(m.l));
+        {   if (m.l == RETLAB) cc_msg("RETLAB");
+            else cc_msg("L%ld", (long)lab_xname_(m.l));
+        }
         else switch (op)
         {   case J_MOVDK: case J_CMPDK:
             case J_ADDDK: case J_SUBDK:
@@ -208,12 +265,16 @@ void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
             case J_ADCONF:case J_ADCOND:
                 cc_msg("%s", m.f->floatstr);
                 break;
+            case J_ADCONLL:
+                cc_msg("$L", m);
+                break;
             case J_ENDPROC:
             case J_NOOP:
             case J_LOADSB:
                 cc_msg("-");
                 break;
             case J_ENTER:
+            case J_SAVE:
                 pr_argdesc(m.i);
                 break;
             default:
@@ -221,11 +282,19 @@ void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
                 if (m.i > 1000 || m.i < -1000) cc_msg("  [%#lx]", (long)m.i);
                 break;
         }
+
+        if (uses_r4(op))
+        {    if (r4.r == GAP) cc_msg("<**missing register**>");
+             else cc_msg(", %ld", (long)r4.r);
+        }
+        else if (r4.i != 0)
+            cc_msg(" {%lx}", (long)r4.i);
+
 }
 
-void print_jopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void print_jopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {   cc_msg("        ");
-    print_jopcode_1(op, r1, r2, m);
+    print_jopcode_1(op, r1, r2, m, r4);
     cc_msg("\n");
     if (op == J_CASEBRANCH || op == J_THUNKTABLE)
     {   LabelNumber **v = r2.lnn;
@@ -233,58 +302,87 @@ void print_jopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
         r1.r = r2.r = GAP;
         for (i=0; i<ncase; i++)
         {   m.l = v[i];
-            print_jopcode(J_BXX, r1, r2, m);
+            print_jopcode(J_BXX, r1, r2, m, r4);
         }
     }
 }
 
-void flowgraf_print(const char *mess)
-{   BlockHead *p;
-    VRegInt gap, m; gap.r = GAP;
-    cc_msg("\n\n%s\n\n", mess);
-    for (p = top_block; p != NULL; p = blkdown_(p)) {
-        Icode    *c = blkcode_(p), *limit;
-        cc_msg("L%li:\n", (long)lab_name_(blklab_(p)));
-        if (c == (Icode *)DUFF_ADDR && blklength_(p) > 0) {
-            cc_msg("block eliminated by crossjumping\n\n");
-            continue;
+void flowgraf_printblock(BlockHead *p, bool deadbits)
+{
+    VRegInt gap, m, zero;
+    Icode    *c = blkcode_(p), *limit;
+    gap.r = GAP; zero.i = 0;
+    cc_msg("L%li: \n", (long)lab_name_(blklab_(p)));
+    if (c == (Icode *)DUFF_ADDR && blklength_(p) > 0) {
+        cc_msg("block eliminated by crossjumping\n\n");
+        return;
+    }
+    for (limit = c + blklength_(p); c < limit; ++c) {
+        if (deadbits)
+          cc_msg("%c%c%c%c", (c->op & J_DEAD_R1 ? '1': '-'),
+                             (c->op & J_DEAD_R2 ? '2': '-'),
+                             (c->op & J_DEAD_R3 ? '3': '-'),
+                             (c->op & J_DEAD_R4 ? '4': '-'));
+        print_jopcode(c->op & ~J_DEADBITS, c->r1, c->r2, c->m, c->r4);
+    }
+    if (!(blkflags_(p) & BLKSWITCH)) {
+        if (blkflags_(p) & BLK2EXIT) {
+            if (deadbits) cc_msg("    ");
+            m.l = blknext1_(p);
+            print_jopcode(J_B + (blkflags_(p) & Q_MASK), gap, gap, m, zero);
         }
-        for (limit = c + blklength_(p); c < limit; ++c)
-            print_jopcode(c->op, c->r1, c->r2, c->m);
-        if (!(blkflags_(p) & BLKSWITCH)) {
-            if (blkflags_(p) & BLK2EXIT) {
-                m.l = blknext1_(p);
-                print_jopcode(J_B + (blkflags_(p) & Q_MASK), gap, gap, m);
-            }
-            if (!(blkflags_(p) & BLK0EXIT)) {
-                m.l = blknext_(p);
-                print_jopcode(J_B, gap, gap, m);
-            }
+        if (!(blkflags_(p) & BLK0EXIT)) {
+            if (deadbits) cc_msg("    ");
+            m.l = blknext_(p);
+            print_jopcode(J_B, gap, gap, m, zero);
         }
     }
+}
+
+static void flowgraf_print_start(void) {
+    bindlist_n = 0x80000000L;
+    bindlist_index = NULL;
+}
+
+static void flowgraf_print_end(void) {
+    BindListIndex *p = bindlist_index;
+    for (; p != NULL; p = p->next)
+        p->bindlist->bindlistcar = p->binder;
+
+    bindlist_index = NULL;
+    bindlist_n = 0;
+}
+
+void flowgraf_print(const char *mess, bool deadbits)
+{   BlockHead *p;
+    cc_msg("\n\n%s\n\n", mess);
+    flowgraf_print_start();
+    for (p = top_block; p != NULL; p = blkdown_(p))
+        flowgraf_printblock(p, deadbits);
+    flowgraf_print_end();
 }
 
 #else
-void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void print_jopcode_1(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {
-    IGNORE(op); IGNORE(r1); IGNORE(r2); IGNORE(m);
+    IGNORE(op); IGNORE(r1); IGNORE(r2); IGNORE(m); IGNORE(r4);
 }
-void print_jopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m)
+void print_jopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4)
 {
-    IGNORE(op); IGNORE(r1); IGNORE(r2); IGNORE(m);
+    IGNORE(op); IGNORE(r1); IGNORE(r2); IGNORE(m); IGNORE(r4);
 }
-void flowgraf_print(const char *mess)
+void flowgraf_print(const char *mess, bool deadbits)
 {
     IGNORE(mess);
 }
 #endif
 
 #ifdef ENABLE_REGS
-void print_xjopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m,
+void print_xjopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4,
                     char *fmt, ...)
 {   va_list ap;
     va_start(ap, fmt);
-    print_jopcode_1(op, r1, r2, m);
+    print_jopcode_1(op, r1, r2, m, r4);
     cc_msg(" ");
     _vfprintf(stderr, fmt, ap);
     cc_msg("\n");
@@ -292,10 +390,10 @@ void print_xjopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m,
     /* branch tables of CASEBRANCH as it never calls it with such things */
 }
 #else
-void print_xjopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m,
+void print_xjopcode(J_OPCODE op, VRegInt r1, VRegInt r2, VRegInt m, VRegInt r4,
                     char *fmt, ...)
 {
-    IGNORE(op); IGNORE(r1); IGNORE(r2); IGNORE(m); IGNORE(fmt);
+    IGNORE(op); IGNORE(r1); IGNORE(r2); IGNORE(m); IGNORE(r4); IGNORE(fmt);
 }
 #endif
 
