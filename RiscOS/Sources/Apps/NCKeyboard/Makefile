@@ -181,15 +181,17 @@ o.dirs:
 
 resources:
 	${MKDIR} ${RESAPP}
-	TokenCheck LocalUserIFRes:Messages
-	${CP} LocalUserIFRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-	${CP} LocalUserIFRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
-	${CP} LocalUserIFRes:Messages ${RESAPP}.Messages ${CPFLAGS}
-	IfThere LocalUserIFRes:Sprites Then \
-		${CP} LocalUserIFRes:Sprites ${RESAPP}.Sprites ${CPFLAGS}
-	IfThere LocalUserIFRes:TVSprs Then \
-		${CP} LocalUserIFRes:TVSprs ${RESAPP}.TVSprs ${CPFLAGS}
-	${CP} LocalUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
+	Set NCKeyboardUserIFRes$Path Resources.${UI_VARIANT}.${Locale}.,Resources.${UserIF}.${Locale}.,Resources.${UserIF}.UK.
+	TokenCheck NCKeyboardUserIFRes:Messages
+	${CP} NCKeyboardUserIFRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
+	${CP} NCKeyboardUserIFRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
+	${CP} NCKeyboardUserIFRes:Messages ${RESAPP}.Messages ${CPFLAGS}
+	IfThere NCKeyboardUserIFRes:Sprites Then \
+		${CP} NCKeyboardUserIFRes:Sprites ${RESAPP}.Sprites ${CPFLAGS}
+	IfThere NCKeyboardUserIFRes:TVSprs Then \
+		${CP} NCKeyboardUserIFRes:TVSprs ${RESAPP}.TVSprs ${CPFLAGS}
+	${CP} NCKeyboardUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
+	UnSet NCKeyboardUserIFRes$Path
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
