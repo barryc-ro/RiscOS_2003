@@ -73,7 +73,8 @@ OBJS =\
  o.attributes\
  o.attrvenrs\
  o.object\
- o.ol
+ o.ol\
+ o.URLModule
  
 OBJSZ =\
  z.display\
@@ -87,7 +88,8 @@ OBJSZ =\
  z.attributes\
  z.attrvenrs\
  z.object\
- z.ol
+ z.ol\
+ z.URLModule
 
 
 #
