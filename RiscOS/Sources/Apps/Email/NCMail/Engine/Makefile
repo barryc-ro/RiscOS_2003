@@ -162,7 +162,6 @@ INCLUDES        = -Itbox:,C:,<Lib$Dir>,<Lib$Dir>.Email.Mailbox
 
 FILES = \
  $(LPATH)!Run \
- $(LPATH)Res \
  $(TARGET)
 
 # Include these in the ROM module
@@ -285,7 +284,6 @@ install_rom: $(ROM_MODULE)
 
 install_common: $(FILES)
         @echo
-        $(CP) $(LPATH)Res                       ^.Build.$(INSTDIR).Res      $(CPFLAGS)
 
 install: install_common
         $(CP) $(LPATH)!Run              ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
@@ -302,7 +300,6 @@ resources:
         $(MKDIR) $(RESDIR)
         $(MKDIR) $(RESAPP)
         $(CP) $(LPATH)ROM.!Run          $(RESAPP).!Run          $(CPFLAGS)
-        $(CP) $(LPATH)Res               $(RESDIR).Res           $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Resource files copied to Messages module
 
