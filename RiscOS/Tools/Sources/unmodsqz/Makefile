@@ -44,7 +44,7 @@ SQZFLAGS = -f
 #
 # Include files
 #
-INCLUDES=	-IC:
+INCLUDES=	-IC: -IC:CLX
 
 #
 # Libraries
@@ -52,18 +52,19 @@ INCLUDES=	-IC:
 CLIB		= Clib:o.Stubs
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
+CLXLIB          = C:CLX.o.CLXlib
 
 DEPEND		= -depend !Depend
 ASFLAGS		= ${DEPEND} ${THROWBACK}
 CFLAGS		= -c -ffah ${INCLUDES} ${DEPEND} ${THROWBACK}
 LDFLAGS		= -aif
 
-RAM_OBJS	= o.UnSqueeze o.unmodsqz
+RAM_OBJS	= o.unsqueezec o.unmodsqz
 
 #
 # Rule patterns
 #
-.c.o:;		${CC} ${CFLAGS} -o $@ $<
+.c.o:;		${CC} ${CFLAGS} -DTARGET_IS_RISCOS -o $@ $<
 .s.o:;		${AS} ${ASFLAGS} -o $@ $<
 
 #
@@ -90,7 +91,7 @@ export:
 #
 ${RAM_MODULE}:	${RAM_OBJS} ${CLIB}
 	${MKDIR} aif
-	${LD} ${LDFLAGS} -o $@ ${RAM_OBJS} ${CLIB}
+	${LD} ${LDFLAGS} -o $@ ${RAM_OBJS} ${CLXLIB} ${CLIB}
 	${SQUEEZE} ${SQZFLAGS} $@
         Access $@ RW/R
 
