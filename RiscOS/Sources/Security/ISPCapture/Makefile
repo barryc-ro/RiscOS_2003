@@ -46,7 +46,7 @@ INCLUDES= -IC: -ITCPIPLibs:
 # use ENABLE_DEBUGGING if you want to enable debugging!
 # use LOCAL_URL_PATHS to get pages from ispc: instead of ispcScr:
 # use DIAL_ON_COMPLETION to dial immediately ISPCapture is completed
-  (orthogonal behaviour is to return to the connect to service screen)
+#  (orthogonal behaviour is to return to the connect to service screen)
 
 # debugging
 
