@@ -44,7 +44,7 @@ DFLAGS   = -DKERNEL -DINET -DGATEWAY -DCOMPAT_43 -DCOMPAT_OLDSOCK \
            -DDIRECTED_BROADCAST -DMULTICAST -DMROUTING -DIPFIREWALL \
            -DIPFIREWALL_VERBOSE #-DFLASHY_SCROLLLOCK -DTCPTDEBUG -DTCPDEBUG \
            #-DDIAGNOSTIC -DDEBUG_MTUDISC
-INCLUDES = -ITCPIPLibs:
+INCLUDES = -ITCPIPLibs:,C:
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 
@@ -124,7 +124,7 @@ all: ${TARGET}
 	@echo ${COMPONENT}: Module built (Relocatable)
 
 ${TARGET}: ${OBJS} ${CLIB}
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB} -map
         ${MODSQZ} $@
 
 rom: ${ROM_MODULE}
@@ -151,70 +151,14 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
               -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        |truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.if_ethersu:	^.net.c.if_ethersu
-o.if_ethersu:	TCPIPLibs:sys.h.param
-o.if_ethersu:	TCPIPLibs:sys.h.types
-o.if_ethersu:	TCPIPLibs:sys.h.cdefs
-o.if_ethersu:	TCPIPLibs:machine.h.endian
-o.if_ethersu:	TCPIPLibs:machine.h.ansi
-o.if_ethersu:	TCPIPLibs:machine.h.types
-o.if_ethersu:	TCPIPLibs:sys.h.syslimits
-o.if_ethersu:	TCPIPLibs:sys.h.cdefs
-o.if_ethersu:	TCPIPLibs:sys.h.errno
-o.if_ethersu:	TCPIPLibs:sys.h.time
-o.if_ethersu:	TCPIPLibs:sys.h.resource
-o.if_ethersu:	TCPIPLibs:sys.h.types
-o.if_ethersu:	TCPIPLibs:sys.h.ucred
-o.if_ethersu:	TCPIPLibs:sys.h.uio
-o.if_ethersu:	TCPIPLibs:sys.h.rtprio
-o.if_ethersu:	TCPIPLibs:sys.h.signal
-o.if_ethersu:	TCPIPLibs:machine.h.signal
-o.if_ethersu:	TCPIPLibs:machine.h.param
-o.if_ethersu:	TCPIPLibs:machine.h.limits
-o.if_ethersu:	TCPIPLibs:sys.h.systm
-o.if_ethersu:	TCPIPLibs:machine.h.cpufunc
-o.if_ethersu:	TCPIPLibs:machine.h.stdarg
-o.if_ethersu:	TCPIPLibs:sys.h.kernel
-o.if_ethersu:	TCPIPLibs:sys.h.malloc
-o.if_ethersu:	TCPIPLibs:sys.h.mbuf
-o.if_ethersu:	TCPIPLibs:sys.h.protosw
-o.if_ethersu:	TCPIPLibs:sys.h.socket
-o.if_ethersu:	TCPIPLibs:sys.h.ioctl
-o.if_ethersu:	TCPIPLibs:sys.h.ttycom
-o.if_ethersu:	TCPIPLibs:sys.h.ioccom
-o.if_ethersu:	TCPIPLibs:sys.h.ioccom
-o.if_ethersu:	TCPIPLibs:sys.h.filio
-o.if_ethersu:	TCPIPLibs:sys.h.ioccom
-o.if_ethersu:	TCPIPLibs:sys.h.sockio
-o.if_ethersu:	TCPIPLibs:sys.h.ioccom
-o.if_ethersu:	TCPIPLibs:sys.h.ioctl_compat
-o.if_ethersu:	TCPIPLibs:sys.h.ttychars
-o.if_ethersu:	TCPIPLibs:sys.h.ttydev
-o.if_ethersu:	TCPIPLibs:sys.h.errno
-o.if_ethersu:	TCPIPLibs:sys.h.syslog
-o.if_ethersu:	TCPIPLibs:net.h.if
-o.if_ethersu:	TCPIPLibs:sys.h.socket
-o.if_ethersu:	TCPIPLibs:sys.h.time
-o.if_ethersu:	TCPIPLibs:net.h.if_arp
-o.if_ethersu:	TCPIPLibs:sys.h.socket
-o.if_ethersu:	TCPIPLibs:net.h.netisr
-o.if_ethersu:	TCPIPLibs:net.h.route
-o.if_ethersu:	TCPIPLibs:net.h.radix
-o.if_ethersu:	TCPIPLibs:net.h.if_llc
-o.if_ethersu:	TCPIPLibs:net.h.if_dl
-o.if_ethersu:	TCPIPLibs:net.h.if_types
-o.if_ethersu:	TCPIPLibs:netinet.h.in
-o.if_ethersu:	TCPIPLibs:netinet.h.in_var
-o.if_ethersu:	TCPIPLibs:sys.h.queue
-o.if_ethersu:	TCPIPLibs:netinet.h.if_ether
 o.poduleirq: ^.build.s.poduleirq
 o.poduleirq: Hdr:ListOpts
 o.poduleirq: Hdr:Macros
@@ -256,7 +200,7 @@ o.kern_subr:	TCPIPLibs:sys.h.time
 o.kern_subr:	TCPIPLibs:sys.h.malloc
 o.kern_subr:	TCPIPLibs:sys.h.queue
 o.kern_subr:	h.module
-o.kern_subr:	C:h.kernel
+o.kern_subr:	c:h.kernel
 o.sysctl:	^.kern.c.sysctl
 o.sysctl:	TCPIPLibs:sys.h.param
 o.sysctl:	TCPIPLibs:sys.h.types
@@ -310,7 +254,7 @@ o.sysctl:	TCPIPLibs:sys.h.conf
 o.sysctl:	TCPIPLibs:sys.h.sysctl
 o.sysctl:	TCPIPLibs:sys.h.errno
 o.sysctl:	h.module
-o.sysctl:	C:h.kernel
+o.sysctl:	c:h.kernel
 o.sys_socket:	^.kern.c.sys_socket
 o.sys_socket:	TCPIPLibs:sys.h.param
 o.sys_socket:	TCPIPLibs:sys.h.types
@@ -371,7 +315,7 @@ o.sys_socket:	TCPIPLibs:sys.h.socket
 o.sys_socket:	TCPIPLibs:net.h.route
 o.sys_socket:	TCPIPLibs:net.h.radix
 o.sys_socket:	h.module
-o.sys_socket:	C:h.kernel
+o.sys_socket:	c:h.kernel
 o.uipc_mbuf:	^.kern.c.uipc_mbuf
 o.uipc_mbuf:	TCPIPLibs:sys.h.param
 o.uipc_mbuf:	TCPIPLibs:sys.h.types
@@ -407,7 +351,7 @@ o.uipc_mbuf:	TCPIPLibs:sys.h.syslog
 o.uipc_mbuf:	TCPIPLibs:sys.h.domain
 o.uipc_mbuf:	TCPIPLibs:sys.h.protosw
 o.uipc_mbuf:	h.module
-o.uipc_mbuf:	C:h.kernel
+o.uipc_mbuf:	c:h.kernel
 o.kvm:	^.lib.c.kvm
 o.kvm:	TCPIPLibs:sys.h.types
 o.kvm:	TCPIPLibs:sys.h.cdefs
@@ -440,8 +384,8 @@ o.kvm:	TCPIPLibs:h.kvm
 o.kvm:	TCPIPLibs:h.nlist
 o.kvm:	TCPIPLibs:sys.h.cdefs
 o.unixenv:	^.lib.c.unixenv
-o.unixenv:	C:h.kernel
-o.unixenv:	C:h.swis
+o.unixenv:	c:h.kernel
+o.unixenv:	c:h.swis
 o.unixenv:	TCPIPLibs:sys.h.param
 o.unixenv:	TCPIPLibs:sys.h.types
 o.unixenv:	TCPIPLibs:sys.h.cdefs
@@ -496,7 +440,7 @@ o.unixenv:	h.swiveneers
 o.unixenv:	TCPIPLibs:sys.h.dcistructs
 o.tick_entry: ^.lib.s.tick_entry
 o.if:	^.net.c.if
-o.if:	C:h.kernel
+o.if:	c:h.kernel
 o.if:	TCPIPLibs:sys.h.param
 o.if:	TCPIPLibs:sys.h.types
 o.if:	TCPIPLibs:sys.h.cdefs
@@ -621,10 +565,10 @@ o.if_loop:	TCPIPLibs:sys.h.queue
 o.if_loop:	TCPIPLibs:netinet.h.ip
 o.if_loop:	TCPIPLibs:netinet.h.if_ether
 o.if_loop:	h.module
-o.if_loop:	C:h.kernel
+o.if_loop:	c:h.kernel
 o.if_module:	^.net.c.if_module
-o.if_module:	C:h.kernel
-o.if_module:	C:h.swis
+o.if_module:	c:h.kernel
+o.if_module:	c:h.swis
 o.if_module:	TCPIPLibs:sys.h.param
 o.if_module:	TCPIPLibs:sys.h.types
 o.if_module:	TCPIPLibs:sys.h.cdefs
@@ -713,7 +657,7 @@ o.radix:	TCPIPLibs:sys.h.domain
 o.radix:	TCPIPLibs:sys.h.syslog
 o.radix:	TCPIPLibs:net.h.radix
 o.radix:	h.module
-o.radix:	C:h.kernel
+o.radix:	c:h.kernel
 o.radix:	h.debug
 o.raw_cb:	^.net.c.raw_cb
 o.raw_cb:	TCPIPLibs:sys.h.param
@@ -758,7 +702,7 @@ o.raw_cb:	TCPIPLibs:net.h.radix
 o.raw_cb:	TCPIPLibs:net.h.raw_cb
 o.raw_cb:	TCPIPLibs:netinet.h.in
 o.raw_cb:	h.module
-o.raw_cb:	C:h.kernel
+o.raw_cb:	c:h.kernel
 o.raw_usrreq:	^.net.c.raw_usrreq
 o.raw_usrreq:	TCPIPLibs:sys.h.param
 o.raw_usrreq:	TCPIPLibs:sys.h.types
@@ -802,7 +746,7 @@ o.raw_usrreq:	TCPIPLibs:net.h.radix
 o.raw_usrreq:	TCPIPLibs:net.h.netisr
 o.raw_usrreq:	TCPIPLibs:net.h.raw_cb
 o.raw_usrreq:	h.module
-o.raw_usrreq:	C:h.kernel
+o.raw_usrreq:	c:h.kernel
 o.route:	^.net.c.route
 o.route:	TCPIPLibs:sys.h.param
 o.route:	TCPIPLibs:sys.h.types
@@ -865,7 +809,7 @@ o.route:	TCPIPLibs:netinet.h.in_var
 o.route:	TCPIPLibs:sys.h.queue
 o.route:	TCPIPLibs:netinet.h.ip_mroute
 o.route:	h.module
-o.route:	C:h.kernel
+o.route:	c:h.kernel
 o.rtsock:	^.net.c.rtsock
 o.rtsock:	TCPIPLibs:sys.h.param
 o.rtsock:	TCPIPLibs:sys.h.types
@@ -913,9 +857,9 @@ o.rtsock:	TCPIPLibs:net.h.route
 o.rtsock:	TCPIPLibs:net.h.radix
 o.rtsock:	TCPIPLibs:net.h.raw_cb
 o.rtsock:	h.module
-o.rtsock:	C:h.kernel
+o.rtsock:	c:h.kernel
 o.if_ether:	^.netinet.c.if_ether
-o.if_ether:	C:h.kernel
+o.if_ether:	c:h.kernel
 o.if_ether:	TCPIPLibs:sys.h.param
 o.if_ether:	TCPIPLibs:sys.h.types
 o.if_ether:	TCPIPLibs:sys.h.cdefs
@@ -996,15 +940,11 @@ o.igmp:	TCPIPLibs:machine.h.limits
 o.igmp:	TCPIPLibs:sys.h.systm
 o.igmp:	TCPIPLibs:machine.h.cpufunc
 o.igmp:	TCPIPLibs:machine.h.stdarg
-o.igmp:	TCPIPLibs:sys.h.mbuf
 o.igmp:	TCPIPLibs:sys.h.malloc
+o.igmp:	TCPIPLibs:sys.h.mbuf
 o.igmp:	TCPIPLibs:sys.h.socket
 o.igmp:	TCPIPLibs:sys.h.protosw
-o.igmp:	TCPIPLibs:sys.h.proc
-o.igmp:	TCPIPLibs:machine.h.proc
-o.igmp:	TCPIPLibs:sys.h.rtprio
-o.igmp:	TCPIPLibs:sys.h.select
-o.igmp:	TCPIPLibs:sys.h.time
+o.igmp:	TCPIPLibs:sys.h.kernel
 o.igmp:	TCPIPLibs:sys.h.sysctl
 o.igmp:	TCPIPLibs:net.h.if
 o.igmp:	TCPIPLibs:sys.h.socket
@@ -1023,7 +963,7 @@ o.igmp:	TCPIPLibs:netinet.h.igmp
 o.igmp:	TCPIPLibs:netinet.h.igmp_var
 o.igmp:	h.debug
 o.igmp:	h.module
-o.igmp:	C:h.kernel
+o.igmp:	c:h.kernel
 o.in:	^.netinet.c.in
 o.in:	TCPIPLibs:sys.h.param
 o.in:	TCPIPLibs:sys.h.types
@@ -1080,7 +1020,7 @@ o.in:	TCPIPLibs:sys.h.queue
 o.in:	TCPIPLibs:netinet.h.if_ether
 o.in:	TCPIPLibs:netinet.h.igmp_var
 o.in:	h.module
-o.in:	C:h.kernel
+o.in:	c:h.kernel
 o.in:	h.debug
 o.in_cksum:	^.netinet.c.in_cksum
 o.in_cksum:	TCPIPLibs:sys.h.param
@@ -1172,7 +1112,7 @@ o.in_pcb:	TCPIPLibs:netinet.h.in_var
 o.in_pcb:	TCPIPLibs:sys.h.queue
 o.in_pcb:	TCPIPLibs:netinet.h.ip_var
 o.in_pcb:	h.module
-o.in_pcb:	C:h.kernel
+o.in_pcb:	c:h.kernel
 o.in_proto:	^.netinet.c.in_proto
 o.in_proto:	TCPIPLibs:sys.h.param
 o.in_proto:	TCPIPLibs:sys.h.types
@@ -1275,7 +1215,7 @@ o.in_rmx:	TCPIPLibs:netinet.h.tcp_timer
 o.in_rmx:	TCPIPLibs:netinet.h.tcp_var
 o.in_rmx:	TCPIPLibs:netinet.h.tcpip
 o.in_rmx:	h.module
-o.in_rmx:	C:h.kernel
+o.in_rmx:	c:h.kernel
 o.in_rmx:	h.debug
 o.ip_fw:	^.netinet.c.ip_fw
 o.ip_fw:	TCPIPLibs:sys.h.param
@@ -1316,9 +1256,9 @@ o.ip_fw:	TCPIPLibs:netinet.h.udp
 o.ip_fw:	TCPIPLibs:netinet.h.ip_icmp
 o.ip_fw:	TCPIPLibs:netinet.h.ip_fw
 o.ip_fw:	h.module
-o.ip_fw:	C:h.kernel
+o.ip_fw:	c:h.kernel
 o.ip_icmp:	^.netinet.c.ip_icmp
-o.ip_icmp:	C:h.kernel
+o.ip_icmp:	c:h.kernel
 o.ip_icmp:	TCPIPLibs:sys.h.param
 o.ip_icmp:	TCPIPLibs:sys.h.types
 o.ip_icmp:	TCPIPLibs:sys.h.cdefs
@@ -1371,7 +1311,7 @@ o.ip_icmp:	TCPIPLibs:h.svcdebug
 o.ip_icmp:	h.module
 o.ip_icmp:	h.debug
 o.ip_input:	^.netinet.c.ip_input
-o.ip_input:	C:h.kernel
+o.ip_input:	c:h.kernel
 o.ip_input:	TCPIPLibs:sys.h.param
 o.ip_input:	TCPIPLibs:sys.h.types
 o.ip_input:	TCPIPLibs:sys.h.cdefs
@@ -1494,7 +1434,7 @@ o.ip_mroute:	TCPIPLibs:netinet.h.igmp_var
 o.ip_mroute:	TCPIPLibs:netinet.h.ip_mroute
 o.ip_mroute:	TCPIPLibs:netinet.h.udp
 o.ip_mroute:	h.module
-o.ip_mroute:	C:h.kernel
+o.ip_mroute:	c:h.kernel
 o.ip_mroute:	h.debug
 o.ip_output:	^.netinet.c.ip_output
 o.ip_output:	TCPIPLibs:sys.h.param
@@ -1548,7 +1488,7 @@ o.ip_output:	TCPIPLibs:machine.h.in_cksum
 o.ip_output:	TCPIPLibs:h.svcdebug
 o.ip_output:	h.debug
 o.ip_output:	h.module
-o.ip_output:	C:h.kernel
+o.ip_output:	c:h.kernel
 o.raw_ip:	^.netinet.c.raw_ip
 o.raw_ip:	TCPIPLibs:sys.h.param
 o.raw_ip:	TCPIPLibs:sys.h.types
@@ -1599,7 +1539,7 @@ o.raw_ip:	TCPIPLibs:netinet.h.ip_var
 o.raw_ip:	TCPIPLibs:netinet.h.ip_mroute
 o.raw_ip:	TCPIPLibs:netinet.h.ip_fw
 o.raw_ip:	h.module
-o.raw_ip:	C:h.kernel
+o.raw_ip:	c:h.kernel
 o.tcp_debug:	^.netinet.c.tcp_debug
 o.tcp_debug:	TCPIPLibs:sys.h.param
 o.tcp_debug:	TCPIPLibs:sys.h.types
@@ -1653,7 +1593,7 @@ o.tcp_debug:	TCPIPLibs:netinet.h.tcp_var
 o.tcp_debug:	TCPIPLibs:netinet.h.tcpip
 o.tcp_debug:	TCPIPLibs:netinet.h.tcp_debug
 o.tcp_debug:	h.module
-o.tcp_debug:	C:h.kernel
+o.tcp_debug:	c:h.kernel
 o.tcp_input:	^.netinet.c.tcp_input
 o.tcp_input:	TCPIPLibs:sys.h.param
 o.tcp_input:	TCPIPLibs:sys.h.types
@@ -1709,7 +1649,7 @@ o.tcp_input:	TCPIPLibs:netinet.h.tcp_var
 o.tcp_input:	TCPIPLibs:netinet.h.tcpip
 o.tcp_input:	h.debug
 o.tcp_input:	h.module
-o.tcp_input:	C:h.kernel
+o.tcp_input:	c:h.kernel
 o.tcp_output:	^.netinet.c.tcp_output
 o.tcp_output:	TCPIPLibs:sys.h.param
 o.tcp_output:	TCPIPLibs:sys.h.types
@@ -1758,7 +1698,7 @@ o.tcp_output:	TCPIPLibs:netinet.h.tcp_var
 o.tcp_output:	TCPIPLibs:netinet.h.tcpip
 o.tcp_output:	TCPIPLibs:h.svcdebug
 o.tcp_output:	h.module
-o.tcp_output:	C:h.kernel
+o.tcp_output:	c:h.kernel
 o.tcp_subr:	^.netinet.c.tcp_subr
 o.tcp_subr:	TCPIPLibs:sys.h.param
 o.tcp_subr:	TCPIPLibs:sys.h.types
@@ -1819,7 +1759,7 @@ o.tcp_subr:	TCPIPLibs:netinet.h.tcp_timer
 o.tcp_subr:	TCPIPLibs:netinet.h.tcp_var
 o.tcp_subr:	TCPIPLibs:netinet.h.tcpip
 o.tcp_subr:	h.module
-o.tcp_subr:	C:h.kernel
+o.tcp_subr:	c:h.kernel
 o.tcp_timer:	^.netinet.c.tcp_timer
 o.tcp_timer:	TCPIPLibs:sys.h.param
 o.tcp_timer:	TCPIPLibs:sys.h.types
@@ -1873,7 +1813,7 @@ o.tcp_timer:	TCPIPLibs:netinet.h.tcp_var
 o.tcp_timer:	TCPIPLibs:netinet.h.tcpip
 o.tcp_timer:	h.debug
 o.tcp_timer:	h.module
-o.tcp_timer:	C:h.kernel
+o.tcp_timer:	c:h.kernel
 o.tcp_usrreq:	^.netinet.c.tcp_usrreq
 o.tcp_usrreq:	TCPIPLibs:sys.h.param
 o.tcp_usrreq:	TCPIPLibs:sys.h.types
@@ -1931,7 +1871,7 @@ o.tcp_usrreq:	TCPIPLibs:netinet.h.tcp_timer
 o.tcp_usrreq:	TCPIPLibs:netinet.h.tcp_var
 o.tcp_usrreq:	TCPIPLibs:netinet.h.tcpip
 o.tcp_usrreq:	h.module
-o.tcp_usrreq:	C:h.kernel
+o.tcp_usrreq:	c:h.kernel
 o.udp_usrreq:	^.netinet.c.udp_usrreq
 o.udp_usrreq:	TCPIPLibs:sys.h.param
 o.udp_usrreq:	TCPIPLibs:sys.h.types
@@ -1988,7 +1928,7 @@ o.udp_usrreq:	TCPIPLibs:netinet.h.udp_var
 o.udp_usrreq:	TCPIPLibs:h.svcdebug
 o.udp_usrreq:	h.debug
 o.udp_usrreq:	h.module
-o.udp_usrreq:	C:h.kernel
+o.udp_usrreq:	c:h.kernel
 o.udp_usrreq:	h.whoami
 o.globdata:	^.riscos.c.globdata
 o.globdata:	TCPIPLibs:sys.h.param
@@ -2025,10 +1965,10 @@ o.globdata:	TCPIPLibs:sys.h.socket
 o.globdata:	TCPIPLibs:net.h.raw_cb
 o.globdata:	h.debug
 o.globdata:	h.module
-o.globdata:	C:h.kernel
+o.globdata:	c:h.kernel
 o.mbuf:	^.riscos.c.mbuf
-o.mbuf:	C:h.kernel
-o.mbuf:	C:h.swis
+o.mbuf:	c:h.kernel
+o.mbuf:	c:h.swis
 o.mbuf:	TCPIPLibs:sys.h.param
 o.mbuf:	TCPIPLibs:sys.h.types
 o.mbuf:	TCPIPLibs:sys.h.cdefs
@@ -2063,8 +2003,8 @@ o.mbuf:	h.swiveneers
 o.mbuf:	TCPIPLibs:sys.h.dcistructs
 o.mbuf:	h.module
 o.module:	^.riscos.c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
+o.module:	c:h.kernel
+o.module:	c:h.swis
 o.module:	TCPIPLibs:h.int_hndlr
 o.module:	TCPIPLibs:sys.h.param
 o.module:	TCPIPLibs:sys.h.types
@@ -2122,7 +2062,7 @@ o.module:	TCPIPLibs:h.svcdebug
 o.module:	h.debug
 o.module:	h.swiveneers
 o.setsoft:	^.riscos.c.setsoft
-o.setsoft:	C:h.kernel
+o.setsoft:	c:h.kernel
 o.setsoft:	TCPIPLibs:h.ioc
 o.setsoft:	TCPIPLibs:h.int_hndlr
 o.setsoft:	TCPIPLibs:sys.h.param
@@ -2219,7 +2159,7 @@ o.socket_swi:	TCPIPLibs:netinet.h.udp
 o.socket_swi:	TCPIPLibs:netinet.h.udp_var
 o.socket_swi:	h.debug
 o.socket_swi:	h.module
-o.socket_swi:	C:h.kernel
+o.socket_swi:	c:h.kernel
 o.init: ^.riscos.s.init
 o.swiveneers: ^.riscos.s.swiveneers
 o.domain:	^.sys.c.domain
@@ -2260,7 +2200,7 @@ o.domain:	TCPIPLibs:sys.h.time
 o.domain:	TCPIPLibs:sys.h.queue
 o.domain:	TCPIPLibs:sys.h.sysctl
 o.domain:	h.module
-o.domain:	C:h.kernel
+o.domain:	c:h.kernel
 o.socket:	^.sys.c.socket
 o.socket:	TCPIPLibs:sys.h.param
 o.socket:	TCPIPLibs:sys.h.types
@@ -2307,7 +2247,7 @@ o.socket:	TCPIPLibs:sys.h.sysctl
 o.socket:	TCPIPLibs:h.svcdebug
 o.socket:	h.debug
 o.socket:	h.module
-o.socket:	C:h.kernel
+o.socket:	c:h.kernel
 o.socket1:	^.sys.c.socket1
 o.socket1:	TCPIPLibs:sys.h.param
 o.socket1:	TCPIPLibs:sys.h.types
@@ -2353,10 +2293,10 @@ o.socket1:	TCPIPLibs:sys.h.select
 o.socket1:	TCPIPLibs:sys.h.signalvar
 o.socket1:	h.debug
 o.socket1:	h.module
-o.socket1:	C:h.kernel
+o.socket1:	c:h.kernel
 o.whoami:	^.whoami.c.whoami
-o.whoami:	C:h.kernel
-o.whoami:	C:h.swis
+o.whoami:	c:h.kernel
+o.whoami:	c:h.swis
 o.whoami:	TCPIPLibs:sys.h.types
 o.whoami:	TCPIPLibs:sys.h.cdefs
 o.whoami:	TCPIPLibs:machine.h.endian
