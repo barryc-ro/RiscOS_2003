@@ -56,6 +56,7 @@ ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
 INETLIB		= TCPIPLibs:o.inetlibzm
 SOCKLIB		= TCPIPLibs:o.socklibzm
+ASMUTILS        = C:AsmUtils.o.AsmUtilszm
 
 DEPEND		= -depend !Depend
 DBGFLAGS        = -DTRACE
@@ -66,9 +67,9 @@ ASFLAGS		= ${DEPEND} ${THROWBACK}
 CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
-ROM_OBJS	= or.msgqueue or.module or.utils o.msgqhdr o.calls
-RAM_OBJS	= o.msgqueue  o.module  o.utils  o.msgqhdr o.calls ${RESF}
-DBG_OBJS	= od.msgqueue od.module od.utils o.msgqhdr o.calls ${RESF}
+ROM_OBJS	= or.msgqueue or.module or.utils o.msgqhdr
+RAM_OBJS	= o.msgqueue  o.module  o.utils  o.msgqhdr ${RESF}
+DBG_OBJS	= od.msgqueue od.module od.utils o.msgqhdr ${RESF}
 
 RESF		= o.msgs
 
@@ -137,19 +138,19 @@ export:
 #
 # Targets
 #
-${RAM_MODULE}:	${RAM_OBJS} ${CLIB}
+${RAM_MODULE}:	${RAM_OBJS} ${CLIB} ${ASMUTILS}
 	${MKDIR} rm
-	$(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB}
+	$(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${ASMUTILS}
         ${MODSQZ} $@
         Access $@ RW/R
 
-${ROM_MODULE}:	${ROM_OBJS} ${ROMCSTUBS}
+${ROM_MODULE}:	${ROM_OBJS} ${ROMCSTUBS} ${ASMUTILS}
 	${MKDIR} aof
-	$(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS}
+	$(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS} ${ASMUTILS}
 
-${DBG_MODULE}:	${DBG_OBJS} ${CLIB}
+${DBG_MODULE}:	${DBG_OBJS} ${CLIB} ${ASMUTILS}
 	${MKDIR} rm
-	$(LD) -o $@ -rmf ${DBG_OBJS} ${CLIB}
+	$(LD) -o $@ -rmf ${DBG_OBJS} ${CLIB} ${ASMUTILS}
         Access $@ RW/R
 
 ${RESF}: LocalRes:Messages
